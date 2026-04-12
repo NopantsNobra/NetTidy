@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组引擎 V5.0 (Windows 专用)
+文件夹结构智能重组引擎 V5.1 (Windows 专用)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
@@ -33,13 +33,41 @@ import re
 import tempfile
 
 # ============================================================
+# 平台检查
+# ============================================================
+
+if sys.platform != "win32":
+    print("❌ 本程序仅支持 Windows 系统。")
+    print(f"   当前平台: {sys.platform}")
+    print("   此工具针对 NTFS 文件系统设计，依赖 Windows API。")
+    sys.exit(1)
+
+# ============================================================
+# Win32 API 常量
+# ============================================================
+
+MOVEFILE_COPY_ALLOWED      = 0x0002
+MOVEFILE_REPLACE_EXISTING  = 0x0001
+MOVEFILE_WRITE_THROUGH     = 0x0008
+
+FILE_ATTRIBUTE_HIDDEN      = 0x0002
+FILE_ATTRIBUTE_READONLY    = 0x0001
+FILE_ATTRIBUTE_SYSTEM      = 0x0004
+FILE_ATTRIBUTE_REPARSE     = 0x0400
+FILE_ATTRIBUTE_DIRECTORY   = 0x0010
+
+IO_REPARSE_TAG_SYMLINK     = 0xA000000C
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+
+# ============================================================
 # 版本与常量
 # ============================================================
 
-VERSION = "5.0.0"
+VERSION = "5.1.0"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
+MAX_LOG_FILES = 10
 
 # Windows 保留设备名
 WINDOWS_RESERVED = {
@@ -77,8 +105,9 @@ THROTTLE_SLEEP = 0.05
 # Zone.Identifier ADS 名称
 ZONE_IDENTIFIER = "Zone.Identifier"
 
+
 # ============================================================
-# Win32 API 封装
+# Win32 API 封装 — 底层IO层
 # ============================================================
 
 def _win_path(path: str) -> str:
@@ -93,47 +122,149 @@ def _win_path(path: str) -> str:
 def _short_path(path: str) -> str:
     r"""从 \\?\ 格式还原为普通路径"""
     if path.startswith("\\\\?\\UNC\\"):
-        return "\\\\" + path[7:]
+        return "\\" + path[7:]
     if path.startswith("\\\\?\\"):
         return path[4:]
     return path
 
 
-def _safe_exists(path: str) -> bool:
-    """支持长路径的文件存在性检查"""
-    try:
-        win_path = _win_path(path)
-        return os.path.exists(win_path) or os.path.exists(path)
-    except (OSError, ValueError):
-        return False
+class Win32IO:
+    """Win32 API 底层IO操作，完整支持长路径"""
 
+    _kernel32 = ctypes.windll.kernel32
 
-def _safe_stat(path: str):
-    """支持长路径的 stat"""
-    try:
+    @classmethod
+    def get_file_attributes(cls, path: str) -> Optional[int]:
+        """获取文件属性，支持长路径"""
         wp = _win_path(path)
-        if os.path.exists(wp):
-            return os.lstat(wp)
-    except (OSError, ValueError):
-        pass
-    try:
-        return os.lstat(path)
-    except (OSError, ValueError):
+        attrs = cls._kernel32.GetFileAttributesW(wp)
+        if attrs == -1:
+            # 回退到原路径
+            attrs = cls._kernel32.GetFileAttributesW(path)
+        return attrs if attrs != -1 else None
+
+    @classmethod
+    def exists(cls, path: str) -> bool:
+        """支持长路径的文件存在性检查"""
+        return cls.get_file_attributes(path) is not None
+
+    @classmethod
+    def is_dir(cls, path: str) -> bool:
+        """支持长路径的目录判断"""
+        attrs = cls.get_file_attributes(path)
+        if attrs is None:
+            return False
+        return bool(attrs & FILE_ATTRIBUTE_DIRECTORY)
+
+    @classmethod
+    def safe_stat(cls, path: str):
+        """支持长路径的 stat"""
+        try:
+            wp = _win_path(path)
+            if os.path.exists(wp):
+                return os.lstat(wp)
+        except (OSError, ValueError):
+            pass
+        try:
+            return os.lstat(path)
+        except (OSError, ValueError):
+            return None
+
+    @classmethod
+    def safe_listdir(cls, path: str) -> List[str]:
+        """支持长路径的 listdir"""
+        try:
+            wp = _win_path(path)
+            if cls.is_dir(path):
+                return os.listdir(wp)
+        except (OSError, ValueError):
+            pass
+        try:
+            return os.listdir(path)
+        except (OSError, ValueError):
+            return []
+
+    @classmethod
+    def move(cls, src: str, dst: str) -> bool:
+        """移动文件/目录，支持长路径，使用 MoveFileExW"""
+        src_wp = _win_path(src)
+        dst_wp = _win_path(dst)
+
+        result = cls._kernel32.MoveFileExW(
+            src_wp, dst_wp,
+            MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        )
+        if result:
+            return True
+
+        # 回退：尝试不加前缀
+        result = cls._kernel32.MoveFileExW(
+            src, dst,
+            MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        )
+        return bool(result)
+
+    @classmethod
+    def delete_file(cls, path: str) -> bool:
+        """删除文件，支持长路径"""
+        wp = _win_path(path)
+        result = cls._kernel32.DeleteFileW(wp)
+        if not result:
+            result = cls._kernel32.DeleteFileW(path)
+        return bool(result)
+
+    @classmethod
+    def remove_directory(cls, path: str) -> bool:
+        """删除空目录，支持长路径"""
+        wp = _win_path(path)
+        result = cls._kernel32.RemoveDirectoryW(wp)
+        if not result:
+            result = cls._kernel32.RemoveDirectoryW(path)
+        return bool(result)
+
+    @classmethod
+    def get_reparse_tag(cls, path: str) -> Optional[int]:
+        """获取 reparse point 标签，用于区分 Symlink / Junction / MountPoint"""
+        try:
+            import struct
+            GENERIC_READ = 0x80000000
+            FILE_SHARE_READ = 0x00000001
+            FILE_SHARE_WRITE = 0x00000002
+            FILE_SHARE_DELETE = 0x00000004
+            OPEN_EXISTING = 3
+            FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+            FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+
+            wp = _win_path(path)
+            handle = cls._kernel32.CreateFileW(
+                wp, GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None, OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                None
+            )
+            if handle == -1 or handle is None:
+                return None
+
+            try:
+                # 获取 reparse tag: 文件的前 4 字节在 reparse point 结构中
+                buf = ctypes.create_string_buffer(1024)
+                bytes_returned = wintypes.DWORD()
+                FSCTL_GET_REPARSE_POINT = 0x000900A8
+
+                result = cls._kernel32.DeviceIoControl(
+                    handle, FSCTL_GET_REPARSE_POINT,
+                    None, 0, buf, 1024,
+                    ctypes.byref(bytes_returned), None
+                )
+                if result:
+                    tag = struct.unpack_from("<I", buf.raw, 0)[0]
+                    return tag
+            finally:
+                cls._kernel32.CloseHandle(handle)
+        except Exception:
+            pass
         return None
-
-
-def _safe_listdir(path: str) -> List[str]:
-    """支持长路径的 listdir"""
-    try:
-        wp = _win_path(path)
-        if os.path.isdir(wp):
-            return os.listdir(wp)
-    except (OSError, ValueError):
-        pass
-    try:
-        return os.listdir(path)
-    except (OSError, ValueError):
-        return []
 
 
 # ============================================================
@@ -145,6 +276,7 @@ class NodeAction(Enum):
     DELETE = "DELETE"
     MOVE = "MOVE"
     RENAME = "RENAME"
+
 
 class NodeStatus(Enum):
     PENDING = "Pending"
@@ -160,6 +292,7 @@ class NodeStatus(Enum):
     ZONE_CLEARED = "ZoneCleared"
     FAILED = "Failed"
 
+
 class ReparseType(Enum):
     NONE = "None"
     SYMLINK = "Symlink"
@@ -167,10 +300,12 @@ class ReparseType(Enum):
     MOUNTPOINT = "MountPoint"
     HARDLINK = "HardLink"
 
+
 class SafetyLevel(Enum):
     FULL = 1
     RESTRICTED = 2
     BLOCKED = 3
+
 
 class PermissionAction(Enum):
     GRANT_FULL_CONTROL = "grant_full_control"
@@ -178,6 +313,7 @@ class PermissionAction(Enum):
     REMOVE_HIDDEN = "remove_hidden"
     CLEAR_ZONE_IDENTIFIER = "clear_zone_identifier"
     ALL = "all"
+
 
 # ============================================================
 # 数据结构
@@ -357,10 +493,27 @@ class LockManager:
 # ============================================================
 
 class SafetyChecker:
-    SYSTEM_DIRS = {
-        "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
-        "C:\\ProgramData", "C:\\$Recycle.Bin", "C:\\System Volume Information",
-    }
+
+    @classmethod
+    def _get_system_dirs(cls) -> Set[str]:
+        """基于环境变量动态获取系统保护目录"""
+        dirs = set()
+        for env_var in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+            val = os.environ.get(env_var, "")
+            if val:
+                dirs.add(val)
+
+        # 回收站和系统卷信息
+        for drive_letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{drive_letter}:\\"
+            if os.path.exists(root):
+                dirs.add(os.path.join(root, "$Recycle.Bin"))
+                dirs.add(os.path.join(root, "System Volume Information"))
+                dirs.add(os.path.join(root, "Windows"))
+                dirs.add(os.path.join(root, "Program Files"))
+                dirs.add(os.path.join(root, "Program Files (x86)"))
+                dirs.add(os.path.join(root, "ProgramData"))
+        return dirs
 
     @classmethod
     def _get_user_profile_dirs(cls) -> Set[str]:
@@ -378,7 +531,7 @@ class SafetyChecker:
     def check(cls, target_path: str) -> Tuple[SafetyLevel, str]:
         target_path = os.path.abspath(target_path)
 
-        if not _safe_exists(target_path):
+        if not Win32IO.exists(target_path):
             return SafetyLevel.BLOCKED, f"路径不存在: {target_path}"
 
         # 驱动器根目录
@@ -386,11 +539,12 @@ class SafetyChecker:
         if target_path == drive + "\\" or target_path == drive + "/":
             return SafetyLevel.BLOCKED, "禁止操作驱动器根目录"
 
-        # 系统目录
-        all_protected = cls.SYSTEM_DIRS | cls._get_user_profile_dirs()
+        # 系统目录（基于环境变量动态检测）
+        all_protected = cls._get_system_dirs() | cls._get_user_profile_dirs()
+        target_lower = target_path.lower()
         for sd in all_protected:
-            if target_path.lower() == sd.lower() or \
-               target_path.lower().startswith(sd.lower() + "\\"):
+            sd_lower = sd.lower()
+            if target_lower == sd_lower or target_lower.startswith(sd_lower + "\\"):
                 return SafetyLevel.BLOCKED, f"命中系统保护目录: {sd}"
 
         # 写入权限
@@ -422,10 +576,7 @@ class SafetyChecker:
 # ============================================================
 
 class ZoneIdentifierHandler:
-    """
-    处理 NTFS 备用数据流 Zone.Identifier
-    下载的文件带有此标识时，Windows 会阻止预览/执行
-    """
+    """处理 NTFS 备用数据流 Zone.Identifier"""
 
     @staticmethod
     def has_zone_identifier(file_path: str) -> bool:
@@ -459,12 +610,12 @@ class ZoneIdentifierHandler:
         except (OSError, ValueError):
             pass
 
-        # 回退方案：使用 PowerShell
+        # 回退方案：使用 PowerShell（参数列表传递，非字符串拼接）
         try:
-            ps_path = file_path.replace("'", "''")
-            cmd = f'Remove-Item -Path \'{ps_path}\' -Stream Zone.Identifier -ErrorAction SilentlyContinue'
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", cmd],
+                ["powershell", "-NoProfile", "-Command",
+                 "Remove-Item", "-LiteralPath", file_path,
+                 "-Stream", ZONE_IDENTIFIER, "-ErrorAction", "SilentlyContinue"],
                 capture_output=True, text=True, timeout=10
             )
             return result.returncode == 0
@@ -475,9 +626,11 @@ class ZoneIdentifierHandler:
     def list_ads(file_path: str) -> List[str]:
         """列出文件的所有备用数据流"""
         try:
-            cmd = f'Get-Item -Path \'{file_path.replace(chr(39), chr(39)*2)}\' -Stream * | Select-Object -ExpandProperty Stream'
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", cmd],
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-Item", "-LiteralPath", file_path,
+                 "-Stream", "*", "|",
+                 "Select-Object", "-ExpandProperty", "Stream"],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
@@ -505,10 +658,7 @@ class PermissionEngine:
 
     def grant_full_control(self, targets: List[FileNode] = None,
                            dry_run: bool = True) -> Dict:
-        """
-        为当前用户授予完全控制权限
-        使用 icacls 命令
-        """
+        """为当前用户授予完全控制权限，使用 icacls"""
         items = targets or self.nodes
         username = os.environ.get("USERNAME", "")
         if not username:
@@ -521,7 +671,7 @@ class PermissionEngine:
 
         for i, node in enumerate(to_process, 1):
             wp = _win_path(node.full_path)
-            target = wp if _safe_exists(node.full_path) else node.full_path
+            target = wp if Win32IO.exists(node.full_path) else node.full_path
 
             if dry_run:
                 if i <= 20:
@@ -531,8 +681,9 @@ class PermissionEngine:
                 continue
 
             try:
+                # 对单文件不使用 /T（递归无意义）
                 result = subprocess.run(
-                    ["icacls", target, "/grant", f"{username}:(F)", "/T", "/Q"],
+                    ["icacls", target, "/grant", f"{username}:(F)", "/Q"],
                     capture_output=True, text=True, timeout=30
                 )
                 if result.returncode == 0:
@@ -563,7 +714,7 @@ class PermissionEngine:
 
         for i, node in enumerate(items, 1):
             wp = _win_path(node.full_path)
-            target = wp if _safe_exists(node.full_path) else node.full_path
+            target = wp if Win32IO.exists(node.full_path) else node.full_path
 
             if dry_run:
                 if i <= 20:
@@ -573,11 +724,9 @@ class PermissionEngine:
                 continue
 
             try:
-                # 先用 os 模块
-                st = _safe_stat(node.full_path)
+                st = Win32IO.safe_stat(node.full_path)
                 if st:
                     os.chmod(target, st.st_mode | stat.S_IWRITE)
-                # 再用 attrib 确保
                 subprocess.run(
                     ["attrib", "-R", target],
                     capture_output=True, timeout=10
@@ -605,7 +754,7 @@ class PermissionEngine:
 
         for i, node in enumerate(items, 1):
             wp = _win_path(node.full_path)
-            target = wp if _safe_exists(node.full_path) else node.full_path
+            target = wp if Win32IO.exists(node.full_path) else node.full_path
 
             if dry_run:
                 if i <= 20:
@@ -637,7 +786,6 @@ class PermissionEngine:
         items = targets or [n for n in self.nodes
                            if n.has_zone_identifier and not n.is_dir]
         if not targets:
-            # 重新检测（scan 时可能未检测）
             items = []
             for n in self.nodes:
                 if n.is_dir or n.action == NodeAction.DELETE:
@@ -658,7 +806,7 @@ class PermissionEngine:
                 continue
 
             wp = _win_path(node.full_path)
-            target = wp if _safe_exists(node.full_path) else node.full_path
+            target = wp if Win32IO.exists(node.full_path) else node.full_path
 
             if ZoneIdentifierHandler.clear_zone_identifier(target):
                 node.has_zone_identifier = False
@@ -708,10 +856,7 @@ class DiagnosticEngine:
         self._errors = ErrorCollector()
 
     def scan(self, detect_zone: bool = False, verbose: bool = False) -> List[FileNode]:
-        """
-        全量扫描目标目录
-        detect_zone: 是否检测 Zone.Identifier (较慢)
-        """
+        """全量扫描目标目录"""
         self._scan_timestamp = time.time()
         self.nodes = []
         root_depth = self.root_path.count(os.sep)
@@ -759,7 +904,7 @@ class DiagnosticEngine:
         return self.nodes
 
     def _make_node(self, path: str, depth: int, is_dir: bool = False) -> FileNode:
-        st = _safe_stat(path)
+        st = Win32IO.safe_stat(path)
         name = os.path.basename(path) if path != self.root_path else os.path.basename(self.root_path)
         ext = "" if is_dir else os.path.splitext(name)[1].lower()
 
@@ -776,20 +921,29 @@ class DiagnosticEngine:
                 reparse = ReparseType.HARDLINK
                 hard_links = st.st_nlink
 
-            # Windows 隐藏/只读/系统属性
+            # Windows 隐藏/只读/系统属性 — 统一用 _win_path
             try:
-                attrs = ctypes.windll.kernel32.GetFileAttributesW(
-                    _win_path(path) if not _safe_exists(path) else path
-                )
+                wp = _win_path(path)
+                attrs = ctypes.windll.kernel32.GetFileAttributesW(wp)
+                if attrs == -1:
+                    attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
                 if attrs != -1:
-                    is_hidden = bool(attrs & 0x02)   # FILE_ATTRIBUTE_HIDDEN
-                    is_readonly = bool(attrs & 0x01)  # FILE_ATTRIBUTE_READONLY
-                    is_system = bool(attrs & 0x04)    # FILE_ATTRIBUTE_SYSTEM
-                    if attrs & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                    is_hidden = bool(attrs & FILE_ATTRIBUTE_HIDDEN)
+                    is_readonly = bool(attrs & FILE_ATTRIBUTE_READONLY)
+                    is_system = bool(attrs & FILE_ATTRIBUTE_SYSTEM)
+
+                    if attrs & FILE_ATTRIBUTE_REPARSE:
                         if reparse == ReparseType.NONE:
-                            reparse = ReparseType.SYMLINK
+                            # 进一步区分 Symlink / Junction / MountPoint
+                            tag = Win32IO.get_reparse_tag(path)
+                            if tag == IO_REPARSE_TAG_SYMLINK:
+                                reparse = ReparseType.SYMLINK
+                            elif tag == IO_REPARSE_TAG_MOUNT_POINT:
+                                # Junction 和 MountPoint 共用此 tag
+                                reparse = ReparseType.JUNCTION
+                            else:
+                                reparse = ReparseType.SYMLINK  # 保守回退
             except (AttributeError, OSError):
-                # windll 不可用或调用失败
                 if st:
                     is_readonly = not bool(st.st_mode & stat.S_IWRITE)
 
@@ -833,7 +987,6 @@ class DiagnosticEngine:
         long_names = []
         for n in self.nodes:
             try:
-                name_bytes = len(n.file_name.encode("utf-8"))
                 full_bytes = len(n.full_path.encode("utf-8"))
                 if full_bytes > MAX_PATH_LEGACY:
                     long_names.append((n.full_path, full_bytes))
@@ -851,7 +1004,7 @@ class DiagnosticEngine:
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "max_depth": max_depth,
             "symlinks": sum(1 for n in self.nodes if n.reparse_type == ReparseType.SYMLINK),
-            "junctions": sum(1 for n in self.nodes if n.reparse_type == ReparseType.JUNCTION),
+            "junctions": sum(1 for n in self.nodes if n.reparse_type in (ReparseType.JUNCTION, ReparseType.MOUNTPOINT)),
             "hard_links": len(hardlinked),
             "readonly_files": len(readonly_files),
             "hidden_files": len(hidden_files),
@@ -877,7 +1030,7 @@ class DiagnosticEngine:
                 writer.writerow([
                     n.full_path, n.file_name, n.extension, n.size_bytes,
                     _fmt_size(n.size_bytes), n.depth,
-                    datetime.fromtimestamp(n.last_modified).isoformat() if n.last_modified else "",
+                    datetime.fromtimestamp(n.last_modified).isoformat() if n.last_modified > 0 else "",
                     n.reparse_type.value, n.is_hidden, n.is_readonly, n.is_system,
                     n.hard_link_count, n.has_zone_identifier, n.is_dir
                 ])
@@ -910,28 +1063,47 @@ class EliminationEngine:
     def __init__(self, nodes: List[FileNode], errors: ErrorCollector):
         self.nodes = nodes
         self.errors = errors
+        self._dup_groups: List[List[FileNode]] = []  # 去重组缓存，供预览
 
     def mark_cache_dirs(self, extra_patterns: List[str] = None):
+        """标记缓存目录 — 基于排序前缀匹配，O(N log N)"""
         patterns = list(CACHE_DIR_PATTERNS)
         if extra_patterns:
             patterns.extend(extra_patterns)
 
+        # 先收集匹配模式的缓存目录/文件节点
+        cache_roots: List[FileNode] = []
         for node in self.nodes:
             if node.action != NodeAction.NONE:
                 continue
             for pattern in patterns:
                 if fnmatch.fnmatch(node.file_name.lower(), pattern.lower()):
-                    if node.is_dir:
-                        prefix = node.full_path.lower() + os.sep
-                        for other in self.nodes:
-                            if other.full_path.lower().startswith(prefix) or \
-                               other.full_path.lower() == node.full_path.lower():
-                                other.action = NodeAction.DELETE
-                    else:
-                        node.action = NodeAction.DELETE
+                    cache_roots.append(node)
+                    node.action = NodeAction.DELETE
                     break
 
+        # 对缓存目录，标记所有子节点
+        dir_roots = [n for n in cache_roots if n.is_dir]
+        if dir_roots:
+            # 按路径排序
+            sorted_nodes = sorted(self.nodes, key=lambda n: n.full_path.lower())
+
+            for root in dir_roots:
+                prefix = root.full_path.lower() + os.sep
+                # 二分查找起始位置
+                import bisect
+                lo = bisect.bisect_left(sorted_nodes, prefix, key=lambda n: n.full_path.lower())
+
+                # 从 lo 开始线性标记直到前缀不匹配
+                for j in range(lo, len(sorted_nodes)):
+                    if sorted_nodes[j].full_path.lower().startswith(prefix):
+                        if sorted_nodes[j].action == NodeAction.NONE:
+                            sorted_nodes[j].action = NodeAction.DELETE
+                    else:
+                        break
+
     def deduplicate(self, strategy: str = "shallowest") -> int:
+        """三级哈希去重，返回标记的重复文件数量"""
         files = [n for n in self.nodes
                  if not n.is_dir and n.action == NodeAction.NONE
                  and n.reparse_type != ReparseType.HARDLINK]
@@ -941,6 +1113,8 @@ class EliminationEngine:
             size_groups[f.size_bytes].append(f)
 
         dup_count = 0
+        self._dup_groups = []
+
         for size, group in size_groups.items():
             if len(group) < 2:
                 continue
@@ -970,12 +1144,46 @@ class EliminationEngine:
                     else:
                         keep = max(fgroup, key=lambda n: n.last_modified)
 
+                    # 记录去重组（供预览）
+                    self._dup_groups.append(list(fgroup))
+
                     for f in fgroup:
                         if f.full_path != keep.full_path:
                             f.action = NodeAction.DELETE
                             dup_count += 1
 
         return dup_count
+
+    def get_duplicate_groups(self) -> List[Dict]:
+        """获取去重组详情，供预览展示"""
+        result = []
+        for i, group in enumerate(self._dup_groups, 1):
+            if len(group) < 2:
+                continue
+
+            # 找保留的那个
+            kept = None
+            deleted = []
+            for f in group:
+                if f.action != NodeAction.DELETE:
+                    kept = f
+                else:
+                    deleted.append(f)
+
+            if not kept:
+                # 全部被标记删除（不应该发生），保留第一个
+                kept = group[0]
+                deleted = group[1:]
+                kept.action = NodeAction.NONE
+
+            result.append({
+                "group_id": i,
+                "size": _fmt_size(kept.size_bytes),
+                "hash": kept.full_hash()[:16] if kept.full_hash() else "?",
+                "keep": {"path": kept.full_path, "depth": kept.depth},
+                "delete": [{"path": f.full_path, "depth": f.depth} for f in deleted],
+            })
+        return result
 
 
 # ============================================================
@@ -990,6 +1198,7 @@ class FlattenEngine:
         self.errors = errors
 
     def extract_files(self, target_dir: str, extensions: List[str] = None):
+        """提取文件到单层目录，冲突用 _from_原目录名 后缀"""
         files = [n for n in self.nodes
                  if not n.is_dir and n.action == NodeAction.NONE]
 
@@ -1001,12 +1210,20 @@ class FlattenEngine:
         os.makedirs(target_dir, exist_ok=True)
 
         for f in files:
+            base, ext = os.path.splitext(f.file_name)
+
+            # 来源目录名（用于冲突后缀）
+            source_dir = os.path.basename(os.path.dirname(f.full_path))
+
             target_name = f.file_name
             if target_name in existing_names:
-                base, ext = os.path.splitext(target_name)
-                counter = 1
+                # 冲突：追加 _from_原目录名 后缀
+                target_name = f"{base}_from_{source_dir}{ext}"
+
+                # 如果仍然冲突，追加序号
+                counter = 2
                 while target_name in existing_names:
-                    target_name = f"{base}_{counter}{ext}"
+                    target_name = f"{base}_from_{source_dir}_{counter}{ext}"
                     counter += 1
 
             name_no_ext = os.path.splitext(target_name)[0].upper()
@@ -1014,7 +1231,9 @@ class FlattenEngine:
                 target_name = f"_{target_name}"
 
             target_path = os.path.join(target_dir, target_name)
-            if len(target_path.encode("utf-8")) >= MAX_PATH_EXTENDED:
+            # 按字节检查路径长度
+            path_bytes = len(target_path.encode("utf-8"))
+            if path_bytes >= MAX_PATH_EXTENDED:
                 safe_name = _truncate_name(target_name,
                     MAX_PATH_EXTENDED - len(target_dir.encode("utf-8")) - 2)
                 target_path = os.path.join(target_dir, safe_name)
@@ -1036,9 +1255,9 @@ class RestructureEngine:
         self.errors = errors
 
     def unpack_redundant(self) -> int:
+        r"""解包冗余目录结构 (A\A\ → A\)"""
         unpacked = 0
         dirs = [n for n in self.nodes if n.is_dir and n.action == NodeAction.NONE]
-        dir_map = {d.full_path.lower(): d for d in dirs}
 
         dir_children: Dict[str, List[FileNode]] = defaultdict(list)
         for d in dirs:
@@ -1068,6 +1287,7 @@ class RestructureEngine:
         return unpacked
 
     def lift_children(self, target_dir: str) -> int:
+        """将选中目录的直属子项提升到父目录"""
         lifted = 0
         parent_dir = os.path.dirname(target_dir)
         prefix = target_dir.lower() + os.sep
@@ -1090,7 +1310,7 @@ class RestructureEngine:
 
 
 # ============================================================
-# 执行引擎
+# 执行引擎 — 统一阶段编排
 # ============================================================
 
 class ExecutionEngine:
@@ -1115,49 +1335,56 @@ class ExecutionEngine:
         self._scan_timestamp = ts
 
     def execute(self, dry_run: bool = True) -> Dict:
+        """统一阶段编排：Phase 1 权限 → Phase 2 移动 → Phase 3 删除 → Phase 4 空目录"""
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.trash_dir, exist_ok=True)
 
-        to_execute = [n for n in self.nodes
-                      if n.action in (NodeAction.MOVE, NodeAction.DELETE)]
-        total = len(to_execute)
+        moved = [n for n in self.nodes if n.action == NodeAction.MOVE]
+        deleted = [n for n in self.nodes if n.action == NodeAction.DELETE]
+        total = len(moved) + len(deleted)
+
         if total == 0:
             print("✅ 无需执行任何操作")
             return self.stats
 
-        moved = [n for n in to_execute if n.action == NodeAction.MOVE]
-        deleted = [n for n in to_execute if n.action == NodeAction.DELETE]
-
         mode_label = "🔍 预览模式" if dry_run else "⚡ 执行模式"
         print(f"\n{mode_label}: 共 {total} 项操作 (移动 {len(moved)} / 删除 {len(deleted)})\n")
 
+        # Phase 2: 移动操作（权限修复由 PermissionEngine 独立处理 = Phase 1）
+        print("  Phase 2: 移动操作...")
         for i, node in enumerate(moved, 1):
             self._process_move(node, dry_run)
             self._maybe_throttle()
             if not dry_run and i % 200 == 0:
-                print(f"  移动进度: {i}/{len(moved)}")
+                print(f"    移动进度: {i}/{len(moved)}")
 
+        # Phase 3: 删除操作
+        print("  Phase 3: 删除操作...")
         for i, node in enumerate(deleted, 1):
             self._process_delete(node, dry_run)
             self._maybe_throttle()
             if not dry_run and i % 200 == 0:
-                print(f"  删除进度: {i}/{len(deleted)}")
+                print(f"    删除进度: {i}/{len(deleted)}")
 
+        # Phase 4: 空目录清理（仅执行模式）
         if not dry_run:
+            print("  Phase 4: 空目录清理...")
             self._cleanup_empty_dirs()
             self._write_log()
+            self._rotate_logs()
 
         return self.stats
 
     def _process_move(self, node: FileNode, dry_run: bool):
-        if not _safe_exists(node.full_path):
+        if not Win32IO.exists(node.full_path):
             node.status = NodeStatus.VANISHED
             self.stats["vanished"] += 1
             return
 
+        # 预览和执行都做竞态检查
         if self._scan_timestamp:
             try:
-                st = _safe_stat(node.full_path)
+                st = Win32IO.safe_stat(node.full_path)
                 if st and st.st_mtime > self._scan_timestamp:
                     node.status = NodeStatus.CHANGED
                     self.stats["changed"] += 1
@@ -1178,13 +1405,18 @@ class ExecutionEngine:
         os.makedirs(target_dir, exist_ok=True)
 
         try:
-            if _safe_exists(target):
+            if Win32IO.exists(target):
                 target = self._resolve_conflict(target)
                 node.target_path = target
 
-            src = _win_path(node.full_path) if _safe_exists(node.full_path) else node.full_path
-            dst = _win_path(target)
-            shutil.move(src, dst)
+            # 使用 Win32IO.move 而非 shutil.move
+            if not Win32IO.move(node.full_path, target):
+                # 回退：先复制再删除
+                src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
+                dst_wp = _win_path(target)
+                shutil.copy2(src_wp, dst_wp)
+                Win32IO.delete_file(node.full_path)
+
             self._log_op("MOVE", node.full_path, target)
             node.status = NodeStatus.SUCCESS
             self.stats["success"] += 1
@@ -1195,7 +1427,7 @@ class ExecutionEngine:
             self.errors.add(node.full_path, "MoveFailed", str(e))
 
     def _process_delete(self, node: FileNode, dry_run: bool):
-        if not _safe_exists(node.full_path):
+        if not Win32IO.exists(node.full_path):
             node.status = NodeStatus.VANISHED
             self.stats["vanished"] += 1
             return
@@ -1208,9 +1440,14 @@ class ExecutionEngine:
         try:
             trash_target = self._get_trash_path(node.full_path)
             os.makedirs(os.path.dirname(trash_target), exist_ok=True)
-            src = _win_path(node.full_path) if _safe_exists(node.full_path) else node.full_path
-            dst = _win_path(trash_target)
-            shutil.move(src, dst)
+
+            if not Win32IO.move(node.full_path, trash_target):
+                # 回退
+                src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
+                dst_wp = _win_path(trash_target)
+                shutil.copy2(src_wp, dst_wp)
+                Win32IO.delete_file(node.full_path)
+
             self._log_op("DELETE", node.full_path, trash_target, status="TRASHED")
             node.status = NodeStatus.TRASHED
             self.stats["success"] += 1
@@ -1222,6 +1459,7 @@ class ExecutionEngine:
             self.errors.add(node.full_path, "DeleteFailed", str(e))
 
     def _cleanup_empty_dirs(self):
+        """倒序清理空目录（深度从深到浅）"""
         dirs = sorted(
             [n for n in self.nodes if n.is_dir],
             key=lambda n: n.depth, reverse=True
@@ -1230,11 +1468,9 @@ class ExecutionEngine:
             if d.action == NodeAction.DELETE:
                 continue
             try:
-                wp = _win_path(d.full_path)
-                check = wp if os.path.exists(wp) else d.full_path
-                if os.path.isdir(check) and not os.listdir(check):
-                    os.rmdir(check)
-                    self._log_op("RMDIR", d.full_path, "")
+                if Win32IO.is_dir(d.full_path) and not Win32IO.safe_listdir(d.full_path):
+                    if Win32IO.remove_directory(d.full_path):
+                        self._log_op("RMDIR", d.full_path, "")
             except OSError:
                 pass
 
@@ -1245,7 +1481,7 @@ class ExecutionEngine:
         while True:
             new_name = f"{base}_{counter}{ext}"
             new_path = os.path.join(dir_name, new_name)
-            if not _safe_exists(new_path):
+            if not Win32IO.exists(new_path):
                 return new_path
             counter += 1
 
@@ -1278,9 +1514,31 @@ class ExecutionEngine:
                 f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
         print(f"📝 操作日志: {log_path}")
 
+    def _rotate_logs(self):
+        """保留最近 MAX_LOG_FILES 个日志文件，清理旧的"""
+        try:
+            if not os.path.isdir(self.log_dir):
+                return
+            log_files = sorted([
+                f for f in os.listdir(self.log_dir)
+                if f.startswith("operations_") and f.endswith(".jsonl")
+            ])
+            if len(log_files) > MAX_LOG_FILES:
+                for old_file in log_files[:len(log_files) - MAX_LOG_FILES]:
+                    try:
+                        os.remove(os.path.join(self.log_dir, old_file))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     def generate_rollback_script(self) -> str:
+        """生成回滚脚本，含父目录重建"""
         if not self.op_logs:
             return "@echo off\nrem 无操作记录，无需回滚\n"
+
+        # 收集所有需要重建的目录
+        mkdir_dirs: Set[str] = set()
         lines = [
             "@echo off",
             "chcp 65001 >nul",
@@ -1291,6 +1549,22 @@ class ExecutionEngine:
             "rem ============================================",
             "",
         ]
+
+        # 收集需要的 mkdir 指令
+        for entry in reversed(self.op_logs):
+            if entry.action in ("MOVE", "DELETE"):
+                src_dir = os.path.dirname(entry.source)
+                if src_dir:
+                    mkdir_dirs.add(src_dir)
+
+        # 先写 mkdir（去重）
+        for d in sorted(mkdir_dirs):
+            safe_d = d.replace('"', '""')
+            lines.append(f'mkdir "{safe_d}" 2>nul')
+
+        lines.append("")
+        lines.append("rem --- 操作回滚 ---")
+
         for entry in reversed(self.op_logs):
             src = entry.source.replace('"', '""')
             dst = entry.target.replace('"', '""')
@@ -1299,7 +1573,8 @@ class ExecutionEngine:
             elif entry.action == "DELETE":
                 lines.append(f'move /Y "{dst}" "{src}"')
             elif entry.action == "RMDIR":
-                lines.append(f'mkdir "{src}"')
+                lines.append(f'mkdir "{src}" 2>nul')
+
         lines.append("")
         lines.append('echo ✅ 回滚完成')
         return "\r\n".join(lines)
@@ -1341,17 +1616,35 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _truncate_name(name: str, max_bytes: int) -> str:
+    """按 UTF-8 字节数截断文件名（非字符数），确保多语言文件名不超长"""
     encoded = name.encode("utf-8")
     if len(encoded) <= max_bytes:
         return name
+
     base, ext = os.path.splitext(name)
     ext_bytes = len(ext.encode("utf-8"))
-    available = max_bytes - ext_bytes - 9
+    name_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:8]
+    hash_suffix = f"_{name_hash}"
+    hash_bytes = len(hash_suffix.encode("utf-8"))
+
+    available = max_bytes - ext_bytes - hash_bytes
     if available < 1:
         available = 1
-    truncated_base = base[:available]
-    name_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:8]
-    return f"{truncated_base}_{name_hash}{ext}"
+
+    # 按字节截断 base：逐步取字符直到接近字节上限
+    truncated_base = ""
+    current_bytes = 0
+    for ch in base:
+        ch_bytes = len(ch.encode("utf-8"))
+        if current_bytes + ch_bytes > available:
+            break
+        truncated_base += ch
+        current_bytes += ch_bytes
+
+    if not truncated_base:
+        truncated_base = "x"
+
+    return f"{truncated_base}{hash_suffix}{ext}"
 
 
 def _fmt_size(size_bytes: int) -> str:
@@ -1362,8 +1655,21 @@ def _fmt_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} PB"
 
 
+def _node_attrs_str(n: FileNode) -> str:
+    parts = []
+    if n.is_hidden:
+        parts.append("H")
+    if n.is_readonly:
+        parts.append("R")
+    if n.is_system:
+        parts.append("S")
+    if n.has_zone_identifier:
+        parts.append("Z")
+    return "".join(parts) if parts else "-"
+
+
 # ============================================================
-# 主引擎
+# 主引擎 — 统一编排器
 # ============================================================
 
 class FolderRestructureEngine:
@@ -1374,6 +1680,7 @@ class FolderRestructureEngine:
         self.errors = ErrorCollector()
         self.diagnostic: Optional[DiagnosticEngine] = None
         self.perm_engine: Optional[PermissionEngine] = None
+        self.elim_engine: Optional[EliminationEngine] = None
         self.nodes: List[FileNode] = []
         self._scan_ts: float = 0
 
@@ -1400,11 +1707,11 @@ class FolderRestructureEngine:
                 dedup_strategy: str = "shallowest") -> Dict:
         result = {}
 
-        elim = EliminationEngine(self.nodes, self.errors)
-        elim.mark_cache_dirs(cache_patterns)
+        self.elim_engine = EliminationEngine(self.nodes, self.errors)
+        self.elim_engine.mark_cache_dirs(cache_patterns)
         result["cache_marked"] = sum(1 for n in self.nodes if n.action == NodeAction.DELETE)
 
-        result["duplicates_marked"] = elim.deduplicate(dedup_strategy)
+        result["duplicates_marked"] = self.elim_engine.deduplicate(dedup_strategy)
 
         restruct = RestructureEngine(self.nodes, self.target_path, self.errors)
         result["redundant_unpacked"] = restruct.unpack_redundant()
@@ -1430,6 +1737,12 @@ class FolderRestructureEngine:
                     "attrs": _node_attrs_str(n),
                 })
         return actions
+
+    def get_duplicate_preview(self) -> List[Dict]:
+        """获取去重预览详情"""
+        if self.elim_engine:
+            return self.elim_engine.get_duplicate_groups()
+        return []
 
     def execute(self, dry_run: bool = True) -> Dict:
         engine = ExecutionEngine(self.nodes, self.target_path,
@@ -1499,19 +1812,6 @@ class FolderRestructureEngine:
         print(f"{'=' * 55}\n")
 
 
-def _node_attrs_str(n: FileNode) -> str:
-    parts = []
-    if n.is_hidden:
-        parts.append("H")
-    if n.is_readonly:
-        parts.append("R")
-    if n.is_system:
-        parts.append("S")
-    if n.has_zone_identifier:
-        parts.append("Z")
-    return "".join(parts) if parts else "-"
-
-
 # ============================================================
 # CLI
 # ============================================================
@@ -1539,7 +1839,7 @@ def _parse_actions(action_str: str) -> Set[PermissionAction]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="文件夹结构智能重组引擎 V5.0 (Windows 专用)",
+        description="文件夹结构智能重组引擎 V5.1 (Windows 专用)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
@@ -1600,7 +1900,7 @@ def main():
         print(f"❌ 操作被禁止: {msg}")
         sys.exit(1)
 
-    # 锁
+    # 锁 — atexit 在 acquire 成功后立即注册
     lock = LockManager(args.target)
     if not args.diagnose:
         if not lock.acquire(force=args.force_lock):
@@ -1637,6 +1937,18 @@ def main():
         print(f"  重复文件标记: {analysis['duplicates_marked']} 项")
         print(f"  冗余结构解包: {analysis['redundant_unpacked']} 项")
 
+        # 去重预览
+        dup_groups = engine.get_duplicate_preview()
+        if dup_groups:
+            print(f"\n📋 重复文件清单 (共 {len(dup_groups)} 组):")
+            for g in dup_groups[:20]:
+                print(f"  组 {g['group_id']}: {g['size']} (MD5: {g['hash']}...)")
+                print(f"    ✅ 保留: {g['keep']['path']} (深度 {g['keep']['depth']})")
+                for d in g["delete"]:
+                    print(f"    🗑️ 删除: {d['path']} (深度 {d['depth']})")
+            if len(dup_groups) > 20:
+                print(f"  ... 还有 {len(dup_groups) - 20} 组")
+
         # 权限/属性修复
         perm_stats = {}
         if args.fix_attr:
@@ -1645,7 +1957,7 @@ def main():
                 do_execute = args.execute and not args.preview
                 perm_stats = engine.fix_permissions(perm_actions, dry_run=not do_execute)
 
-        # 预览
+        # 预览结构变更
         preview = engine.preview()
         if preview:
             print(f"\n📋 结构变更清单 ({len(preview)} 项):")
