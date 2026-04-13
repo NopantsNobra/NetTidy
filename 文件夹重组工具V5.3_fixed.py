@@ -426,6 +426,7 @@ class VirtualFileNode:
     is_truncated: bool = False
     action: NodeAction = NodeAction.NONE
     reason: str = ""
+    target_path: str = ""
 
 
 @dataclass
@@ -950,11 +951,8 @@ class DiagnosticEngine:
 
             if IS_WINDOWS:
                 try:
-                    wp = _win_path(path)
-                    attrs = ctypes.windll.kernel32.GetFileAttributesW(wp)
-                    if attrs == -1:
-                        attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
-                    if attrs != -1:
+                    attrs = Win32IO.get_file_attributes(path)
+                    if attrs is not None:
                         is_hidden = bool(attrs & FILE_ATTRIBUTE_HIDDEN)
                         is_readonly = bool(attrs & FILE_ATTRIBUTE_READONLY)
                         is_system = bool(attrs & FILE_ATTRIBUTE_SYSTEM)
@@ -1093,6 +1091,16 @@ class EliminationEngine:
         patterns = list(CACHE_DIR_PATTERNS)
         if extra_patterns:
             patterns.extend(extra_patterns)
+
+        # 垃圾文件标记（与离线模式一致）
+        for node in self.nodes:
+            if node.action != NodeAction.NONE:
+                continue
+            if not node.is_dir:
+                for pattern in JUNK_FILE_PATTERNS:
+                    if fnmatch.fnmatch(node.file_name.lower(), pattern.lower()):
+                        node.action = NodeAction.DELETE
+                        break
 
         cache_roots: List[FileNode] = []
         for node in self.nodes:
@@ -1428,6 +1436,7 @@ class ExecutionEngine:
         def _safe_handler(node):
             try:
                 handler(node, dry_run)
+                self._maybe_throttle()
                 with progress_lock:
                     completed[0] += 1
                     if completed[0] % 200 == 0:
@@ -1544,7 +1553,8 @@ class ExecutionEngine:
             try:
                 if Win32IO.is_dir(d.full_path) and not Win32IO.safe_listdir(d.full_path):
                     if Win32IO.remove_directory(d.full_path):
-                        self._log_op("RMDIR", d.full_path, "")
+                        with self._lock:
+                            self._log_op("RMDIR", d.full_path, "")
             except OSError:
                 pass
 
@@ -1567,6 +1577,7 @@ class ExecutionEngine:
         return os.path.join(self.trash_dir, rel)
 
     def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS"):
+        # 注意: 调用方需确保线程安全 (在 self._lock 内调用)
         self._seq += 1
         self.op_logs.append(OperationLog(
             seq=self._seq, action=action, source=source, target=target,
@@ -1761,11 +1772,12 @@ def _parse_actions(action_str: str) -> Set[PermissionAction]:
 
 class FileListParser:
     """
-    解析 PowerShell Get-ChildItem 导出的文件列表。
+    解析多种格式的文件列表。
 
     支持格式:
       1. PowerShell Format-Table 输出 (含 FullName 表头)
       2. 纯路径列表 (每行一个路径)
+      3. 带深度和类型的自定义格式: [{depth}] path #DIR / [{depth}] path #FILE
 
     核心能力:
       - 自动跳过 PowerShell 表头和分隔线
@@ -1775,17 +1787,27 @@ class FileListParser:
       - 支持多文件合并 + 跨文件去重
     """
 
+    # 匹配 "[{depth}] path #DIR" 或 "[{depth}] path #FILE" 格式
+    _CUSTOM_FMT_RE = re.compile(r'^\[\{?(\d+)\}?\]\s+(.+?)\s+#(DIR|FILE)\s*$')
+
     def __init__(self):
         self.total_truncated = 0
         self.total_skipped = 0
+        self._type_map: Dict[str, bool] = {}  # path → is_dir
+        self._depth_map: Dict[str, int] = {}  # path → depth
+        self._has_custom_format = False
 
     def load_files(self, filepaths: List[str]) -> List[str]:
         """
         加载一个或多个文件列表，返回合并后的有效路径列表。
+        同时填充 _type_map 和 _depth_map (自定义格式时)。
         """
         all_lines = []
         self.total_truncated = 0
         self.total_skipped = 0
+        self._type_map = {}
+        self._depth_map = {}
+        self._has_custom_format = False
 
         for filepath in filepaths:
             if not os.path.isfile(filepath):
@@ -1805,6 +1827,10 @@ class FileListParser:
         if len(all_lines) < before:
             print(f"   跨文件去重: {before} → {len(all_lines)} 行 (去除 {before - len(all_lines)} 重复)")
 
+        if self._has_custom_format:
+            print(f"   检测到自定义格式，已解析类型: {sum(1 for v in self._type_map.values() if v)} 目录, "
+                  f"{sum(1 for v in self._type_map.values() if not v)} 文件")
+
         return all_lines
 
     def _load_single(self, filepath: str) -> Tuple[List[str], int, int]:
@@ -1817,12 +1843,27 @@ class FileListParser:
         skipped_count = 0
         in_header = True
         found_fullname = False
+        custom_format_count = 0
 
         for raw in raw_lines:
             line = raw.rstrip("\r\n")
 
             if not line.strip():
                 skipped_count += 1
+                continue
+
+            # 尝试匹配自定义格式: [{depth}] path #DIR / #FILE
+            m = self._CUSTOM_FMT_RE.match(line)
+            if m:
+                self._has_custom_format = True
+                custom_format_count += 1
+                depth = int(m.group(1))
+                path_str = m.group(2).strip()
+                is_dir = m.group(3) == "DIR"
+
+                self._type_map[path_str] = is_dir
+                self._depth_map[path_str] = depth
+                valid_lines.append(path_str)
                 continue
 
             # PowerShell 表头区域
@@ -1862,10 +1903,12 @@ class FileListParser:
         """
         将路径列表解析为虚拟节点。
 
-        文件/目录判断: 基于前缀关系而非扩展名。
-        如果路径 A 是路径 B 的前缀 (A + \\ 是 B 的前缀) → A 是目录。
+        支持两种模式:
+          1. 自定义格式 (已有 #DIR/#FILE 标记) → 直接使用标记判断类型
+          2. 纯路径列表 → 基于前缀关系推断文件/目录
         """
-        SEP_WIN = "\\"
+        SEP_WIN = "\\" 
+        use_custom = self._has_custom_format and bool(self._type_map)
 
         # Phase 1: 推断公共根
         root_parts = None
@@ -1888,32 +1931,43 @@ class FileListParser:
             root = root + SEP_WIN
         root_depth = len(root_parts) if root_parts else 1
 
-        # Phase 2: 收集中间目录 + 前缀关系判断
+        # Phase 2: 确定 is_dir
         all_intermediate_dirs: Set[str] = set()
-        for line in lines:
-            parts = line.split(SEP_WIN)
-            for i in range(root_depth, len(parts) - 1):
-                all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
+        if use_custom:
+            # 自定义格式：直接使用 _type_map
+            is_dir_map: Dict[str, bool] = {}
+            for line in lines:
+                is_dir_map[line] = self._type_map.get(line, False)
+            # 收集中间目录（即使标记为 FILE，其父路径仍是目录）
+            for line in lines:
+                parts = line.split(SEP_WIN)
+                for i in range(root_depth, len(parts) - 1):
+                    all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
+        else:
+            # 纯路径格式：前缀关系推断
+            for line in lines:
+                parts = line.split(SEP_WIN)
+                for i in range(root_depth, len(parts) - 1):
+                    all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
 
-        # 合并所有已知路径用于前缀查找
-        all_known = set(lines) | all_intermediate_dirs
-        sorted_paths = sorted(all_known, key=lambda p: p.lower())
+            all_known = set(lines) | all_intermediate_dirs
+            sorted_paths = sorted(all_known, key=lambda p: p.lower())
 
-        def has_children(path: str) -> bool:
-            prefix = path.lower() + SEP_WIN
-            lo = bisect.bisect_left(sorted_paths, prefix, key=lambda p: p.lower())
-            if lo < len(sorted_paths):
-                return sorted_paths[lo].lower().startswith(prefix)
-            return False
+            def has_children(path: str) -> bool:
+                prefix = path.lower() + SEP_WIN
+                lo = bisect.bisect_left(sorted_paths, prefix, key=lambda p: p.lower())
+                if lo < len(sorted_paths):
+                    return sorted_paths[lo].lower().startswith(prefix)
+                return False
 
-        is_dir_map: Dict[str, bool] = {}
-        for line in lines:
-            if line in all_intermediate_dirs:
-                is_dir_map[line] = True
-            elif has_children(line):
-                is_dir_map[line] = True
-            else:
-                is_dir_map[line] = False
+            is_dir_map = {}
+            for line in lines:
+                if line in all_intermediate_dirs:
+                    is_dir_map[line] = True
+                elif has_children(line):
+                    is_dir_map[line] = True
+                else:
+                    is_dir_map[line] = False
 
         # Phase 3: 创建节点
         nodes = []
@@ -1921,7 +1975,12 @@ class FileListParser:
 
         for line in lines:
             parts = line.split(SEP_WIN)
-            rel_depth = len(parts) - root_depth
+            # 使用自定义格式提供的 depth，否则基于路径层级计算
+            if use_custom and line in self._depth_map:
+                rel_depth = self._depth_map[line]
+            else:
+                rel_depth = len(parts) - root_depth
+
             fname = parts[-1] if parts else ""
             is_dir = is_dir_map.get(line, False)
 
@@ -1964,6 +2023,7 @@ class FileListParser:
             "dirs_detected": sum(1 for v in is_dir_map.values() if v),
             "files_detected": sum(1 for v in is_dir_map.values() if not v),
             "implicit_dirs": implicit_count,
+            "custom_format": use_custom,
         }
 
         return nodes, root, parse_stats
@@ -2125,7 +2185,7 @@ class OfflineRestructureEngine:
                 if node.full_path.lower().startswith(child_prefix) and \
                    node.action == NodeAction.NONE:
                     rel = node.full_path[len(child.full_path):].lstrip(SEP_WIN)
-                    node.full_path = SEP_WIN.join([actual_parent, rel]) if rel else actual_parent
+                    node.target_path = SEP_WIN.join([actual_parent, rel]) if rel else actual_parent
                     node.reason = f"解包: {child.file_name}"
                     node.action = NodeAction.MOVE
 
