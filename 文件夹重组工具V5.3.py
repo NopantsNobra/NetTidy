@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V5.2 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V5.3 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
 默认为预览模式，必须显式确认才执行物理操作。
+
+V5.3 相比 V5.2 核心变更：
+- 全面多线程支持：诊断、去重、执行三大阶段均可并行
+- 自动线程数：根据 CPU 核心数自动选择线程数（默认 min(8, cpu_count)）
+- Zone 检测并行化：批量并行检测 Zone.Identifier，不再拖慢扫描
+- 去重哈希并行化：QuickHash / FullHash 批量并行计算
+- 移动/删除并行化：IO 操作多线程并发执行
+- 线程安全：所有共享状态通过 Lock 保护
 
 环境要求: Windows 7+ / Python 3.9+ / 管理员权限(推荐)
 离线模式: 任意平台 / Python 3.9+ / 仅需文件列表
@@ -31,6 +39,7 @@ import fnmatch
 import re
 import tempfile
 import bisect
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============================================================
 # 平台检测
@@ -64,11 +73,16 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "5.2.0"
+VERSION = "5.3.0"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
 MAX_LOG_FILES = 10
+
+# 多线程配置
+MAX_WORKERS = min(8, (os.cpu_count() or 4))  # 自动根据 CPU 核心数调整
+HASH_BATCH_SIZE = 50  # 每批提交的哈希计算任务数
+IO_BATCH_SIZE = 200   # 每批提交的 IO 操作任务数
 
 # Windows 保留设备名
 WINDOWS_RESERVED = {
@@ -155,10 +169,14 @@ class Win32IO:
 
     @classmethod
     def exists(cls, path: str) -> bool:
+        if not IS_WINDOWS:
+            return os.path.exists(path)
         return cls.get_file_attributes(path) is not None
 
     @classmethod
     def is_dir(cls, path: str) -> bool:
+        if not IS_WINDOWS:
+            return os.path.isdir(path)
         attrs = cls.get_file_attributes(path)
         if attrs is None:
             return False
@@ -875,16 +893,37 @@ class DiagnosticEngine:
                 fpath = os.path.join(dirpath, fname)
                 try:
                     node = self._make_node(fpath, rel_depth)
-                    if detect_zone and not node.is_dir:
-                        wp = _win_path(fpath)
-                        check_path = wp if os.path.exists(wp) else fpath
-                        node.has_zone_identifier = ZoneIdentifierHandler.has_zone_identifier(check_path)
                     self.nodes.append(node)
                 except (OSError, IOError):
                     continue
 
             if verbose and len(self.nodes) % 50000 == 0:
                 print(f"  已扫描 {len(self.nodes)} 项...")
+
+        # 并行 Zone.Identifier 检测（扫描完成后再批量检测，避免扫描阶段卡顿）
+        if detect_zone and IS_WINDOWS:
+            file_nodes = [n for n in self.nodes if not n.is_dir]
+            if file_nodes:
+                print(f"  🔍 并行检测 Zone.Identifier ({len(file_nodes)} 个文件, {MAX_WORKERS} 线程)...")
+                lock = threading.Lock()
+                zone_count = [0]
+
+                def _check_zone(node):
+                    try:
+                        wp = _win_path(node.full_path)
+                        check_path = wp if os.path.exists(wp) else node.full_path
+                        if ZoneIdentifierHandler.has_zone_identifier(check_path):
+                            with lock:
+                                node.has_zone_identifier = True
+                                zone_count[0] += 1
+                    except (OSError, IOError):
+                        pass
+
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    list(executor.map(_check_zone, file_nodes))
+
+                if zone_count[0]:
+                    print(f"  发现 {zone_count[0]} 个含 Zone.Identifier 的文件")
 
         if skipped_dirs:
             print(f"⚠️  跳过 {skipped_dirs} 个无权限目录")
@@ -1087,45 +1126,87 @@ class EliminationEngine:
         for f in files:
             size_groups[f.size_bytes].append(f)
 
+        # 过滤出有 2+ 文件的组
+        candidate_groups = [(size, group) for size, group in size_groups.items() if len(group) >= 2]
+
+        if not candidate_groups:
+            return 0
+
+        print(f"  🔍 并行去重: {sum(len(g) for _, g in candidate_groups)} 个候选文件 "
+              f"({len(candidate_groups)} 个大小组, {MAX_WORKERS} 线程)")
+
+        # Phase 1: 并行计算所有候选文件的 QuickHash
+        all_candidates = [f for _, group in candidate_groups for f in group]
+        lock = threading.Lock()
+
+        def _compute_quick_hash(node):
+            node.quick_hash()  # 结果缓存在 node._quick_hash
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(_compute_quick_hash, f) for f in all_candidates]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass  # 哈希计算失败会在节点内标记为空
+
+        # Phase 2: 按 QuickHash 分组，收集需要 FullHash 的组
+        need_full_hash: List[List[FileNode]] = []
+        for size, group in candidate_groups:
+            qhash_groups: Dict[str, List[FileNode]] = defaultdict(list)
+            for f in group:
+                qh = f._quick_hash or ""
+                if qh:
+                    qhash_groups[qh].append(f)
+            for qh, qgroup in qhash_groups.items():
+                if len(qgroup) >= 2:
+                    need_full_hash.append(qgroup)
+
+        if not need_full_hash:
+            return 0
+
+        # Phase 3: 并行计算需要 FullHash 的文件
+        need_full_hash_flat = [f for group in need_full_hash for f in group]
+
+        def _compute_full_hash(node):
+            node.full_hash()  # 结果缓存在 node._full_hash
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(_compute_full_hash, f) for f in need_full_hash_flat]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass
+
+        # Phase 4: 按 FullHash 确定真正的重复组
         dup_count = 0
         self._dup_groups = []
 
-        for size, group in size_groups.items():
-            if len(group) < 2:
-                continue
+        for qgroup in need_full_hash:
+            fhash_groups: Dict[str, List[FileNode]] = defaultdict(list)
+            for f in qgroup:
+                fh = f._full_hash or ""
+                if fh:
+                    fhash_groups[fh].append(f)
 
-            qhash_groups: Dict[str, List[FileNode]] = defaultdict(list)
-            for f in group:
-                qh = f.quick_hash()
-                if qh:
-                    qhash_groups[qh].append(f)
-
-            for qh, qgroup in qhash_groups.items():
-                if len(qgroup) < 2:
+            for fh, fgroup in fhash_groups.items():
+                if len(fgroup) < 2:
                     continue
 
-                fhash_groups: Dict[str, List[FileNode]] = defaultdict(list)
-                for f in qgroup:
-                    fh = f.full_hash()
-                    if fh:
-                        fhash_groups[fh].append(f)
+                if strategy == "shallowest":
+                    keep = min(fgroup, key=lambda n: n.depth)
+                else:
+                    keep = max(fgroup, key=lambda n: n.last_modified)
 
-                for fh, fgroup in fhash_groups.items():
-                    if len(fgroup) < 2:
-                        continue
+                self._dup_groups.append(list(fgroup))
 
-                    if strategy == "shallowest":
-                        keep = min(fgroup, key=lambda n: n.depth)
-                    else:
-                        keep = max(fgroup, key=lambda n: n.last_modified)
+                for f in fgroup:
+                    if f.full_path != keep.full_path:
+                        f.action = NodeAction.DELETE
+                        dup_count += 1
 
-                    self._dup_groups.append(list(fgroup))
-
-                    for f in fgroup:
-                        if f.full_path != keep.full_path:
-                            f.action = NodeAction.DELETE
-                            dup_count += 1
-
+        print(f"  发现 {len(self._dup_groups)} 组重复文件, 标记删除 {dup_count} 个")
         return dup_count
 
     def get_duplicate_groups(self) -> List[Dict]:
@@ -1284,6 +1365,7 @@ class ExecutionEngine:
         self.op_logs: List[OperationLog] = []
         self._seq = 0
         self._scan_timestamp: float = 0
+        self._lock = threading.Lock()
         self.stats = {
             "success": 0, "vanished": 0, "changed": 0,
             "locked": 0, "skipped": 0, "conflict": 0,
@@ -1307,21 +1389,18 @@ class ExecutionEngine:
             return self.stats
 
         mode_label = "🔍 预览模式" if dry_run else "⚡ 执行模式"
-        print(f"\n{mode_label}: 共 {total} 项操作 (移动 {len(moved)} / 删除 {len(deleted)})\n")
+        print(f"\n{mode_label}: 共 {total} 项操作 (移动 {len(moved)} / 删除 {len(deleted)})")
 
+        if not dry_run and total > 100:
+            print(f"  使用 {MAX_WORKERS} 线程并行处理...\n")
+
+        # Phase 2: 移动操作（并行）
         print("  Phase 2: 移动操作...")
-        for i, node in enumerate(moved, 1):
-            self._process_move(node, dry_run)
-            self._maybe_throttle()
-            if not dry_run and i % 200 == 0:
-                print(f"    移动进度: {i}/{len(moved)}")
+        self._parallel_process(moved, self._process_move, dry_run, "移动")
 
+        # Phase 3: 删除操作（并行）
         print("  Phase 3: 删除操作...")
-        for i, node in enumerate(deleted, 1):
-            self._process_delete(node, dry_run)
-            self._maybe_throttle()
-            if not dry_run and i % 200 == 0:
-                print(f"    删除进度: {i}/{len(deleted)}")
+        self._parallel_process(deleted, self._process_delete, dry_run, "删除")
 
         if not dry_run:
             print("  Phase 4: 空目录清理...")
@@ -1331,18 +1410,55 @@ class ExecutionEngine:
 
         return self.stats
 
+    def _parallel_process(self, nodes: List[FileNode], handler, dry_run: bool, label: str):
+        """并行处理一组节点（移动或删除）。"""
+        if not nodes:
+            return
+
+        # dry-run 或小批量：直接串行处理，避免线程开销
+        if dry_run or len(nodes) <= 20:
+            for node in nodes:
+                handler(node, dry_run)
+            return
+
+        # 并行处理
+        completed = [0]
+        progress_lock = threading.Lock()
+
+        def _safe_handler(node):
+            try:
+                handler(node, dry_run)
+                with progress_lock:
+                    completed[0] += 1
+                    if completed[0] % 200 == 0:
+                        print(f"    {label}进度: {completed[0]}/{len(nodes)}")
+            except Exception as e:
+                with self._lock:
+                    self.errors.add(node.full_path, f"{label}Failed", str(e))
+                    self.stats["failed"] += 1
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(_safe_handler, node) for node in nodes]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass  # 已在 _safe_handler 中处理
+
     def _process_move(self, node: FileNode, dry_run: bool):
         if not Win32IO.exists(node.full_path):
-            node.status = NodeStatus.VANISHED
-            self.stats["vanished"] += 1
+            with self._lock:
+                node.status = NodeStatus.VANISHED
+                self.stats["vanished"] += 1
             return
 
         if self._scan_timestamp:
             try:
                 st = Win32IO.safe_stat(node.full_path)
                 if st and st.st_mtime > self._scan_timestamp:
-                    node.status = NodeStatus.CHANGED
-                    self.stats["changed"] += 1
+                    with self._lock:
+                        node.status = NodeStatus.CHANGED
+                        self.stats["changed"] += 1
                     return
             except OSError:
                 pass
@@ -1352,8 +1468,9 @@ class ExecutionEngine:
             return
 
         if dry_run:
-            node.status = NodeStatus.SUCCESS
-            self.stats["success"] += 1
+            with self._lock:
+                node.status = NodeStatus.SUCCESS
+                self.stats["success"] += 1
             return
 
         target_dir = os.path.dirname(target)
@@ -1370,24 +1487,28 @@ class ExecutionEngine:
                 shutil.copy2(src_wp, dst_wp)
                 Win32IO.delete_file(node.full_path)
 
-            self._log_op("MOVE", node.full_path, target)
-            node.status = NodeStatus.SUCCESS
-            self.stats["success"] += 1
+            with self._lock:
+                self._log_op("MOVE", node.full_path, target)
+                node.status = NodeStatus.SUCCESS
+                self.stats["success"] += 1
         except OSError as e:
-            node.status = NodeStatus.LOCKED
-            node.error_msg = str(e)
-            self.stats["locked"] += 1
-            self.errors.add(node.full_path, "MoveFailed", str(e))
+            with self._lock:
+                node.status = NodeStatus.LOCKED
+                node.error_msg = str(e)
+                self.stats["locked"] += 1
+                self.errors.add(node.full_path, "MoveFailed", str(e))
 
     def _process_delete(self, node: FileNode, dry_run: bool):
         if not Win32IO.exists(node.full_path):
-            node.status = NodeStatus.VANISHED
-            self.stats["vanished"] += 1
+            with self._lock:
+                node.status = NodeStatus.VANISHED
+                self.stats["vanished"] += 1
             return
 
         if dry_run:
-            node.status = NodeStatus.SUCCESS
-            self.stats["success"] += 1
+            with self._lock:
+                node.status = NodeStatus.SUCCESS
+                self.stats["success"] += 1
             return
 
         try:
@@ -1400,15 +1521,17 @@ class ExecutionEngine:
                 shutil.copy2(src_wp, dst_wp)
                 Win32IO.delete_file(node.full_path)
 
-            self._log_op("DELETE", node.full_path, trash_target, status="TRASHED")
-            node.status = NodeStatus.TRASHED
-            self.stats["success"] += 1
-            self.stats["trashed"] += 1
+            with self._lock:
+                self._log_op("DELETE", node.full_path, trash_target, status="TRASHED")
+                node.status = NodeStatus.TRASHED
+                self.stats["success"] += 1
+                self.stats["trashed"] += 1
         except OSError as e:
-            node.status = NodeStatus.LOCKED
-            node.error_msg = str(e)
-            self.stats["locked"] += 1
-            self.errors.add(node.full_path, "DeleteFailed", str(e))
+            with self._lock:
+                node.status = NodeStatus.LOCKED
+                node.error_msg = str(e)
+                self.stats["locked"] += 1
+                self.errors.add(node.full_path, "DeleteFailed", str(e))
 
     def _cleanup_empty_dirs(self):
         dirs = sorted(
@@ -2250,9 +2373,15 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
 # CLI
 # ============================================================
 
+def _update_workers(n: int):
+    """更新全局线程数配置。"""
+    global MAX_WORKERS
+    MAX_WORKERS = max(1, n)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description=f"文件夹结构智能重组引擎 V{VERSION} (Windows + 离线分析)",
+        description=f"文件夹结构智能重组引擎 V{VERSION} (Windows + 离线分析 | 多线程加速)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 使用示例:
@@ -2272,6 +2401,10 @@ def main():
 
   # 全部权限修复 (仅 Windows)
   python folder_restructure.py D:\\Projects --fix-attr all --execute
+
+  # 指定线程数 (默认自动检测 CPU 核心数，最多 8 线程)
+  python folder_restructure.py D:\\Projects --execute --threads 12
+  python folder_restructure.py D:\\Projects --diagnose --detect-zone -j 4
 
   # 导出报告
   python folder_restructure.py D:\\Projects --export report.json
@@ -2310,7 +2443,15 @@ def main():
     # 安全
     parser.add_argument("--force-lock", action="store_true", help="强制清除锁文件")
 
+    # 多线程
+    parser.add_argument("--threads", "-j", type=int, metavar="N",
+                       help=f"并行线程数 (默认: {MAX_WORKERS}, 自动根据 CPU 核心数)")
+
     args = parser.parse_args()
+
+    # 应用线程数配置
+    if args.threads and args.threads > 0:
+        _update_workers(args.threads)
 
     # ===== 离线模式 =====
     if args.from_list:
