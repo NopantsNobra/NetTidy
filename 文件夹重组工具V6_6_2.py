@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V6.6.1 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V6.6.2 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
 默认为预览模式，必须显式确认才执行物理操作。
 
-V6.6 相比 V6.0 核心变更：
+V6.6.2 相比 V6.6.1 核心变更：
+- 🔴 Bug修复：_log_op 内部重复获取 self._lock 导致多线程死锁
+- 🟡 Bug修复：FileListParser._load_single 中 found_fullname 永远为 False，PowerShell 表头过滤失效
+- 🟡 优化：execute() 补充 Phase 1 注释，与产品手册保持一致
+- 🟢 清理：移除未使用的 auto 导入 (from enum import auto)
+
+V6.6.1 相比 V6.0 核心变更：
 - 🔴 安全修复：回滚脚本路径注入漏洞（使用json.dumps替代f-string）
 - 🔴 安全修复：回收站TOCTOU竞态条件（使用原子操作）
 - 🟡 Bug修复：离线去重变量作用域错误（deduplicate_by_name）
@@ -41,7 +47,7 @@ import subprocess
 import argparse
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
-from enum import Enum, auto
+from enum import Enum
 from typing import List, Dict, Optional, Tuple, Set
 from collections import defaultdict
 import threading
@@ -84,7 +90,7 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "6.6.1"
+VERSION = "6.6.2"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
@@ -1479,6 +1485,7 @@ class ExecutionEngine:
         if not dry_run and total > 100:
             print(f"  使用 {MAX_WORKERS} 线程并行处理...\n")
 
+        # Phase 1: 权限/属性修复（由外部 fix_permissions() 单独调用，此处跳过）
         # Phase 2: 移动操作（并行）
         print("  Phase 2: 移动操作...")
         self._parallel_process(moved, self._process_move, dry_run, "移动")
@@ -1687,13 +1694,12 @@ class ExecutionEngine:
         return f"{base}_{ts}_{unique_suffix}{ext}"
 
     def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS") -> None:
-        """记录操作日志"""
-        with self._lock:
-            self._seq += 1
-            self.op_logs.append(OperationLog(
-                seq=self._seq, action=action, source=source, target=target,
-                timestamp=datetime.now(timezone.utc).isoformat(), status=status
-            ))
+        """记录操作日志（调用方须已持有 self._lock，不可重入）"""
+        self._seq += 1
+        self.op_logs.append(OperationLog(
+            seq=self._seq, action=action, source=source, target=target,
+            timestamp=datetime.now(timezone.utc).isoformat(), status=status
+        ))
 
     def _maybe_throttle(self) -> None:
         """节流控制"""
@@ -2013,6 +2019,7 @@ class FileListParser:
             if in_header:
                 stripped = line.strip()
                 if stripped == "FullName" or "FullName" in stripped:
+                    found_fullname = True
                     skipped_count += 1
                     continue
                 if stripped.startswith("-" * 8):
