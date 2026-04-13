@@ -1364,7 +1364,7 @@ class RestructureEngine:
         self.errors = errors
 
     def unpack_redundant(self) -> int:
-        """
+        r"""
         智能解包：识别并合并 A\A\file.txt 冗余结构
         
         Returns:
@@ -1607,6 +1607,14 @@ class ExecutionEngine:
         last_error = None
         for attempt in range(3):
             try:
+                # V6.6 修复: 在生成回收站路径前再次确认文件存在，
+                # 缩小 TOCTOU 竞态窗口
+                if not Win32IO.exists(node.full_path):
+                    with self._lock:
+                        node.status = NodeStatus.VANISHED
+                        self.stats["vanished"] += 1
+                    return
+
                 trash_target = self._get_trash_path(node.full_path)
                 os.makedirs(os.path.dirname(trash_target), exist_ok=True)
 
@@ -1692,9 +1700,11 @@ class ExecutionEngine:
         ))
 
     def _maybe_throttle(self) -> None:
-        """节流控制"""
-        self._throttle += 1
-        if self._throttle % THROTTLE_BATCH == 0:
+        """节流控制（线程安全）"""
+        with self._lock:
+            self._throttle += 1
+            do_sleep = (self._throttle % THROTTLE_BATCH == 0)
+        if do_sleep:
             time.sleep(THROTTLE_SLEEP)
 
     def _write_log(self) -> None:
@@ -1876,11 +1886,12 @@ def _truncate_name(name: str, max_bytes: int) -> str:
 
 def _fmt_size(size_bytes: int) -> str:
     """格式化文件大小"""
+    size = size_bytes
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.1f} PB"
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
 
 
 def _node_attrs_str(n) -> str:
@@ -1894,6 +1905,9 @@ def _node_attrs_str(n) -> str:
         parts.append("S")
     if getattr(n, 'has_zone_identifier', False):
         parts.append("Z")
+    reparse = getattr(n, 'reparse_type', None)
+    if reparse and reparse != ReparseType.NONE:
+        parts.append(reparse.value[0])  # S=Symlink, J=Junction, H=HardLink, M=MountPoint
     return "".join(parts) if parts else "-"
 
 
@@ -3203,6 +3217,34 @@ def run_tests() -> bool:
             # 删除列表应该包含其他两个
             self.assertEqual(len(engine.duplicate_groups[0]["delete"]), 2)
 
+    class TestFmtSizeImmutability(unittest.TestCase):
+        """V6.6 修复: _fmt_size 不应修改输入参数"""
+        def test_input_unchanged(self):
+            original = 5 * 1024 * 1024
+            _ = _fmt_size(original)
+            self.assertEqual(original, 5 * 1024 * 1024)
+
+    class TestNodeAttrsStr(unittest.TestCase):
+        """V6.6 修复: _node_attrs_str 应包含 reparse 类型"""
+        def test_no_attrs(self):
+            node = VirtualFileNode(r"C:\test.txt", "test.txt", ".txt")
+            self.assertEqual(_node_attrs_str(node), "-")
+
+        def test_hidden_readonly(self):
+            node = FileNode(r"C:\test.txt", "test.txt", ".txt",
+                           is_hidden=True, is_readonly=True)
+            self.assertEqual(_node_attrs_str(node), "HR")
+
+        def test_reparse_symlink(self):
+            node = FileNode(r"C:\link", "link", "",
+                           reparse_type=ReparseType.SYMLINK)
+            self.assertIn("S", _node_attrs_str(node))
+
+        def test_reparse_junction(self):
+            node = FileNode(r"C:\junc", "junc", "",
+                           reparse_type=ReparseType.JUNCTION)
+            self.assertIn("J", _node_attrs_str(node))
+
     # 运行所有测试
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -3211,6 +3253,7 @@ def run_tests() -> bool:
         TestWinPath, TestVirtualFileNode, TestOfflineDedupByName,
         TestFileListParser, TestRollbackScript, TestTrashPathConflict,
         TestOfflineDedupScopeFix,
+        TestFmtSizeImmutability, TestNodeAttrsStr,
     ]:
         suite.addTests(loader.loadTestsFromTestCase(test_class))
 
