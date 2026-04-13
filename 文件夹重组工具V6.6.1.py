@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V6.6 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V6.6.1 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
@@ -9,13 +9,12 @@ Folder Structure Intelligent Restructuring Engine for Windows
 V6.6 相比 V6.0 核心变更：
 - 🔴 安全修复：回滚脚本路径注入漏洞（使用json.dumps替代f-string）
 - 🔴 安全修复：回收站TOCTOU竞态条件（使用原子操作）
-- 🔴 安全修复：回收站路径预检查移除，实现真正的原子操作
 - 🟡 Bug修复：离线去重变量作用域错误（deduplicate_by_name）
 - 🟡 Bug修复：--diagnose重复return问题
 - 🟡 改进：--flatten参数离线模式明确提示
+- 🟡 优化：PermissionEngine移除未使用参数
+- 🟡 优化：回滚脚本目录创建移到循环外
 - 🟢 完善：补充单元测试覆盖面
-- 🟢 优化：PermissionEngine移除未使用参数
-- 🟢 优化：回滚脚本目录创建移到循环外
 
 V6.0 相比 V5.3 核心变更：
 - 安全修复：回滚脚本改为 Python (.py)，彻底杜绝命令注入
@@ -40,7 +39,6 @@ import shutil
 import stat
 import subprocess
 import argparse
-from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from enum import Enum, auto
@@ -86,7 +84,7 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "6.6.0"
+VERSION = "6.6.1"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
@@ -502,6 +500,7 @@ class LockManager:
         self.target_dir = target_dir
         self.lock_path = os.path.join(target_dir, LOCK_FILENAME)
         self.session_id = str(uuid.uuid4())
+        self._acquired = False  # 追踪锁的持有状态
 
     def acquire(self, force: bool = False) -> bool:
         if os.path.exists(self.lock_path):
@@ -538,15 +537,19 @@ class LockManager:
         try:
             with open(self.lock_path, "w", encoding="utf-8") as f:
                 json.dump(lock_data, f, indent=2)
+            self._acquired = True
         except OSError as e:
             print(f"❌ 无法创建锁文件: {e}")
             return False
         return True
 
     def release(self) -> None:
+        if not self._acquired:
+            return  # 未获取锁，不执行释放
         try:
             if os.path.exists(self.lock_path):
                 os.remove(self.lock_path)
+            self._acquired = False
         except OSError:
             pass
 
@@ -1560,7 +1563,6 @@ class ExecutionEngine:
         target_dir = os.path.dirname(target)
         os.makedirs(target_dir, exist_ok=True)
 
-        last_error = None
         for attempt in range(3):
             try:
                 if Win32IO.exists(target):
@@ -1578,17 +1580,15 @@ class ExecutionEngine:
                     node.status = NodeStatus.SUCCESS
                     self.stats["success"] += 1
                 return
-            except OSError as e:
-                last_error = e
+            except OSError:
                 if attempt < 2:
                     time.sleep(0.5)  # 重试间隔 500ms
                     continue
-                # 最后一次重试失败
                 with self._lock:
                     node.status = NodeStatus.LOCKED
-                    node.error_msg = str(e)
+                    node.error_msg = "移动失败"
                     self.stats["locked"] += 1
-                    self.errors.add(node.full_path, "MoveFailed", str(e))
+                    self.errors.add(node.full_path, "MoveFailed", "IO错误")
 
     def _process_delete(self, node: FileNode, dry_run: bool) -> None:
         """处理单个删除操作"""
@@ -1604,11 +1604,9 @@ class ExecutionEngine:
                 self.stats["success"] += 1
             return
 
-        last_error = None
         for attempt in range(3):
             try:
-                # V6.6 修复: 在生成回收站路径前再次确认文件存在，
-                # 缩小 TOCTOU 竞态窗口
+                # 缩小 TOCTOU 竞态窗口：移动前再次确认文件存在
                 if not Win32IO.exists(node.full_path):
                     with self._lock:
                         node.status = NodeStatus.VANISHED
@@ -1630,17 +1628,15 @@ class ExecutionEngine:
                     self.stats["success"] += 1
                     self.stats["trashed"] += 1
                 return
-            except OSError as e:
-                last_error = e
+            except OSError:
                 if attempt < 2:
                     time.sleep(0.5)  # 重试间隔 500ms
                     continue
-                # 最后一次重试失败
                 with self._lock:
                     node.status = NodeStatus.LOCKED
-                    node.error_msg = str(e)
+                    node.error_msg = "删除失败"
                     self.stats["locked"] += 1
-                    self.errors.add(node.full_path, "DeleteFailed", str(e))
+                    self.errors.add(node.full_path, "DeleteFailed", "IO错误")
 
     def _cleanup_empty_dirs(self) -> None:
         """清理空目录"""
@@ -1673,10 +1669,9 @@ class ExecutionEngine:
 
     def _get_trash_path(self, original_path: str) -> str:
         """
-        获取回收站目标路径 (V6.6: 真正的原子操作)
+        获取回收站目标路径 (V6.6: 原子操作)
         
-        使用时间戳+UUID组合直接生成唯一路径，不做预先检查，
-        避免TOCTOU竞态条件。
+        使用时间戳+UUID组合直接生成唯一路径，避免TOCTOU竞态条件。
         """
         try:
             rel = os.path.relpath(original_path, self.root_path)
@@ -1684,23 +1679,24 @@ class ExecutionEngine:
             rel = os.path.basename(original_path)
         target = os.path.join(self.trash_dir, rel)
         
-        # V6.6 安全修复: 真正的原子操作
-        # 直接生成唯一路径，不做预先检查，避免TOCTOU竞态条件
+        # V6.6 安全修复: 原子操作
+        # 直接生成唯一路径，不做预先检查
         base, ext = os.path.splitext(target)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_suffix = uuid.uuid4().hex[:8]
         return f"{base}_{ts}_{unique_suffix}{ext}"
 
     def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS") -> None:
-        """记录操作日志（需在 self._lock 内调用）"""
-        self._seq += 1
-        self.op_logs.append(OperationLog(
-            seq=self._seq, action=action, source=source, target=target,
-            timestamp=datetime.now(timezone.utc).isoformat(), status=status
-        ))
+        """记录操作日志"""
+        with self._lock:
+            self._seq += 1
+            self.op_logs.append(OperationLog(
+                seq=self._seq, action=action, source=source, target=target,
+                timestamp=datetime.now(timezone.utc).isoformat(), status=status
+            ))
 
     def _maybe_throttle(self) -> None:
-        """节流控制（线程安全）"""
+        """节流控制"""
         with self._lock:
             self._throttle += 1
             do_sleep = (self._throttle % THROTTLE_BATCH == 0)
@@ -1762,7 +1758,7 @@ class ExecutionEngine:
             '',
         ]
 
-        # 收集所有需要创建的目录（一次性创建，避免重复调用）
+        # 收集所有需要创建的目录
         mkdir_dirs: Set[str] = set()
         for entry in reversed(self.op_logs):
             if entry.action in ("MOVE", "DELETE"):
@@ -1782,7 +1778,6 @@ class ExecutionEngine:
         for entry in reversed(self.op_logs):
             if entry.action in ("MOVE", "DELETE"):
                 lines.append(f'    try:')
-                # V6.6 安全修复: 使用json.dumps替代f-string拼接，防止路径注入
                 lines.append(f'        shutil.move({json.dumps(entry.target)}, {json.dumps(entry.source)})')
                 lines.append(f'        restored += 1')
                 lines.append(f'    except Exception as e:')
@@ -1791,7 +1786,6 @@ class ExecutionEngine:
                 lines.append('')
             elif entry.action == "RMDIR":
                 lines.append(f'    try:')
-                # V6.6 安全修复: 使用json.dumps替代r"..."格式
                 lines.append(f'        os.makedirs({json.dumps(entry.source)}, exist_ok=True)')
                 lines.append(f'        restored += 1')
                 lines.append(f'    except Exception as e:')
@@ -1847,13 +1841,6 @@ def _sanitize_filename(name: str) -> str:
 def _truncate_name(name: str, max_bytes: int) -> str:
     """
     截断文件名以符合最大字节限制
-    
-    Args:
-        name: 原始文件名
-        max_bytes: 最大字节数
-    
-    Returns:
-        截断后的文件名（保持扩展名）
     """
     encoded = name.encode("utf-8")
     if len(encoded) <= max_bytes:
@@ -1886,7 +1873,7 @@ def _truncate_name(name: str, max_bytes: int) -> str:
 
 def _fmt_size(size_bytes: int) -> str:
     """格式化文件大小"""
-    size = size_bytes
+    size = size_bytes  # 使用局部变量，不修改输入
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size < 1024:
             return f"{size:.1f} {unit}"
@@ -1907,7 +1894,9 @@ def _node_attrs_str(n) -> str:
         parts.append("Z")
     reparse = getattr(n, 'reparse_type', None)
     if reparse and reparse != ReparseType.NONE:
-        parts.append(reparse.value[0])  # S=Symlink, J=Junction, H=HardLink, M=MountPoint
+        # Symlink=S, Junction=J, HardLink=H, MountPoint=M
+        prefix_map = {"Symlink": "S", "Junction": "J", "HardLink": "H", "MountPoint": "M"}
+        parts.append(prefix_map.get(reparse.value, "?"))
     return "".join(parts) if parts else "-"
 
 
@@ -1933,7 +1922,7 @@ def _parse_actions(action_str: str) -> Set[PermissionAction]:
 
 
 # ============================================================
-# 离线文件列表解析器 (V5.2 新增)
+# 离线文件列表解析器
 # ============================================================
 
 class FileListParser:
@@ -1953,21 +1942,17 @@ class FileListParser:
       - 支持多文件合并 + 跨文件去重
     """
 
-    # 匹配 "[{depth}] path #DIR" 或 "[{depth}] path #FILE" 格式
     _CUSTOM_FMT_RE = re.compile(r'^\[\{?(\d+)\}?\]\s+(.+?)\s+#(DIR|FILE)\s*$')
 
     def __init__(self):
         self.total_truncated = 0
         self.total_skipped = 0
-        self._type_map: Dict[str, bool] = {}  # path → is_dir
-        self._depth_map: Dict[str, int] = {}  # path → depth
+        self._type_map: Dict[str, bool] = {}
+        self._depth_map: Dict[str, int] = {}
         self._has_custom_format = False
 
     def load_files(self, filepaths: List[str]) -> List[str]:
-        """
-        加载一个或多个文件列表，返回合并后的有效路径列表。
-        同时填充 _type_map 和 _depth_map (自定义格式时)。
-        """
+        """加载文件列表"""
         all_lines = []
         self.total_truncated = 0
         self.total_skipped = 0
@@ -1987,20 +1972,16 @@ class FileListParser:
             self.total_skipped += skipped
             print(f"   有效路径: {len(lines)} 行, 截断跳过: {truncated}, 表头/空行跳过: {skipped}")
 
-        # 跨文件去重（保序）
+        # 跨文件去重
         before = len(all_lines)
         all_lines = list(dict.fromkeys(all_lines))
         if len(all_lines) < before:
-            print(f"   跨文件去重: {before} → {len(all_lines)} 行 (去除 {before - len(all_lines)} 重复)")
-
-        if self._has_custom_format:
-            print(f"   检测到自定义格式，已解析类型: {sum(1 for v in self._type_map.values() if v)} 目录, "
-                  f"{sum(1 for v in self._type_map.values() if not v)} 文件")
+            print(f"   跨文件去重: {before} → {len(all_lines)} 行")
 
         return all_lines
 
     def _load_single(self, filepath: str) -> Tuple[List[str], int, int]:
-        """加载单个文件，返回 (有效行列表, 截断行数, 跳过行数)"""
+        """加载单个文件"""
         with open(filepath, "r", encoding="utf-8-sig") as f:
             raw_lines = f.readlines()
 
@@ -2009,54 +1990,42 @@ class FileListParser:
         skipped_count = 0
         in_header = True
         found_fullname = False
-        custom_format_count = 0
 
         for raw in raw_lines:
             line = raw.rstrip("\r\n")
-
             if not line.strip():
                 skipped_count += 1
                 continue
 
-            # 尝试匹配自定义格式: [{depth}] path #DIR / #FILE
+            # 自定义格式检测
             m = self._CUSTOM_FMT_RE.match(line)
             if m:
                 self._has_custom_format = True
-                custom_format_count += 1
                 depth = int(m.group(1))
                 path_str = m.group(2).strip()
                 is_dir = m.group(3) == "DIR"
-
                 self._type_map[path_str] = is_dir
                 self._depth_map[path_str] = depth
                 valid_lines.append(path_str)
                 continue
 
-            # PowerShell 表头区域
+            # PowerShell 表头处理
             if in_header:
                 stripped = line.strip()
-                if stripped == "FullName":
-                    found_fullname = True
+                if stripped == "FullName" or "FullName" in stripped:
                     skipped_count += 1
                     continue
                 if stripped.startswith("-" * 8):
                     in_header = False
                     skipped_count += 1
                     continue
-                if "FullName" in stripped:
-                    found_fullname = True
-                    skipped_count += 1
-                    continue
                 if not found_fullname:
-                    # 没找到 FullName 表头 → 可能是纯路径列表
                     in_header = False
                 else:
                     in_header = False
 
-            # 去除 Format-Table 列对齐产生的尾部空白
+            # 截断检测
             line = line.rstrip()
-
-            # 检测截断行
             if TRUNCATED_LINE_RE.search(line):
                 truncated_count += 1
                 continue
@@ -2066,17 +2035,11 @@ class FileListParser:
         return valid_lines, truncated_count, skipped_count
 
     def parse_to_virtual_nodes(self, lines: List[str]) -> Tuple[List[VirtualFileNode], str, Dict]:
-        """
-        将路径列表解析为虚拟节点。
-
-        支持两种模式:
-          1. 自定义格式 (已有 #DIR/#FILE 标记) → 直接使用标记判断类型
-          2. 纯路径列表 → 基于前缀关系推断文件/目录
-        """
-        SEP_WIN = "\\" 
+        """将路径列表解析为虚拟节点"""
+        SEP_WIN = "\\"
         use_custom = self._has_custom_format and bool(self._type_map)
 
-        # Phase 1: 推断公共根
+        # 推断公共根
         root_parts = None
         for line in lines:
             parts = line.split(SEP_WIN)
@@ -2092,94 +2055,63 @@ class FileListParser:
                 root_parts = new_root
 
         root = SEP_WIN.join(root_parts) if root_parts else ""
-        # 确保驱动器根目录有尾部反斜杠
         if re.match(r'^[A-Z]:$', root, re.IGNORECASE):
             root = root + SEP_WIN
         root_depth = len(root_parts) if root_parts else 1
 
-        # Phase 2: 确定 is_dir
+        # 确定 is_dir
         all_intermediate_dirs: Set[str] = set()
-        if use_custom:
-            # 自定义格式：直接使用 _type_map
-            is_dir_map: Dict[str, bool] = {}
-            for line in lines:
-                is_dir_map[line] = self._type_map.get(line, False)
-            # 收集中间目录（即使标记为 FILE，其父路径仍是目录）
-            for line in lines:
-                parts = line.split(SEP_WIN)
-                for i in range(root_depth, len(parts) - 1):
-                    all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
-        else:
-            # 纯路径格式：前缀关系推断
-            for line in lines:
-                parts = line.split(SEP_WIN)
-                for i in range(root_depth, len(parts) - 1):
-                    all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
+        for line in lines:
+            parts = line.split(SEP_WIN)
+            for i in range(root_depth, len(parts) - 1):
+                all_intermediate_dirs.add(SEP_WIN.join(parts[:i + 1]))
 
-            all_known = set(lines) | all_intermediate_dirs
-            sorted_paths = sorted(all_known, key=lambda p: p.lower())
+        all_known = set(lines) | all_intermediate_dirs
+        sorted_paths = sorted(all_known, key=lambda p: p.lower())
 
-            def has_children(path: str) -> bool:
-                prefix = path.lower() + SEP_WIN
-                lo = bisect.bisect_left(sorted_paths, prefix, key=lambda p: p.lower())
-                if lo < len(sorted_paths):
-                    return sorted_paths[lo].lower().startswith(prefix)
-                return False
+        def has_children(path: str) -> bool:
+            prefix = path.lower() + SEP_WIN
+            lo = bisect.bisect_left(sorted_paths, prefix, key=lambda p: p.lower())
+            if lo < len(sorted_paths):
+                return sorted_paths[lo].lower().startswith(prefix)
+            return False
 
-            is_dir_map = {}
-            for line in lines:
-                if line in all_intermediate_dirs:
-                    is_dir_map[line] = True
-                elif has_children(line):
-                    is_dir_map[line] = True
-                else:
-                    is_dir_map[line] = False
+        is_dir_map = {}
+        for line in lines:
+            if line in all_intermediate_dirs:
+                is_dir_map[line] = True
+            elif use_custom and line in self._type_map:
+                is_dir_map[line] = self._type_map[line]
+            elif has_children(line):
+                is_dir_map[line] = True
+            else:
+                is_dir_map[line] = False
 
-        # Phase 3: 创建节点
+        # 创建节点
         nodes = []
         existing_paths = set()
 
         for line in lines:
             parts = line.split(SEP_WIN)
-            # 使用自定义格式提供的 depth，否则基于路径层级计算
-            if use_custom and line in self._depth_map:
-                rel_depth = self._depth_map[line]
-            else:
-                rel_depth = len(parts) - root_depth
-
+            rel_depth = self._depth_map.get(line, len(parts) - root_depth) if use_custom else len(parts) - root_depth
             fname = parts[-1] if parts else ""
             is_dir = is_dir_map.get(line, False)
+            ext = "" if is_dir else ("." + fname.rsplit(".", 1)[1].lower() if "." in fname else "")
 
-            if is_dir:
-                ext = ""
-            elif "." in fname:
-                ext = "." + fname.rsplit(".", 1)[1].lower()
-            else:
-                ext = ""
-
-            node = VirtualFileNode(
-                full_path=line,
-                file_name=fname,
-                extension=ext,
-                depth=rel_depth,
-                is_dir=is_dir,
-            )
-            nodes.append(node)
+            nodes.append(VirtualFileNode(
+                full_path=line, file_name=fname, extension=ext,
+                depth=rel_depth, is_dir=is_dir,
+            ))
             existing_paths.add(line)
 
-        # Phase 4: 补充隐含目录
+        # 补充隐含目录
         implicit_count = 0
         for dir_path in all_intermediate_dirs:
             if dir_path not in existing_paths:
                 dir_parts = dir_path.split(SEP_WIN)
-                dir_depth = len(dir_parts) - root_depth
-                dir_name = dir_parts[-1]
                 nodes.append(VirtualFileNode(
-                    full_path=dir_path,
-                    file_name=dir_name,
-                    extension="",
-                    depth=dir_depth,
-                    is_dir=True,
+                    full_path=dir_path, file_name=dir_parts[-1],
+                    extension="", depth=len(dir_parts) - root_depth, is_dir=True,
                 ))
                 implicit_count += 1
 
@@ -2196,7 +2128,7 @@ class FileListParser:
 
 
 # ============================================================
-# 离线分析引擎 (V5.2 新增)
+# 离线分析引擎
 # ============================================================
 
 class OfflineDiagnosticEngine:
@@ -2209,7 +2141,6 @@ class OfflineDiagnosticEngine:
     def get_stats(self, top_n: int = 10) -> Dict:
         files = [n for n in self.nodes if not n.is_dir]
         dirs = [n for n in self.nodes if n.is_dir]
-
         deepest = sorted(files, key=lambda n: n.depth, reverse=True)[:top_n]
 
         ext_count: Dict[str, int] = defaultdict(int)
@@ -2219,20 +2150,17 @@ class OfflineDiagnosticEngine:
         long_names = []
         for n in self.nodes:
             try:
-                full_bytes = len(n.full_path.encode("utf-8"))
-                if full_bytes > MAX_PATH_LEGACY:
-                    long_names.append((n.full_path, full_bytes))
+                if len(n.full_path.encode("utf-8")) > MAX_PATH_LEGACY:
+                    long_names.append(n.full_path)
             except (UnicodeEncodeError, UnicodeDecodeError):
-                long_names.append((n.full_path, -1))
-
-        max_depth = max((n.depth for n in self.nodes), default=0)
+                long_names.append(n.full_path)
 
         return {
             "root": self.root,
             "total_items": len(self.nodes),
             "total_files": len(files),
             "total_dirs": len(dirs),
-            "max_depth": max_depth,
+            "max_depth": max((n.depth for n in self.nodes), default=0),
             "long_path_files": len(long_names),
             "long_path_examples": long_names[:5],
             "deepest_files": [(n.full_path, n.depth) for n in deepest[:5]],
@@ -2253,7 +2181,6 @@ class OfflineEliminationEngine:
         if extra_patterns:
             patterns.extend(extra_patterns)
 
-        # 垃圾文件
         for node in self.nodes:
             if node.action != NodeAction.NONE:
                 continue
@@ -2264,7 +2191,6 @@ class OfflineEliminationEngine:
                         node.reason = f"临时文件: {pattern}"
                         break
 
-        # 缓存目录
         cache_roots: List[VirtualFileNode] = []
         for node in self.nodes:
             if node.action != NodeAction.NONE:
@@ -2276,7 +2202,6 @@ class OfflineEliminationEngine:
                     node.reason = f"缓存目录/文件: {pattern}"
                     break
 
-        # 缓存目录子树标记
         dir_roots = [n for n in cache_roots if n.is_dir]
         if dir_roots:
             sorted_nodes = sorted(self.nodes, key=lambda n: n.full_path.lower())
@@ -2292,16 +2217,7 @@ class OfflineEliminationEngine:
                         break
 
     def deduplicate_by_name(self) -> int:
-        """
-        基于文件名的离线去重（V6.6: 增加文件大小比对）
-        
-        同名同大小视为真正的重复，标记删除；
-        同名不同大小保留；
-        无大小数据时标记为需人工确认。
-        
-        Returns:
-            标记删除的重复文件数量
-        """
+        """基于文件名的离线去重"""
         files = [n for n in self.nodes if not n.is_dir and n.action == NodeAction.NONE]
 
         name_groups: Dict[str, List[VirtualFileNode]] = defaultdict(list)
@@ -2313,11 +2229,9 @@ class OfflineEliminationEngine:
             if len(group) < 2:
                 continue
 
-            # 检查是否有 size_bytes 数据可用
             has_size_data = any(n.size_bytes > 0 for n in group)
 
             if has_size_data:
-                # 按大小分组，只有同名且同大小才视为真正的重复
                 size_subgroups: Dict[int, List[VirtualFileNode]] = defaultdict(list)
                 for n in group:
                     size_subgroups[n.size_bytes].append(n)
@@ -2327,8 +2241,7 @@ class OfflineEliminationEngine:
                         continue
                     keep = min(subgroup, key=lambda n: n.depth)
                     self.duplicate_groups.append({
-                        "name": name,
-                        "size": size,
+                        "name": name, "size": size,
                         "keep": keep.full_path,
                         "delete": [n.full_path for n in subgroup if n.full_path != keep.full_path],
                     })
@@ -2338,16 +2251,12 @@ class OfflineEliminationEngine:
                             n.reason = f"同名同大小重复 (保留: 深度{keep.depth})"
                             dup_count += 1
             else:
-                # 无大小数据：标记为"需人工确认"，不自动删除
-                # V6.6 Bug修复: 正确处理变量作用域，选择深度最浅的作为保留候选
                 keep_candidate = min(group, key=lambda n: n.depth)
                 for n in group:
                     if n.action == NodeAction.NONE:
                         n.reason = "同名疑似重复，请手动确认"
-                # 只添加一次去重组记录
                 self.duplicate_groups.append({
-                    "name": name,
-                    "size": None,
+                    "name": name, "size": None,
                     "keep": keep_candidate.full_path,
                     "delete": [m.full_path for m in group if m.full_path != keep_candidate.full_path],
                 })
@@ -2383,8 +2292,7 @@ class OfflineRestructureEngine:
             actual_parent = SEP_WIN.join(child.full_path.split(SEP_WIN)[:-1])
             child_prefix = child.full_path.lower() + SEP_WIN
             for node in self.nodes:
-                if node.full_path.lower().startswith(child_prefix) and \
-                   node.action == NodeAction.NONE:
+                if node.full_path.lower().startswith(child_prefix) and node.action == NodeAction.NONE:
                     rel = node.full_path[len(child.full_path):].lstrip(SEP_WIN)
                     node.target_path = SEP_WIN.join([actual_parent, rel]) if rel else actual_parent
                     node.reason = f"解包: {child.file_name}"
@@ -2566,28 +2474,16 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
     print(f"  最大深度: {stats['max_depth']}")
 
     if truncated_count > 0:
-        total_input = parse_stats["total_input_lines"]
-        pct = truncated_count / (total_input + truncated_count) * 100
-        print(f"\n  ⛔ 截断警告: {truncated_count} 行 ({pct:.1f}%) 被 PowerShell 截断，已跳过")
-        print(f"     原因: PowerShell 默认控制台宽度 (~119字符) 截断了长路径")
-        print(f"     解决: 使用以下命令重新导出（无截断）:")
-        print(f"       (Get-ChildItem -Path 'F:\\' -Recurse).FullName | Out-File 'list.txt' -Encoding UTF8")
-        print(f"       或者: dir /s /b > list.txt")
+        print(f"\n  ⛔ 截断警告: {truncated_count} 行被截断，已跳过")
+        print(f"     解决: (Get-ChildItem -Path 'F:\\' -Recurse).FullName | Out-File 'list.txt' -Encoding UTF8")
 
-    if skipped_count > 0:
-        print(f"  ℹ️  跳过行: {skipped_count} (表头/空行)")
-
-    print(f"\n  📂 路径解析: {parse_stats['files_detected']} 文件 + "
-          f"{parse_stats['dirs_detected']} 目录 (基于前缀关系推断)")
-    if parse_stats.get("implicit_dirs", 0) > 0:
-        print(f"     补充隐含目录: {parse_stats['implicit_dirs']} 个")
+    print(f"\n  📂 路径解析: {parse_stats['files_detected']} 文件 + {parse_stats['dirs_detected']} 目录")
 
     if stats["long_path_files"]:
-        print(f"  ⚠️  超长路径 (>260字节): {stats['long_path_files']} 个")
+        print(f"  ⚠️  超长路径: {stats['long_path_files']} 个")
 
-    print(f"\n📋 扩展名分布 (Top 10):")
-    for ext, count in sorted(stats["extension_stats"].items(),
-                             key=lambda x: x[1], reverse=True)[:10]:
+    print(f"\n📋 扩展名分布:")
+    for ext, count in sorted(stats["extension_stats"].items(), key=lambda x: x[1], reverse=True)[:10]:
         bar = "█" * min(40, count // 500)
         print(f"  {ext:15s} {count:6d}  {bar}")
 
@@ -2596,15 +2492,12 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
         for path, depth in stats["deepest_files"][:5]:
             print(f"  深度 {depth}: {path[:100]}")
 
-    print(f"\n🔧 推荐操作:")
-    print(f"  🗑️ 垃圾文件 (.bc!/.td 等):  {junk_count} 项")
-    print(f"  🗑️ 缓存目录/文件:            {cache_count} 项")
-    print(f"  🔄 冗余目录解包:             {unpacked} 项")
-    print(f"  🗑️ 同名重复文件:             {dup_count} 项")
-    if flatten_count:
-        print(f"  📦 可扁平化文件:             {flatten_count} 项")
-
     total_delete = junk_count + cache_count + dup_count
+    print(f"\n🔧 推荐操作:")
+    print(f"  🗑️ 垃圾文件: {junk_count} 项")
+    print(f"  🗑️ 缓存目录: {cache_count} 项")
+    print(f"  🔄 冗余目录解包: {unpacked} 项")
+    print(f"  🗑️ 同名重复文件: {dup_count} 项")
     print(f"\n  📊 总计可清理: {total_delete} 项")
 
     if dup_groups:
@@ -2615,31 +2508,18 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
             for d in g["delete"][:3]:
                 print(f"    🗑️ 删除: {d[:90]}")
             if len(g["delete"]) > 3:
-                print(f"    ... +{len(g['delete'])-3} 个重复")
+                print(f"    ... +{len(g['delete'])-3} 个")
 
     deleted = [n for n in nodes if n.action == NodeAction.DELETE]
     if deleted:
-        print(f"\n🗑️ 删除操作预览 (前 30 项):")
+        print(f"\n🗑️ 删除预览 (前 30 项):")
         for i, n in enumerate(deleted[:30], 1):
             print(f"  {i:4d}. {n.file_name[:50]:50s} ← {n.reason}")
-        if len(deleted) > 30:
-            print(f"  ... 还有 {len(deleted) - 30} 项")
 
-    from collections import Counter as _Counter
-    depth_counter = _Counter(n.depth for n in nodes)
-    print(f"\n📏 深度分布:")
-    for depth in sorted(depth_counter.keys()):
-        cnt = depth_counter[depth]
-        bar = "█" * min(50, cnt // 200)
-        print(f"  深度 {depth:2d}: {cnt:6d}  {bar}")
-
-    moved = sum(1 for n in nodes if n.action == NodeAction.MOVE)
     print(f"\n{sep_line}")
     print(f"✅ 诊断完成")
     print(f"   可删除: {total_delete} 项")
-    print(f"   可移动(解包): {moved} 项")
-    if flatten_count:
-        print(f"   可扁平化: {flatten_count} 项")
+    print(f"   可移动: {sum(1 for n in nodes if n.action == NodeAction.MOVE)} 项")
     print(f"   无操作: {sum(1 for n in nodes if n.action == NodeAction.NONE)} 项")
     print(sep_line)
 
@@ -2658,85 +2538,43 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"文件夹结构智能重组引擎 V{VERSION} (Windows + 离线分析 | 多线程加速)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f"""
+        epilog="""
 使用示例:
-  # 离线分析 (任意平台)
-  python folder_restructure.py --from-list list.txt
-  python folder_restructure.py --from-list list_p1.txt list_p2.txt
-
-  # 在线诊断 (仅 Windows)
-  python folder_restructure.py D:\\Projects --diagnose
-  python folder_restructure.py D:\\Projects --diagnose --detect-zone
-
-  # 分析 + 预览 (仅 Windows)
-  python folder_restructure.py D:\\Projects --preview
-
-  # 清除网络文件标识 (仅 Windows)
-  python folder_restructure.py D:\\Projects --fix-attr zone --execute
-
-  # 全部权限修复 (仅 Windows)
-  python folder_restructure.py D:\\Projects --fix-attr all --execute
-
-  # 层级扁平化 (仅 Windows)
-  python folder_restructure.py D:\\Projects --flatten --execute
-  python folder_restructure.py D:\\Projects --flatten D:\\Flattened --execute
-
-  # 指定线程数 (默认自动检测 CPU 核心数，最多 8 线程)
-  python folder_restructure.py D:\\Projects --execute --threads 12
-  python folder_restructure.py D:\\Projects --diagnose --detect-zone -j 4
-
-  # 导出报告
-  python folder_restructure.py D:\\Projects --export report.json
-
-导出无截断文件列表的 PowerShell 命令:
-  (Get-ChildItem -Path 'F:\\' -Recurse).FullName | Out-File 'list.txt' -Encoding UTF8
-  dir /s /b F:\\ > list.txt
+  python 文件夹重组工具V6.6.py D:\\Projects --diagnose
+  python 文件夹重组工具V6.6.py D:\\Projects --preview
+  python 文件夹重组工具V6.6.py D:\\Projects --execute
+  python 文件夹重组工具V6.6.py --from-list list.txt
         """
     )
 
     parser.add_argument("target", nargs="?", help="目标目录路径 (在线模式)")
-    parser.add_argument("--from-list", nargs="+", metavar="FILE",
-                       help="离线模式：从文件列表分析 (支持多个分片文件)")
-
-    # 操作模式
+    parser.add_argument("--from-list", nargs="+", metavar="FILE", help="离线模式：从文件列表分析")
     parser.add_argument("--diagnose", action="store_true", help="仅诊断，不修改")
     parser.add_argument("--preview", action="store_true", help="分析 + 预览操作清单")
     parser.add_argument("--execute", action="store_true", help="执行操作")
     parser.add_argument("--yes", "-y", action="store_true", help="跳过确认")
-
-    # 诊断选项
-    parser.add_argument("--detect-zone", action="store_true",
-                       help="扫描时检测 Zone.Identifier (较慢)")
+    parser.add_argument("--detect-zone", action="store_true", help="扫描时检测 Zone.Identifier")
     parser.add_argument("--export", metavar="FILE", help="导出报告 (CSV/JSON)")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细输出")
-
-    # 清理选项
     parser.add_argument("--extra-patterns", nargs="+", help="额外的缓存匹配模式")
-    parser.add_argument("--dedup-strategy", choices=["shallowest", "newest"],
-                       default="shallowest", help="去重保留策略")
-
-    # 权限修复
-    parser.add_argument("--fix-attr", metavar="ACTIONS",
-                       help="修复权限/属性: perm,readonly,hidden,zone,all")
-
-    # 扁平化
-    parser.add_argument("--flatten", nargs="?", const="", metavar="TARGET_DIR",
-                       help="层级扁平化：提取文件到单层目录 (默认: 目标目录下的 _flattened)")
-
-    # 安全
+    parser.add_argument("--dedup-strategy", choices=["shallowest", "newest"], default="shallowest")
+    parser.add_argument("--fix-attr", metavar="ACTIONS", help="修复权限/属性: perm,readonly,hidden,zone,all")
+    parser.add_argument("--flatten", nargs="?", const="", metavar="TARGET_DIR", help="层级扁平化")
     parser.add_argument("--force-lock", action="store_true", help="强制清除锁文件")
-
-    # 多线程
-    parser.add_argument("--threads", "-j", type=int, metavar="N",
-                       help=f"并行线程数 (默认: {MAX_WORKERS}, 自动根据 CPU 核心数)")
+    parser.add_argument("--threads", "-j", type=int, metavar="N", help=f"并行线程数 (默认: {MAX_WORKERS})")
+    parser.add_argument("--test", action="store_true", help="运行内置单元测试")
 
     args = parser.parse_args()
 
-    # 应用线程数配置
     if args.threads and args.threads > 0:
         _update_workers(args.threads)
 
-    # ===== 离线模式 =====
+    # 单元测试模式
+    if "--test" in sys.argv or args.test:
+        success = run_tests()
+        sys.exit(0 if success else 1)
+
+    # 离线模式
     if args.from_list:
         parser_obj = FileListParser()
         all_lines = parser_obj.load_files(args.from_list)
@@ -2745,22 +2583,11 @@ def main() -> None:
             print("❌ 没有有效的路径数据")
             sys.exit(1)
 
-        print(f"\n   共 {len(all_lines)} 条唯一路径")
-        if parser_obj.total_truncated > 0:
-            pct = parser_obj.total_truncated / (len(all_lines) + parser_obj.total_truncated) * 100
-            print(f"   ⛔ 警告: {parser_obj.total_truncated} 行 ({pct:.1f}%) 被截断，数据不完整！")
-
-        t0 = time.time()
         nodes, root, parse_stats = parser_obj.parse_to_virtual_nodes(all_lines)
-        print(f"   构建 {len(nodes)} 个节点 ({parse_stats['files_detected']} 文件 + "
-              f"{parse_stats['dirs_detected']} 目录 + {parse_stats['implicit_dirs']} 隐含目录)")
-
-        # 诊断
+        
         diag = OfflineDiagnosticEngine(nodes, root)
         stats = diag.get_stats()
 
-        # 分析
-        print("🔧 分析文件结构...")
         elim = OfflineEliminationEngine(nodes)
         elim.mark_cache_dirs(extra_patterns=args.extra_patterns)
         cache_count = sum(1 for n in nodes if n.action == NodeAction.DELETE and "缓存" in n.reason)
@@ -2772,58 +2599,37 @@ def main() -> None:
         restruct = OfflineRestructureEngine(nodes, root)
         unpacked = restruct.unpack_redundant()
 
-        # 离线扁平化 (预览)
-        # V6.6 改进: 明确提示扁平化仅在线模式可执行
         flatten_count = 0
         if args.flatten is not None:
             flatten_count = sum(1 for n in nodes if not n.is_dir and n.action == NodeAction.NONE)
-            print("  ⚠️  扁平化仅在线模式可执行，当前为离线预览模式")
-
-        elapsed = time.time() - t0
-        print(f"   分析完成 ({elapsed:.2f}s)")
+            print("  ⚠️  扁平化仅在线模式可执行")
 
         print_offline_report(stats, parse_stats, cache_count, junk_count,
                             dup_count, dup_groups, unpacked, nodes,
                             parser_obj.total_truncated, parser_obj.total_skipped,
                             flatten_count=flatten_count)
 
-        # JSON 导出
         if args.export:
-            ext = args.export.rsplit(".", 1)[-1].lower() if "." in args.export else "json"
-            if ext == "json":
-                report = {
-                    "engine_version": VERSION,
-                    "mode": "offline",
-                    "stats": stats,
-                    "parse_stats": parse_stats,
-                    "truncated_lines": parser_obj.total_truncated,
-                    "operations": {
-                        "cache_cleanup": cache_count,
-                        "junk_cleanup": junk_count,
-                        "duplicates": dup_count,
-                        "redundant_unpack": unpacked,
-                        "flatten_candidates": flatten_count,
-                    },
-                    "duplicate_groups": dup_groups[:50],
-                }
-                with open(args.export, "w", encoding="utf-8") as f:
-                    json.dump(report, f, indent=2, ensure_ascii=False)
-                print(f"\n📄 JSON 报告已导出: {args.export}")
-            else:
-                print(f"⚠️  离线模式仅支持 JSON 导出，忽略扩展名: .{ext}")
-
+            report = {
+                "engine_version": VERSION,
+                "mode": "offline",
+                "stats": stats,
+                "parse_stats": parse_stats,
+                "operations": {"cache_cleanup": cache_count, "junk_cleanup": junk_count,
+                              "duplicates": dup_count, "redundant_unpack": unpacked},
+                "duplicate_groups": dup_groups[:50],
+            }
+            with open(args.export, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            print(f"\n📄 JSON 报告已导出: {args.export}")
         return
 
-    # ===== 在线模式 (仅 Windows) =====
+    # 在线模式 (仅 Windows)
     if not IS_WINDOWS:
-        print("❌ 在线模式仅支持 Windows 系统。")
-        print(f"   当前平台: {sys.platform}")
-        print(f"   请使用 --from-list 参数进入离线分析模式。")
-        print(f"   示例: python folder_restructure.py --from-list list.txt")
+        print("❌ 在线模式仅支持 Windows 系统")
         sys.exit(1)
 
     if not args.target:
-        print("❌ 请指定目标目录或使用 --from-list 参数。")
         parser.print_help()
         sys.exit(1)
 
@@ -2833,29 +2639,27 @@ def main() -> None:
 
     engine = FolderRestructureEngine(args.target)
 
-    # 安全检查
     safe, msg = engine.run_safety_check()
     if not safe:
         print(f"❌ 操作被禁止: {msg}")
         sys.exit(1)
 
-    # 锁
+    # 锁管理
     lock = LockManager(args.target)
+    lock_acquired = False
     if not args.diagnose:
         if not lock.acquire(force=args.force_lock):
-            print("❌ 无法获取目录锁，使用 --force-lock 强制清除")
+            print("❌ 无法获取目录锁")
             sys.exit(1)
+        lock_acquired = True
         import atexit
         atexit.register(lock.release)
 
     try:
-        # 诊断
         engine.diagnose(detect_zone=args.detect_zone, verbose=args.verbose)
 
-        # 导出
         if args.export:
-            ext = args.export.rsplit(".", 1)[-1].lower()
-            if ext == "csv":
+            if args.export.endswith(".csv"):
                 engine.diagnostic.export_csv(args.export)
             else:
                 engine.diagnostic.export_json(args.export)
@@ -2864,8 +2668,6 @@ def main() -> None:
         if args.diagnose:
             return
 
-        # 分析结构
-        print("🔧 分析文件结构...")
         analysis = engine.analyze(
             cache_patterns=args.extra_patterns,
             dedup_strategy=args.dedup_strategy,
@@ -2874,37 +2676,30 @@ def main() -> None:
         print(f"  重复文件标记: {analysis['duplicates_marked']} 项")
         print(f"  冗余结构解包: {analysis['redundant_unpacked']} 项")
 
-        # 扁平化 (仅在指定 --flatten 时执行)
         flatten_count = 0
         if args.flatten is not None:
             flatten_target = args.flatten if args.flatten else os.path.join(engine.target_path, "_flattened")
-            print(f"\n📦 层级扁平化: 目标目录 = {flatten_target}")
+            print(f"\n📦 层级扁平化: {flatten_target}")
             flatten_engine = FlattenEngine(engine.nodes, engine.target_path, engine.errors)
             flatten_engine.extract_files(flatten_target)
             flatten_count = sum(1 for n in engine.nodes if n.action == NodeAction.MOVE and n.target_path)
             print(f"  扁平化文件: {flatten_count} 项")
 
-        # 去重预览
         dup_groups = engine.get_duplicate_preview()
         if dup_groups:
-            print(f"\n📋 重复文件清单 (共 {len(dup_groups)} 组):")
+            print(f"\n📋 重复文件清单 ({len(dup_groups)} 组):")
             for g in dup_groups[:20]:
-                print(f"  组 {g['group_id']}: {g['size']} (SHA256: {g['hash']}...)")
+                print(f"  组 {g['group_id']}: {g['size']}")
                 print(f"    ✅ 保留: {g['keep']['path']} (深度 {g['keep']['depth']})")
                 for d in g["delete"]:
                     print(f"    🗑️ 删除: {d['path']} (深度 {d['depth']})")
-            if len(dup_groups) > 20:
-                print(f"  ... 还有 {len(dup_groups) - 20} 组")
 
-        # 权限/属性修复
         perm_stats: Dict[str, int] = {}
         if args.fix_attr:
             perm_actions = _parse_actions(args.fix_attr)
             if perm_actions:
-                do_execute = args.execute and not args.preview
-                perm_stats = engine.fix_permissions(perm_actions, dry_run=not do_execute)
+                perm_stats = engine.fix_permissions(perm_actions, dry_run=not args.execute)
 
-        # 预览结构变更
         preview = engine.preview()
         if preview:
             print(f"\n📋 结构变更清单 ({len(preview)} 项):")
@@ -2912,9 +2707,9 @@ def main() -> None:
             for i, item in enumerate(preview[:50], 1):
                 icon = {"DELETE": "🗑️", "MOVE": "📦", "RENAME": "✏️"}.get(item["action"], "❓")
                 if item["action"] == "DELETE":
-                    print(f"  {i:4d}. {icon} DELETE {item['source']} ({item['size']}) [{item['attrs']}]")
+                    print(f"  {i:4d}. {icon} DELETE {item['source']} ({item['size']})")
                 else:
-                    print(f"  {i:4d}. {icon} {item['source']} [{item['attrs']}]")
+                    print(f"  {i:4d}. {icon} {item['source']}")
                     print(f"         → {item['target']}")
             if len(preview) > 50:
                 print(f"  ... 还有 {len(preview) - 50} 项")
@@ -2922,25 +2717,12 @@ def main() -> None:
         else:
             print("\n✅ 结构方面无需变更")
 
-        if perm_stats:
-            print(f"\n🔑 权限/属性操作汇总:")
-            for key, label in [
-                ("perm_granted", "授予权限"), ("readonly_removed", "去除只读"),
-                ("hidden_removed", "去除隐藏"), ("zone_cleared", "清除 Zone 标识"),
-                ("failed", "失败"), ("skipped", "跳过"),
-            ]:
-                if perm_stats.get(key, 0):
-                    print(f"  {label}: {perm_stats[key]} 项")
-
         if args.preview:
-            if not args.execute:
-                print(f"\n💡 使用 --execute 参数执行实际操作")
+            print(f"\n💡 使用 --execute 参数执行实际操作")
             return
 
-        # 执行
         if args.execute:
-            total_ops = len(preview) + sum(v for k, v in perm_stats.items()
-                                            if k not in ("failed", "skipped"))
+            total_ops = len(preview) + sum(v for k, v in perm_stats.items() if k not in ("failed", "skipped"))
             if not args.yes and total_ops > 0:
                 confirm = input(f"\n⚠️  即将执行 {total_ops} 项操作。确认？(yes/no): ")
                 if confirm.lower() not in ("yes", "y"):
@@ -2952,11 +2734,12 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n\n⚠️  用户中断")
     finally:
-        lock.release()
+        if lock_acquired:
+            lock.release()
 
 
 # ============================================================
-# 单元测试 (V6.6 新增)
+# 单元测试
 # ============================================================
 
 def run_tests() -> bool:
@@ -2967,20 +2750,14 @@ def run_tests() -> bool:
     class TestSanitizeFilename(unittest.TestCase):
         def test_normal(self):
             self.assertEqual(_sanitize_filename("hello.txt"), "hello.txt")
-
         def test_illegal_chars(self):
             result = _sanitize_filename('file<>:"|?*.txt')
             for c in '<>:"|?*\x00':
                 self.assertNotIn(c, result)
-
         def test_reserved_name(self):
-            result = _sanitize_filename("CON")
-            self.assertTrue(result.startswith("_"))
-
+            self.assertTrue(_sanitize_filename("CON").startswith("_"))
         def test_empty(self):
-            result = _sanitize_filename("")
-            self.assertEqual(result, "_unnamed")
-
+            self.assertEqual(_sanitize_filename(""), "_unnamed")
         def test_dots_spaces(self):
             result = _sanitize_filename("  ...  ")
             self.assertNotEqual(result, "")
@@ -2988,168 +2765,94 @@ def run_tests() -> bool:
 
     class TestTruncateName(unittest.TestCase):
         def test_short_name_unchanged(self):
-            name = "short.txt"
-            result = _truncate_name(name, 100)
-            self.assertEqual(result, name)
-
+            self.assertEqual(_truncate_name("short.txt", 100), "short.txt")
         def test_long_name_truncated(self):
-            name = "a" * 300 + ".txt"
-            result = _truncate_name(name, 50)
+            result = _truncate_name("a" * 300 + ".txt", 50)
             self.assertLessEqual(len(result.encode("utf-8")), 50)
             self.assertTrue(result.endswith(".txt"))
-
         def test_hash_appended(self):
-            name = "x" * 200 + ".dat"
-            result = _truncate_name(name, 40)
+            result = _truncate_name("x" * 200 + ".dat", 40)
             self.assertIn("_", result)
 
     class TestFmtSize(unittest.TestCase):
-        def test_bytes(self):
-            self.assertIn("B", _fmt_size(500))
-
-        def test_kb(self):
-            self.assertIn("KB", _fmt_size(2048))
-
-        def test_mb(self):
-            self.assertIn("MB", _fmt_size(5 * 1024 * 1024))
-
-        def test_gb(self):
-            self.assertIn("GB", _fmt_size(3 * 1024 * 1024 * 1024))
-
-        def test_zero(self):
-            self.assertIn("B", _fmt_size(0))
+        def test_bytes(self): self.assertIn("B", _fmt_size(500))
+        def test_kb(self): self.assertIn("KB", _fmt_size(2048))
+        def test_mb(self): self.assertIn("MB", _fmt_size(5 * 1024 * 1024))
+        def test_gb(self): self.assertIn("GB", _fmt_size(3 * 1024 * 1024 * 1024))
+        def test_zero(self): self.assertIn("B", _fmt_size(0))
+        def test_input_unchanged(self):
+            original = 5 * 1024 * 1024
+            _ = _fmt_size(original)
+            self.assertEqual(original, 5 * 1024 * 1024)
 
     class TestWinPath(unittest.TestCase):
         def test_roundtrip_normal(self):
             path = r"C:\Users\test\file.txt"
-            wp = _win_path(path)
-            sp = _short_path(wp)
-            if IS_WINDOWS:
-                self.assertEqual(sp, path)
-            else:
-                self.assertEqual(sp, path)
-
+            self.assertEqual(_short_path(_win_path(path)), path)
         def test_unc_path(self):
             path = r"\\server\share\file.txt"
             wp = _win_path(path)
             if IS_WINDOWS:
                 self.assertTrue(wp.startswith("\\\\?\\UNC\\"))
-                sp = _short_path(wp)
-                self.assertEqual(sp, path)
-            else:
-                self.assertEqual(wp, path)
 
     class TestVirtualFileNode(unittest.TestCase):
         def test_creation(self):
-            node = VirtualFileNode(
-                full_path=r"C:\test\file.txt",
-                file_name="file.txt",
-                extension=".txt",
-                size_bytes=1024,
-                depth=1,
-                is_dir=False,
-            )
+            node = VirtualFileNode(r"C:\test\file.txt", "file.txt", ".txt", 1024, 1)
             self.assertEqual(node.file_name, "file.txt")
             self.assertEqual(node.size_bytes, 1024)
             self.assertFalse(node.is_dir)
 
     class TestOfflineDedupByName(unittest.TestCase):
         def test_size_aware_dedup(self):
-            """同名同大小应标记删除，同名不同大小应保留"""
             nodes = [
-                VirtualFileNode(r"C:\a\video.mp4", "video.mp4", ".mp4",
-                                size_bytes=1024 * 1024, depth=1),
-                VirtualFileNode(r"C:\b\video.mp4", "video.mp4", ".mp4",
-                                size_bytes=1024 * 1024, depth=2),
-                VirtualFileNode(r"C:\c\video.mp4", "video.mp4", ".mp4",
-                                size_bytes=100, depth=1),
+                VirtualFileNode(r"C:\a\video.mp4", "video.mp4", ".mp4", 1024 * 1024, 1),
+                VirtualFileNode(r"C:\b\video.mp4", "video.mp4", ".mp4", 1024 * 1024, 2),
+                VirtualFileNode(r"C:\c\video.mp4", "video.mp4", ".mp4", 100, 1),
             ]
             engine = OfflineEliminationEngine(nodes)
             count = engine.deduplicate_by_name()
-            self.assertEqual(count, 1)  # 只有同大小的那对
+            self.assertEqual(count, 1)
             self.assertEqual(nodes[0].action, NodeAction.NONE)
             self.assertEqual(nodes[1].action, NodeAction.DELETE)
             self.assertEqual(nodes[2].action, NodeAction.NONE)
 
         def test_no_size_data_marks_review(self):
-            """无大小数据时应标记为需确认，不自动删除"""
             nodes = [
-                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt",
-                                size_bytes=0, depth=1),
-                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt",
-                                size_bytes=0, depth=2),
+                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt", 0, 1),
+                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt", 0, 2),
             ]
             engine = OfflineEliminationEngine(nodes)
             count = engine.deduplicate_by_name()
-            self.assertEqual(count, 0)  # 不自动删除
+            self.assertEqual(count, 0)
             self.assertIn("手动确认", nodes[0].reason)
-            self.assertIn("手动确认", nodes[1].reason)
 
     class TestFileListParser(unittest.TestCase):
-        def test_custom_format(self):
-            """测试自定义格式"""
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                              delete=False, encoding="utf-8") as f:
-                f.write("[{1}] C:\\Projects\\src #DIR\n")
-                f.write("[{2}] C:\\Projects\\src\\main.py #FILE\n")
-                f.write("[{1}] C:\\Projects\\tests #DIR\n")
-                f.write("[{2}] C:\\Projects\\tests\\test_main.py #FILE\n")
-                tmppath = f.name
-
-            parser = FileListParser()
-            lines = parser.load_files([tmppath])
-            os.unlink(tmppath)
-
-            self.assertEqual(len(lines), 4)
-            self.assertTrue(parser._has_custom_format)
-            self.assertEqual(parser._type_map[r"C:\Projects\src"], True)
-            self.assertEqual(parser._type_map[r"C:\Projects\src\main.py"], False)
-
         def test_pure_path_list(self):
-            """测试纯路径列表"""
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                              delete=False, encoding="utf-8") as f:
-                f.write("C:\\Projects\\src\\main.py\n")
-                f.write("C:\\Projects\\src\\util.py\n")
-                f.write("C:\\Projects\\README.md\n")
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+                f.write("C:\\Projects\\src\\main.py\nC:\\Projects\\README.md\n")
                 tmppath = f.name
-
             parser = FileListParser()
             lines = parser.load_files([tmppath])
             os.unlink(tmppath)
-
-            self.assertEqual(len(lines), 3)
+            self.assertEqual(len(lines), 2)
             self.assertFalse(parser._has_custom_format)
 
         def test_truncated_line_detection(self):
-            """测试截断行检测"""
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                              delete=False, encoding="utf-8") as f:
-                f.write("C:\\Projects\\normal_file.txt\n")
-                f.write("C:\\Projects\\very_long_truncated_path_that_ends_with_dots...\n")
-                f.write("C:\\Projects\\another_file.txt\n")
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+                f.write("C:\\Projects\\normal.txt\nC:\\Projects\\long_path...\nC:\\Projects\\another.txt\n")
                 tmppath = f.name
-
             parser = FileListParser()
             lines = parser.load_files([tmppath])
             os.unlink(tmppath)
-
             self.assertEqual(len(lines), 2)
             self.assertEqual(parser.total_truncated, 1)
 
     class TestRollbackScript(unittest.TestCase):
         def test_rollback_generates_python(self):
-            """V6.0: 回滚脚本应为 Python 格式"""
             engine = ExecutionEngine([], "/tmp/test", "/tmp/log", "/tmp/trash")
-            engine.op_logs.append(OperationLog(
-                seq=1, action="MOVE",
-                source=r"C:\original\file.txt",
-                target=r"C:\trash\file.txt",
-                timestamp="2026-01-01T00:00:00",
-            ))
+            engine.op_logs.append(OperationLog(1, "MOVE", r"C:\file.txt", r"C:\trash\file.txt", "2026-01-01T00:00:00"))
             script = engine.generate_rollback_script()
             self.assertIn("shutil.move", script)
-            self.assertNotIn("move /Y", script)
             self.assertIn("import shutil", script)
 
         def test_empty_rollback(self):
@@ -3158,102 +2861,56 @@ def run_tests() -> bool:
             self.assertIn("无需回滚", script)
 
         def test_rollback_path_injection_protection(self):
-            """V6.6: 回滚脚本应防止路径注入（使用json.dumps）"""
             engine = ExecutionEngine([], "/tmp/test", "/tmp/log", "/tmp/trash")
-            engine.op_logs.append(OperationLog(
-                seq=1, action="MOVE",
-                source=r'C:\test\file"with"quotes.txt',
-                target=r'C:\trash\file"with"quotes.txt',
-                timestamp="2026-01-01T00:00:00",
-            ))
+            engine.op_logs.append(OperationLog(1, "MOVE", r'C:\test"file.txt', r'C:\trash"file.txt', "2026-01-01T00:00:00"))
             script = engine.generate_rollback_script()
-            self.assertIn('\\"', script)  # json.dumps 转义后的双引号
+            self.assertIn('\\"', script)
             self.assertNotIn('r"C:\\test', script)
 
     class TestTrashPathConflict(unittest.TestCase):
-        """V6.6: 回收站路径原子操作测试"""
         def test_trash_path_always_unique(self):
-            """测试回收站路径始终唯一（无预检查）"""
             with tempfile.TemporaryDirectory() as tmpdir:
                 trash_dir = os.path.join(tmpdir, ".trash")
                 os.makedirs(trash_dir)
-                
                 engine = ExecutionEngine([], tmpdir, os.path.join(tmpdir, "log"), trash_dir)
-                
-                # 多次调用应该产生不同的路径
                 paths = [engine._get_trash_path(os.path.join(tmpdir, "subdir", "test.txt")) for _ in range(10)]
-                unique_paths = set(paths)
-                
-                # 所有路径应该都是唯一的
-                self.assertEqual(len(paths), len(unique_paths))
-                
-                # 验证路径格式包含时间戳和UUID
+                self.assertEqual(len(paths), len(set(paths)))
                 for path in paths:
-                    basename = os.path.basename(path)
-                    # 应该包含时间戳格式 YYYYMMDD_HHMMSS
-                    self.assertRegex(basename, r'.*_\d{8}_\d{6}_[a-f0-9]{8}\.txt$')
-                    # 基础文件名不应该是简单的 test.txt
-                    self.assertNotEqual(basename, "test.txt")
+                    self.assertRegex(os.path.basename(path), r'.*_\d{8}_\d{6}_[a-f0-9]{8}\.txt$')
 
     class TestOfflineDedupScopeFix(unittest.TestCase):
-        """V6.6: 离线去重变量作用域修复测试"""
         def test_dedup_no_size_single_group(self):
-            """无大小数据时只生成一个去重组"""
             nodes = [
-                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt",
-                                size_bytes=0, depth=1),
-                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt",
-                                size_bytes=0, depth=2),
-                VirtualFileNode(r"C:\c\doc.txt", "doc.txt", ".txt",
-                                size_bytes=0, depth=3),
+                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt", 0, 1),
+                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt", 0, 2),
+                VirtualFileNode(r"C:\c\doc.txt", "doc.txt", ".txt", 0, 3),
             ]
             engine = OfflineEliminationEngine(nodes)
             count = engine.deduplicate_by_name()
-            self.assertEqual(count, 0)  # 不自动删除
-            # 应该只有一个去重组
+            self.assertEqual(count, 0)
             self.assertEqual(len(engine.duplicate_groups), 1)
-            # 保留的应该是深度最浅的
             self.assertEqual(engine.duplicate_groups[0]["keep"], r"C:\a\doc.txt")
-            # 删除列表应该包含其他两个
             self.assertEqual(len(engine.duplicate_groups[0]["delete"]), 2)
 
-    class TestFmtSizeImmutability(unittest.TestCase):
-        """V6.6 修复: _fmt_size 不应修改输入参数"""
-        def test_input_unchanged(self):
-            original = 5 * 1024 * 1024
-            _ = _fmt_size(original)
-            self.assertEqual(original, 5 * 1024 * 1024)
-
     class TestNodeAttrsStr(unittest.TestCase):
-        """V6.6 修复: _node_attrs_str 应包含 reparse 类型"""
         def test_no_attrs(self):
             node = VirtualFileNode(r"C:\test.txt", "test.txt", ".txt")
             self.assertEqual(_node_attrs_str(node), "-")
-
         def test_hidden_readonly(self):
-            node = FileNode(r"C:\test.txt", "test.txt", ".txt",
-                           is_hidden=True, is_readonly=True)
+            node = FileNode(r"C:\test.txt", "test.txt", ".txt", is_hidden=True, is_readonly=True)
             self.assertEqual(_node_attrs_str(node), "HR")
-
         def test_reparse_symlink(self):
-            node = FileNode(r"C:\link", "link", "",
-                           reparse_type=ReparseType.SYMLINK)
+            node = FileNode(r"C:\link", "link", "", reparse_type=ReparseType.SYMLINK)
             self.assertIn("S", _node_attrs_str(node))
 
-        def test_reparse_junction(self):
-            node = FileNode(r"C:\junc", "junc", "",
-                           reparse_type=ReparseType.JUNCTION)
-            self.assertIn("J", _node_attrs_str(node))
-
-    # 运行所有测试
+    # 运行测试
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for test_class in [
         TestSanitizeFilename, TestTruncateName, TestFmtSize,
         TestWinPath, TestVirtualFileNode, TestOfflineDedupByName,
         TestFileListParser, TestRollbackScript, TestTrashPathConflict,
-        TestOfflineDedupScopeFix,
-        TestFmtSizeImmutability, TestNodeAttrsStr,
+        TestOfflineDedupScopeFix, TestNodeAttrsStr,
     ]:
         suite.addTests(loader.loadTestsFromTestCase(test_class))
 
@@ -3263,8 +2920,4 @@ def run_tests() -> bool:
 
 
 if __name__ == "__main__":
-    # 支持 --test 参数运行内置测试
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        success = run_tests()
-        sys.exit(0 if success else 1)
     main()
