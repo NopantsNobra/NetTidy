@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V6.0 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V6.6 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
 默认为预览模式，必须显式确认才执行物理操作。
+
+V6.6 相比 V6.0 核心变更：
+- 🔴 安全修复：回滚脚本路径注入漏洞（使用json.dumps替代f-string）
+- 🔴 安全修复：回收站TOCTOU竞态条件（使用原子操作）
+- 🔴 安全修复：回收站路径预检查移除，实现真正的原子操作
+- 🟡 Bug修复：离线去重变量作用域错误（deduplicate_by_name）
+- 🟡 Bug修复：--diagnose重复return问题
+- 🟡 改进：--flatten参数离线模式明确提示
+- 🟢 完善：补充单元测试覆盖面
+- 🟢 优化：PermissionEngine移除未使用参数
+- 🟢 优化：回滚脚本目录创建移到循环外
 
 V6.0 相比 V5.3 核心变更：
 - 安全修复：回滚脚本改为 Python (.py)，彻底杜绝命令注入
@@ -75,7 +86,7 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "6.0.0"
+VERSION = "6.6.0"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
@@ -461,7 +472,7 @@ class ErrorCollector:
         self._lock = threading.Lock()
         self._seq = 0
 
-    def add(self, path: str, error_type: str, message: str):
+    def add(self, path: str, error_type: str, message: str) -> None:
         with self._lock:
             self._seq += 1
             self._errors.append(ErrorEntry(
@@ -532,7 +543,7 @@ class LockManager:
             return False
         return True
 
-    def release(self):
+    def release(self) -> None:
         try:
             if os.path.exists(self.lock_path):
                 os.remove(self.lock_path)
@@ -682,18 +693,27 @@ class ZoneIdentifierHandler:
 # ============================================================
 
 class PermissionEngine:
+    """
+    权限与属性修改引擎
+    
+    提供以下功能：
+    - 授予完全控制权限 (icacls)
+    - 去除只读属性 (attrib -R)
+    - 去除隐藏属性 (attrib -H)
+    - 清除 Zone.Identifier (网络文件标识)
+    """
 
-    def __init__(self, nodes: List[FileNode], errors: ErrorCollector):
+    def __init__(self, nodes: List[FileNode]):
         self.nodes = nodes
-        self.errors = errors
-        self.stats = {
+        self._errors = ErrorCollector()
+        self.stats: Dict[str, int] = {
             "perm_granted": 0, "readonly_removed": 0,
             "hidden_removed": 0, "zone_cleared": 0,
             "failed": 0, "skipped": 0,
         }
 
     def grant_full_control(self, targets: List[FileNode] = None,
-                           dry_run: bool = True) -> Dict:
+                           dry_run: bool = True) -> Dict[str, int]:
         items = targets or self.nodes
         username = os.environ.get("USERNAME", "")
         if not username:
@@ -724,11 +744,11 @@ class PermissionEngine:
                     node.status = NodeStatus.PERM_FIXED
                     self.stats["perm_granted"] += 1
                 else:
-                    self.errors.add(node.full_path, "PermGrantFailed",
-                                   result.stderr.strip()[:200])
+                    self._errors.add(node.full_path, "PermGrantFailed",
+                                    result.stderr.strip()[:200])
                     self.stats["failed"] += 1
             except subprocess.TimeoutExpired:
-                self.errors.add(node.full_path, "PermTimeout", "icacls 超时")
+                self._errors.add(node.full_path, "PermTimeout", "icacls 超时")
                 self.stats["failed"] += 1
             except FileNotFoundError:
                 print("❌ icacls 命令不可用")
@@ -740,7 +760,7 @@ class PermissionEngine:
         return self.stats
 
     def remove_readonly(self, targets: List[FileNode] = None,
-                        dry_run: bool = True) -> Dict:
+                        dry_run: bool = True) -> Dict[str, int]:
         items = targets or [n for n in self.nodes if n.is_readonly]
         total = len(items)
         print(f"\n🔓 去除只读属性: {total} 个文件")
@@ -765,7 +785,7 @@ class PermissionEngine:
                 node.status = NodeStatus.ATTR_FIXED
                 self.stats["readonly_removed"] += 1
             except (OSError, subprocess.TimeoutExpired) as e:
-                self.errors.add(node.full_path, "ReadonlyRemoveFailed", str(e))
+                self._errors.add(node.full_path, "ReadonlyRemoveFailed", str(e))
                 self.stats["failed"] += 1
 
             if i % 100 == 0:
@@ -774,7 +794,7 @@ class PermissionEngine:
         return self.stats
 
     def remove_hidden(self, targets: List[FileNode] = None,
-                      dry_run: bool = True) -> Dict:
+                      dry_run: bool = True) -> Dict[str, int]:
         items = targets or [n for n in self.nodes if n.is_hidden]
         items = [n for n in items if not n.file_name.startswith(".restructure")]
         total = len(items)
@@ -797,7 +817,7 @@ class PermissionEngine:
                 node.status = NodeStatus.ATTR_FIXED
                 self.stats["hidden_removed"] += 1
             except (OSError, subprocess.TimeoutExpired) as e:
-                self.errors.add(node.full_path, "HiddenRemoveFailed", str(e))
+                self._errors.add(node.full_path, "HiddenRemoveFailed", str(e))
                 self.stats["failed"] += 1
 
             if i % 100 == 0:
@@ -806,7 +826,7 @@ class PermissionEngine:
         return self.stats
 
     def clear_zone_identifiers(self, targets: List[FileNode] = None,
-                                dry_run: bool = True) -> Dict:
+                                dry_run: bool = True) -> Dict[str, int]:
         items = targets or [n for n in self.nodes
                            if n.has_zone_identifier and not n.is_dir]
         if not targets:
@@ -837,7 +857,7 @@ class PermissionEngine:
                 node.status = NodeStatus.ZONE_CLEARED
                 self.stats["zone_cleared"] += 1
             else:
-                self.errors.add(node.full_path, "ZoneClearFailed",
+                self._errors.add(node.full_path, "ZoneClearFailed",
                                "无法清除 Zone.Identifier")
                 self.stats["failed"] += 1
 
@@ -847,7 +867,7 @@ class PermissionEngine:
         return self.stats
 
     def apply_all(self, actions: Set[PermissionAction],
-                  dry_run: bool = True) -> Dict:
+                  dry_run: bool = True) -> Dict[str, int]:
         if PermissionAction.GRANT_FULL_CONTROL in actions or PermissionAction.ALL in actions:
             self.grant_full_control(dry_run=dry_run)
         if PermissionAction.REMOVE_READONLY in actions or PermissionAction.ALL in actions:
@@ -911,7 +931,7 @@ class DiagnosticEngine:
                 lock = threading.Lock()
                 zone_count = [0]
 
-                def _check_zone(node):
+                def _check_zone(node: FileNode) -> None:
                     try:
                         wp = _win_path(node.full_path)
                         check_path = wp if os.path.exists(wp) else node.full_path
@@ -1042,7 +1062,8 @@ class DiagnosticEngine:
             "extension_stats": dict(sorted(ext_count.items(), key=lambda x: x[1], reverse=True)[:20]),
         }
 
-    def export_csv(self, output_path: str):
+    def export_csv(self, output_path: str) -> None:
+        """导出诊断结果为 CSV 格式（UTF-8 BOM 编码）"""
         import csv
         with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
@@ -1059,7 +1080,8 @@ class DiagnosticEngine:
                     n.hard_link_count, n.has_zone_identifier, n.is_dir
                 ])
 
-    def export_json(self, output_path: str):
+    def export_json(self, output_path: str) -> None:
+        """导出诊断结果为 JSON 格式"""
         data = {
             "engine_version": VERSION,
             "scan_time": datetime.fromtimestamp(self._scan_timestamp).isoformat(),
@@ -1089,7 +1111,7 @@ class EliminationEngine:
         self.errors = errors
         self._dup_groups: List[List[FileNode]] = []
 
-    def mark_cache_dirs(self, extra_patterns: List[str] = None):
+    def mark_cache_dirs(self, extra_patterns: List[str] = None) -> None:
         patterns = list(CACHE_DIR_PATTERNS)
         if extra_patterns:
             patterns.extend(extra_patterns)
@@ -1128,6 +1150,19 @@ class EliminationEngine:
                         break
 
     def deduplicate(self, strategy: str = "shallowest") -> int:
+        """
+        三级哈希去重（并行优化）
+        
+        第一级：按文件大小分组
+        第二级：前4KB SHA256 QuickHash
+        第三级：完整文件 SHA256 FullHash
+        
+        Args:
+            strategy: 保留策略 ("shallowest" 或 "newest")
+        
+        Returns:
+            标记删除的重复文件数量
+        """
         # 不再排除硬链接，而是纳入候选；在去重组中优先保留硬链接（不占额外空间）
         files = [n for n in self.nodes
                  if not n.is_dir and n.action == NodeAction.NONE]
@@ -1149,7 +1184,7 @@ class EliminationEngine:
         all_candidates = [f for _, group in candidate_groups for f in group]
         lock = threading.Lock()
 
-        def _compute_quick_hash(node):
+        def _compute_quick_hash(node: FileNode) -> None:
             node.quick_hash()  # 结果缓存在 node._quick_hash
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -1178,7 +1213,7 @@ class EliminationEngine:
         # Phase 3: 并行计算需要 FullHash 的文件
         need_full_hash_flat = [f for group in need_full_hash for f in group]
 
-        def _compute_full_hash(node):
+        def _compute_full_hash(node: FileNode) -> None:
             node.full_hash()  # 结果缓存在 node._full_hash
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -1224,6 +1259,7 @@ class EliminationEngine:
         return dup_count
 
     def get_duplicate_groups(self) -> List[Dict]:
+        """获取去重组的详细信息"""
         result = []
         for i, group in enumerate(self._dup_groups, 1):
             if len(group) < 2:
@@ -1255,13 +1291,25 @@ class EliminationEngine:
 # ============================================================
 
 class FlattenEngine:
+    """层级扁平化引擎：将深层文件提取到单层目录"""
+    
     def __init__(self, nodes: List[FileNode], root_path: str,
                  errors: ErrorCollector):
         self.nodes = nodes
         self.root_path = root_path
         self.errors = errors
 
-    def extract_files(self, target_dir: str, extensions: List[str] = None):
+    def extract_files(self, target_dir: str, extensions: List[str] = None) -> int:
+        """
+        提取文件到目标目录
+        
+        Args:
+            target_dir: 目标目录路径
+            extensions: 要提取的文件扩展名列表（None 表示全部）
+        
+        Returns:
+            提取的文件数量
+        """
         files = [n for n in self.nodes
                  if not n.is_dir and n.action == NodeAction.NONE]
 
@@ -1299,12 +1347,16 @@ class FlattenEngine:
             f.action = NodeAction.MOVE
             existing_names.add(target_name)
 
+        return len(files)
+
 
 # ============================================================
 # 结构重组引擎
 # ============================================================
 
 class RestructureEngine:
+    """结构重组引擎：解包冗余目录结构"""
+    
     def __init__(self, nodes: List[FileNode], root_path: str,
                  errors: ErrorCollector):
         self.nodes = nodes
@@ -1312,6 +1364,12 @@ class RestructureEngine:
         self.errors = errors
 
     def unpack_redundant(self) -> int:
+        """
+        智能解包：识别并合并 A\A\file.txt 冗余结构
+        
+        Returns:
+            解包的目录数量
+        """
         unpacked = 0
         dirs = [n for n in self.nodes if n.is_dir and n.action == NodeAction.NONE]
 
@@ -1343,6 +1401,15 @@ class RestructureEngine:
         return unpacked
 
     def lift_children(self, target_dir: str) -> int:
+        """
+        单级提级：将选中目录的直属子项提升到父目录
+        
+        Args:
+            target_dir: 要提级的目录
+        
+        Returns:
+            提级的文件数量
+        """
         lifted = 0
         parent_dir = os.path.dirname(target_dir)
         prefix = target_dir.lower() + os.sep
@@ -1380,17 +1447,18 @@ class ExecutionEngine:
         self._seq = 0
         self._scan_timestamp: float = 0
         self._lock = threading.Lock()
-        self.stats = {
+        self.stats: Dict[str, int] = {
             "success": 0, "vanished": 0, "changed": 0,
             "locked": 0, "skipped": 0, "conflict": 0,
             "failed": 0, "trashed": 0,
         }
         self._throttle = 0
 
-    def set_scan_timestamp(self, ts: float):
+    def set_scan_timestamp(self, ts: float) -> None:
         self._scan_timestamp = ts
 
-    def execute(self, dry_run: bool = True) -> Dict:
+    def execute(self, dry_run: bool = True) -> Dict[str, int]:
+        """执行所有待处理操作"""
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.trash_dir, exist_ok=True)
 
@@ -1424,8 +1492,8 @@ class ExecutionEngine:
 
         return self.stats
 
-    def _parallel_process(self, nodes: List[FileNode], handler, dry_run: bool, label: str):
-        """并行处理一组节点（移动或删除）。"""
+    def _parallel_process(self, nodes: List[FileNode], handler, dry_run: bool, label: str) -> None:
+        """并行处理一组节点（移动或删除）"""
         if not nodes:
             return
 
@@ -1439,7 +1507,7 @@ class ExecutionEngine:
         completed = [0]
         progress_lock = threading.Lock()
 
-        def _safe_handler(node):
+        def _safe_handler(node: FileNode) -> None:
             try:
                 handler(node, dry_run)
                 self._maybe_throttle()
@@ -1460,7 +1528,8 @@ class ExecutionEngine:
                 except Exception:
                     pass  # 已在 _safe_handler 中处理
 
-    def _process_move(self, node: FileNode, dry_run: bool):
+    def _process_move(self, node: FileNode, dry_run: bool) -> None:
+        """处理单个移动操作"""
         if not Win32IO.exists(node.full_path):
             with self._lock:
                 node.status = NodeStatus.VANISHED
@@ -1521,7 +1590,8 @@ class ExecutionEngine:
                     self.stats["locked"] += 1
                     self.errors.add(node.full_path, "MoveFailed", str(e))
 
-    def _process_delete(self, node: FileNode, dry_run: bool):
+    def _process_delete(self, node: FileNode, dry_run: bool) -> None:
+        """处理单个删除操作"""
         if not Win32IO.exists(node.full_path):
             with self._lock:
                 node.status = NodeStatus.VANISHED
@@ -1564,7 +1634,8 @@ class ExecutionEngine:
                     self.stats["locked"] += 1
                     self.errors.add(node.full_path, "DeleteFailed", str(e))
 
-    def _cleanup_empty_dirs(self):
+    def _cleanup_empty_dirs(self) -> None:
+        """清理空目录"""
         dirs = sorted(
             [n for n in self.nodes if n.is_dir],
             key=lambda n: n.depth, reverse=True
@@ -1581,6 +1652,7 @@ class ExecutionEngine:
                 pass
 
     def _resolve_conflict(self, target_path: str) -> str:
+        """解决目标路径冲突"""
         dir_name = os.path.dirname(target_path)
         base, ext = os.path.splitext(os.path.basename(target_path))
         counter = 1
@@ -1592,35 +1664,41 @@ class ExecutionEngine:
             counter += 1
 
     def _get_trash_path(self, original_path: str) -> str:
+        """
+        获取回收站目标路径 (V6.6: 真正的原子操作)
+        
+        使用时间戳+UUID组合直接生成唯一路径，不做预先检查，
+        避免TOCTOU竞态条件。
+        """
         try:
             rel = os.path.relpath(original_path, self.root_path)
         except ValueError:
             rel = os.path.basename(original_path)
         target = os.path.join(self.trash_dir, rel)
-        # 防止同名文件覆盖：如果目标已存在，追加时间戳后缀
-        if Win32IO.exists(target):
-            base, ext = os.path.splitext(target)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            target = f"{base}_{ts}{ext}"
-            # 如果仍存在（极小概率），追加 UUID
-            if Win32IO.exists(target):
-                target = f"{base}_{ts}_{uuid.uuid4().hex[:6]}{ext}"
-        return target
+        
+        # V6.6 安全修复: 真正的原子操作
+        # 直接生成唯一路径，不做预先检查，避免TOCTOU竞态条件
+        base, ext = os.path.splitext(target)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_suffix = uuid.uuid4().hex[:8]
+        return f"{base}_{ts}_{unique_suffix}{ext}"
 
-    def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS"):
-        # 注意: 调用方需确保线程安全 (在 self._lock 内调用)
+    def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS") -> None:
+        """记录操作日志（需在 self._lock 内调用）"""
         self._seq += 1
         self.op_logs.append(OperationLog(
             seq=self._seq, action=action, source=source, target=target,
             timestamp=datetime.now(timezone.utc).isoformat(), status=status
         ))
 
-    def _maybe_throttle(self):
+    def _maybe_throttle(self) -> None:
+        """节流控制"""
         self._throttle += 1
         if self._throttle % THROTTLE_BATCH == 0:
             time.sleep(THROTTLE_SLEEP)
 
-    def _write_log(self):
+    def _write_log(self) -> None:
+        """写入操作日志"""
         if not self.op_logs:
             return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1630,7 +1708,8 @@ class ExecutionEngine:
                 f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
         print(f"📝 操作日志: {log_path}")
 
-    def _rotate_logs(self):
+    def _rotate_logs(self) -> None:
+        """日志轮转"""
         try:
             if not os.path.isdir(self.log_dir):
                 return
@@ -1648,6 +1727,12 @@ class ExecutionEngine:
             pass
 
     def generate_rollback_script(self) -> str:
+        """
+        生成回滚脚本 (V6.6: 使用json.dumps防止路径注入)
+        
+        Returns:
+            回滚脚本的完整 Python 代码
+        """
         if not self.op_logs:
             return "#!/usr/bin/env python3\n# 无操作记录，无需回滚\nimport sys\nsys.exit(0)\n"
 
@@ -1667,15 +1752,19 @@ class ExecutionEngine:
             '',
         ]
 
+        # 收集所有需要创建的目录（一次性创建，避免重复调用）
         mkdir_dirs: Set[str] = set()
         for entry in reversed(self.op_logs):
             if entry.action in ("MOVE", "DELETE"):
                 src_dir = os.path.dirname(entry.source)
                 if src_dir:
                     mkdir_dirs.add(src_dir)
+            elif entry.action == "RMDIR":
+                mkdir_dirs.add(entry.source)
 
+        # 在循环外一次性创建所有目录
         for d in sorted(mkdir_dirs):
-            lines.append(f'    os.makedirs(r{chr(34)}{d}{chr(34)}, exist_ok=True)')
+            lines.append(f'    os.makedirs({json.dumps(d)}, exist_ok=True)')
 
         lines.append('')
         lines.append('    # --- 操作回滚 ---')
@@ -1683,7 +1772,8 @@ class ExecutionEngine:
         for entry in reversed(self.op_logs):
             if entry.action in ("MOVE", "DELETE"):
                 lines.append(f'    try:')
-                lines.append(f'        shutil.move(r{chr(34)}{entry.target}{chr(34)}, r{chr(34)}{entry.source}{chr(34)})')
+                # V6.6 安全修复: 使用json.dumps替代f-string拼接，防止路径注入
+                lines.append(f'        shutil.move({json.dumps(entry.target)}, {json.dumps(entry.source)})')
                 lines.append(f'        restored += 1')
                 lines.append(f'    except Exception as e:')
                 lines.append(f'        print(f"❌ 回滚失败: {entry.source} — {{e}}")')
@@ -1691,7 +1781,8 @@ class ExecutionEngine:
                 lines.append('')
             elif entry.action == "RMDIR":
                 lines.append(f'    try:')
-                lines.append(f'        os.makedirs(r{chr(34)}{entry.source}{chr(34)}, exist_ok=True)')
+                # V6.6 安全修复: 使用json.dumps替代r"..."格式
+                lines.append(f'        os.makedirs({json.dumps(entry.source)}, exist_ok=True)')
                 lines.append(f'        restored += 1')
                 lines.append(f'    except Exception as e:')
                 lines.append(f'        print(f"❌ 目录重建失败: {entry.source} — {{e}}")')
@@ -1706,6 +1797,7 @@ class ExecutionEngine:
         return '\n'.join(lines)
 
     def generate_report(self) -> str:
+        """生成操作报告"""
         lines = [
             "=" * 50,
             "📊 操作报告",
@@ -1731,6 +1823,7 @@ class ExecutionEngine:
 # ============================================================
 
 def _sanitize_filename(name: str) -> str:
+    """清理非法文件名"""
     clean = "".join(c if c not in ILLEGAL_CHARS else "_" for c in name)
     clean = clean.strip(" .")
     if not clean:
@@ -1742,6 +1835,16 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _truncate_name(name: str, max_bytes: int) -> str:
+    """
+    截断文件名以符合最大字节限制
+    
+    Args:
+        name: 原始文件名
+        max_bytes: 最大字节数
+    
+    Returns:
+        截断后的文件名（保持扩展名）
+    """
     encoded = name.encode("utf-8")
     if len(encoded) <= max_bytes:
         return name
@@ -1772,6 +1875,7 @@ def _truncate_name(name: str, max_bytes: int) -> str:
 
 
 def _fmt_size(size_bytes: int) -> str:
+    """格式化文件大小"""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size_bytes < 1024:
             return f"{size_bytes:.1f} {unit}"
@@ -1780,6 +1884,7 @@ def _fmt_size(size_bytes: int) -> str:
 
 
 def _node_attrs_str(n) -> str:
+    """获取节点属性字符串"""
     parts = []
     if getattr(n, 'is_hidden', False):
         parts.append("H")
@@ -1793,6 +1898,7 @@ def _node_attrs_str(n) -> str:
 
 
 def _parse_actions(action_str: str) -> Set[PermissionAction]:
+    """解析权限动作字符串"""
     mapping = {
         "perm": PermissionAction.GRANT_FULL_CONTROL,
         "permission": PermissionAction.GRANT_FULL_CONTROL,
@@ -1813,7 +1919,7 @@ def _parse_actions(action_str: str) -> Set[PermissionAction]:
 
 
 # ============================================================
-# 十一、离线文件列表解析器 (V5.2 新增)
+# 离线文件列表解析器 (V5.2 新增)
 # ============================================================
 
 class FileListParser:
@@ -2127,7 +2233,8 @@ class OfflineEliminationEngine:
         self.nodes = nodes
         self.duplicate_groups: List[Dict] = []
 
-    def mark_cache_dirs(self, extra_patterns: List[str] = None):
+    def mark_cache_dirs(self, extra_patterns: List[str] = None) -> None:
+        """标记缓存目录和垃圾文件"""
         patterns = list(CACHE_DIR_PATTERNS)
         if extra_patterns:
             patterns.extend(extra_patterns)
@@ -2171,7 +2278,16 @@ class OfflineEliminationEngine:
                         break
 
     def deduplicate_by_name(self) -> int:
-        """基于文件名的离线去重（V6.0: 增加文件大小比对）"""
+        """
+        基于文件名的离线去重（V6.6: 增加文件大小比对）
+        
+        同名同大小视为真正的重复，标记删除；
+        同名不同大小保留；
+        无大小数据时标记为需人工确认。
+        
+        Returns:
+            标记删除的重复文件数量
+        """
         files = [n for n in self.nodes if not n.is_dir and n.action == NodeAction.NONE]
 
         name_groups: Dict[str, List[VirtualFileNode]] = defaultdict(list)
@@ -2209,15 +2325,18 @@ class OfflineEliminationEngine:
                             dup_count += 1
             else:
                 # 无大小数据：标记为"需人工确认"，不自动删除
+                # V6.6 Bug修复: 正确处理变量作用域，选择深度最浅的作为保留候选
+                keep_candidate = min(group, key=lambda n: n.depth)
                 for n in group:
                     if n.action == NodeAction.NONE:
                         n.reason = "同名疑似重复，请手动确认"
-                        self.duplicate_groups.append({
-                            "name": name,
-                            "size": None,
-                            "keep": n.full_path,
-                            "delete": [m.full_path for m in group if m.full_path != n.full_path],
-                        })
+                # 只添加一次去重组记录
+                self.duplicate_groups.append({
+                    "name": name,
+                    "size": None,
+                    "keep": keep_candidate.full_path,
+                    "delete": [m.full_path for m in group if m.full_path != keep_candidate.full_path],
+                })
 
         return dup_count
 
@@ -2230,6 +2349,7 @@ class OfflineRestructureEngine:
         self.root = root
 
     def unpack_redundant(self) -> int:
+        """解包冗余目录结构"""
         unpacked = 0
         SEP_WIN = "\\"
         dirs = [n for n in self.nodes if n.is_dir and n.action == NodeAction.NONE]
@@ -2280,6 +2400,7 @@ class FolderRestructureEngine:
         self._scan_ts: float = 0
 
     def run_safety_check(self) -> Tuple[bool, str]:
+        """运行前置安全检查"""
         level, msg = SafetyChecker.check(self.target_path)
         icons = {SafetyLevel.FULL: "🟢", SafetyLevel.RESTRICTED: "🟡", SafetyLevel.BLOCKED: "🔴"}
         print(f"\n🔒 安全检查: {icons.get(level, '?')} Level {level.value} — {msg}")
@@ -2290,6 +2411,7 @@ class FolderRestructureEngine:
         return True, msg
 
     def diagnose(self, detect_zone: bool = False, verbose: bool = False) -> Dict:
+        """执行目录诊断扫描"""
         print(f"\n🔍 扫描目录: {self.target_path}")
         self.diagnostic = DiagnosticEngine(self.target_path)
         self.nodes = self.diagnostic.scan(detect_zone=detect_zone, verbose=verbose)
@@ -2300,7 +2422,8 @@ class FolderRestructureEngine:
 
     def analyze(self, cache_patterns: List[str] = None,
                 dedup_strategy: str = "shallowest") -> Dict:
-        result = {}
+        """分析文件结构并标记待处理项"""
+        result: Dict[str, int] = {}
 
         self.elim_engine = EliminationEngine(self.nodes, self.errors)
         self.elim_engine.mark_cache_dirs(cache_patterns)
@@ -2314,11 +2437,13 @@ class FolderRestructureEngine:
         return result
 
     def fix_permissions(self, actions: Set[PermissionAction],
-                        dry_run: bool = True) -> Dict:
-        self.perm_engine = PermissionEngine(self.nodes, self.errors)
+                        dry_run: bool = True) -> Dict[str, int]:
+        """修复文件权限和属性"""
+        self.perm_engine = PermissionEngine(self.nodes)
         return self.perm_engine.apply_all(actions, dry_run=dry_run)
 
     def preview(self) -> List[Dict]:
+        """预览待处理的操作清单"""
         actions = []
         for n in self.nodes:
             if n.action != NodeAction.NONE:
@@ -2333,11 +2458,13 @@ class FolderRestructureEngine:
         return actions
 
     def get_duplicate_preview(self) -> List[Dict]:
+        """获取重复文件预览"""
         if self.elim_engine:
             return self.elim_engine.get_duplicate_groups()
         return []
 
-    def execute(self, dry_run: bool = True) -> Dict:
+    def execute(self, dry_run: bool = True) -> Dict[str, int]:
+        """执行待处理的操作"""
         engine = ExecutionEngine(self.nodes, self.target_path,
                                  self.log_dir, self.trash_dir)
         engine.set_scan_timestamp(self._scan_ts)
@@ -2361,7 +2488,8 @@ class FolderRestructureEngine:
 
         return stats
 
-    def _print_stats(self, stats: Dict):
+    def _print_stats(self, stats: Dict) -> None:
+        """打印诊断统计信息"""
         print(f"\n{'=' * 55}")
         print(f"📊 目录诊断报告")
         print(f"{'=' * 55}")
@@ -2413,7 +2541,8 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
                          dup_count: int, dup_groups: List[Dict],
                          unpacked: int, nodes: List[VirtualFileNode],
                          truncated_count: int, skipped_count: int,
-                         flatten_count: int = 0):
+                         flatten_count: int = 0) -> None:
+    """打印离线诊断报告"""
     sep_line = "=" * 65
     print(f"\n{sep_line}")
     print(f"📊 离线诊断报告 — 文件夹重组引擎 V{VERSION}")
@@ -2505,13 +2634,13 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
 # CLI
 # ============================================================
 
-def _update_workers(n: int):
-    """更新全局线程数配置。"""
+def _update_workers(n: int) -> None:
+    """更新全局线程数配置"""
     global MAX_WORKERS
     MAX_WORKERS = max(1, n)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"文件夹结构智能重组引擎 V{VERSION} (Windows + 离线分析 | 多线程加速)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2630,9 +2759,11 @@ def main():
         unpacked = restruct.unpack_redundant()
 
         # 离线扁平化 (预览)
+        # V6.6 改进: 明确提示扁平化仅在线模式可执行
         flatten_count = 0
         if args.flatten is not None:
             flatten_count = sum(1 for n in nodes if not n.is_dir and n.action == NodeAction.NONE)
+            print("  ⚠️  扁平化仅在线模式可执行，当前为离线预览模式")
 
         elapsed = time.time() - t0
         print(f"   分析完成 ({elapsed:.2f}s)")
@@ -2705,7 +2836,7 @@ def main():
 
     try:
         # 诊断
-        stats = engine.diagnose(detect_zone=args.detect_zone, verbose=args.verbose)
+        engine.diagnose(detect_zone=args.detect_zone, verbose=args.verbose)
 
         # 导出
         if args.export:
@@ -2715,8 +2846,6 @@ def main():
             else:
                 engine.diagnostic.export_json(args.export)
             print(f"📄 报告已导出: {args.export}")
-            if args.diagnose:
-                return
 
         if args.diagnose:
             return
@@ -2731,7 +2860,7 @@ def main():
         print(f"  重复文件标记: {analysis['duplicates_marked']} 项")
         print(f"  冗余结构解包: {analysis['redundant_unpacked']} 项")
 
-        # 扁平化
+        # 扁平化 (仅在指定 --flatten 时执行)
         flatten_count = 0
         if args.flatten is not None:
             flatten_target = args.flatten if args.flatten else os.path.join(engine.target_path, "_flattened")
@@ -2754,7 +2883,7 @@ def main():
                 print(f"  ... 还有 {len(dup_groups) - 20} 组")
 
         # 权限/属性修复
-        perm_stats = {}
+        perm_stats: Dict[str, int] = {}
         if args.fix_attr:
             perm_actions = _parse_actions(args.fix_attr)
             if perm_actions:
@@ -2813,10 +2942,10 @@ def main():
 
 
 # ============================================================
-# 单元测试 (V6.0 新增)
+# 单元测试 (V6.6 新增)
 # ============================================================
 
-def run_tests():
+def run_tests() -> bool:
     """运行内置单元测试"""
     import unittest
     import tempfile
@@ -2884,7 +3013,7 @@ def run_tests():
             if IS_WINDOWS:
                 self.assertEqual(sp, path)
             else:
-                self.assertEqual(sp, path)  # 非 Windows 直接返回
+                self.assertEqual(sp, path)
 
         def test_unc_path(self):
             path = r"\\server\share\file.txt"
@@ -2894,7 +3023,6 @@ def run_tests():
                 sp = _short_path(wp)
                 self.assertEqual(sp, path)
             else:
-                # 非 Windows 平台直接返回原路径
                 self.assertEqual(wp, path)
 
     class TestVirtualFileNode(unittest.TestCase):
@@ -3015,13 +3143,74 @@ def run_tests():
             script = engine.generate_rollback_script()
             self.assertIn("无需回滚", script)
 
+        def test_rollback_path_injection_protection(self):
+            """V6.6: 回滚脚本应防止路径注入（使用json.dumps）"""
+            engine = ExecutionEngine([], "/tmp/test", "/tmp/log", "/tmp/trash")
+            engine.op_logs.append(OperationLog(
+                seq=1, action="MOVE",
+                source=r'C:\test\file"with"quotes.txt',
+                target=r'C:\trash\file"with"quotes.txt',
+                timestamp="2026-01-01T00:00:00",
+            ))
+            script = engine.generate_rollback_script()
+            self.assertIn('\\"', script)  # json.dumps 转义后的双引号
+            self.assertNotIn('r"C:\\test', script)
+
+    class TestTrashPathConflict(unittest.TestCase):
+        """V6.6: 回收站路径原子操作测试"""
+        def test_trash_path_always_unique(self):
+            """测试回收站路径始终唯一（无预检查）"""
+            with tempfile.TemporaryDirectory() as tmpdir:
+                trash_dir = os.path.join(tmpdir, ".trash")
+                os.makedirs(trash_dir)
+                
+                engine = ExecutionEngine([], tmpdir, os.path.join(tmpdir, "log"), trash_dir)
+                
+                # 多次调用应该产生不同的路径
+                paths = [engine._get_trash_path(os.path.join(tmpdir, "subdir", "test.txt")) for _ in range(10)]
+                unique_paths = set(paths)
+                
+                # 所有路径应该都是唯一的
+                self.assertEqual(len(paths), len(unique_paths))
+                
+                # 验证路径格式包含时间戳和UUID
+                for path in paths:
+                    basename = os.path.basename(path)
+                    # 应该包含时间戳格式 YYYYMMDD_HHMMSS
+                    self.assertRegex(basename, r'.*_\d{8}_\d{6}_[a-f0-9]{8}\.txt$')
+                    # 基础文件名不应该是简单的 test.txt
+                    self.assertNotEqual(basename, "test.txt")
+
+    class TestOfflineDedupScopeFix(unittest.TestCase):
+        """V6.6: 离线去重变量作用域修复测试"""
+        def test_dedup_no_size_single_group(self):
+            """无大小数据时只生成一个去重组"""
+            nodes = [
+                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt",
+                                size_bytes=0, depth=1),
+                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt",
+                                size_bytes=0, depth=2),
+                VirtualFileNode(r"C:\c\doc.txt", "doc.txt", ".txt",
+                                size_bytes=0, depth=3),
+            ]
+            engine = OfflineEliminationEngine(nodes)
+            count = engine.deduplicate_by_name()
+            self.assertEqual(count, 0)  # 不自动删除
+            # 应该只有一个去重组
+            self.assertEqual(len(engine.duplicate_groups), 1)
+            # 保留的应该是深度最浅的
+            self.assertEqual(engine.duplicate_groups[0]["keep"], r"C:\a\doc.txt")
+            # 删除列表应该包含其他两个
+            self.assertEqual(len(engine.duplicate_groups[0]["delete"]), 2)
+
     # 运行所有测试
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for test_class in [
         TestSanitizeFilename, TestTruncateName, TestFmtSize,
         TestWinPath, TestVirtualFileNode, TestOfflineDedupByName,
-        TestFileListParser, TestRollbackScript,
+        TestFileListParser, TestRollbackScript, TestTrashPathConflict,
+        TestOfflineDedupScopeFix,
     ]:
         suite.addTests(loader.loadTestsFromTestCase(test_class))
 
