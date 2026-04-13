@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件夹重组工具 V6.0 — 使用教程</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232734;
+    --border: #2e3348;
+    --text: #e1e4ed;
+    --text2: #8b90a5;
+    --accent: #6c8cff;
+    --accent2: #4a6aef;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --orange: #fb923c;
+    --purple: #a78bfa;
+    --cyan: #22d3ee;
+    --pink: #f472b6;
+    --code-bg: #151822;
+    --radius: 12px;
+    --mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    position: relative;
+    padding: 80px 24px 60px;
+    text-align: center;
+    overflow: hidden;
+    background: linear-gradient(135deg, #0f1117 0%, #1a1040 50%, #0f1117 100%);
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(108,140,255,0.08) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(164,139,250,0.06) 0%, transparent 50%);
+    animation: heroPulse 8s ease-in-out infinite alternate;
+  }
+  @keyframes heroPulse {
+    0% { transform: scale(1) rotate(0deg); }
+    100% { transform: scale(1.05) rotate(2deg); }
+  }
+  .hero-content { position: relative; max-width: 800px; margin: 0 auto; }
+  .hero h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #6c8cff, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 16px;
+  }
+  .hero .subtitle {
+    font-size: 1.15rem;
+    color: var(--text2);
+    max-width: 600px;
+    margin: 0 auto 28px;
+  }
+  .hero .badges { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .badge.green { color: var(--green); border-color: rgba(74,222,128,0.3); }
+  .badge.blue { color: var(--accent); border-color: rgba(108,140,255,0.3); }
+  .badge.purple { color: var(--purple); border-color: rgba(167,139,250,0.3); }
+
+  /* ── Layout ── */
+  .container { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin: 48px auto;
+    max-width: 920px;
+  }
+  .toc h2 { font-size: 1.1rem; color: var(--accent); margin-bottom: 16px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 8px; }
+  .toc a {
+    color: var(--text);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .toc a:hover { color: var(--accent); }
+  .toc .sub { padding-left: 20px; list-style-type: disc; }
+  .toc .sub li { font-size: 0.92rem; color: var(--text2); margin-bottom: 4px; }
+
+  /* ── Sections ── */
+  section { margin: 56px auto; max-width: 920px; padding: 0 24px; }
+
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  h2 .step.easy { background: rgba(74,222,128,0.15); color: var(--green); }
+  h2 .step.medium { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  h2 .step.hard { background: rgba(248,113,113,0.15); color: var(--red); }
+  h2 .step.pro { background: rgba(167,139,250,0.15); color: var(--purple); }
+
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 28px 0 10px;
+    color: var(--text);
+  }
+
+  p { margin-bottom: 14px; color: var(--text); }
+  p.note { color: var(--text2); font-size: 0.92rem; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin: 20px 0;
+  }
+  .card.warn {
+    border-color: rgba(251,191,36,0.4);
+    background: rgba(251,191,36,0.05);
+  }
+  .card.danger {
+    border-color: rgba(248,113,113,0.4);
+    background: rgba(248,113,113,0.05);
+  }
+  .card.info {
+    border-color: rgba(108,140,255,0.4);
+    background: rgba(108,140,255,0.05);
+  }
+  .card.success {
+    border-color: rgba(74,222,128,0.4);
+    background: rgba(74,222,128,0.05);
+  }
+  .card-title {
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* ── Code Blocks ── */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    line-height: 1.65;
+    position: relative;
+  }
+  pre .prompt {
+    color: var(--green);
+    user-select: none;
+  }
+  pre .cmd { color: var(--text); }
+  pre .comment { color: var(--text2); font-style: italic; }
+  pre .flag { color: var(--cyan); }
+  pre .path { color: var(--yellow); }
+  pre .str { color: var(--orange); }
+  pre .output { color: var(--text2); }
+  pre .highlight { color: var(--accent); font-weight: 600; }
+  pre .warn-text { color: var(--yellow); }
+  pre .err-text { color: var(--red); }
+  pre .ok-text { color: var(--green); }
+
+  code {
+    font-family: var(--mono);
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-size: 0.88em;
+    color: var(--cyan);
+  }
+
+  /* ── Flow Diagram ── */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 16px 0;
+    padding: 16px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .flow-item {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .flow-arrow { color: var(--text2); font-size: 1.2rem; }
+  .flow-item.scan { background: rgba(108,140,255,0.15); color: var(--accent); }
+  .flow-item.analyze { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .flow-item.preview { background: rgba(34,211,238,0.15); color: var(--cyan); }
+  .flow-item.execute { background: rgba(248,113,113,0.15); color: var(--red); }
+  .flow-item.report { background: rgba(74,222,128,0.15); color: var(--green); }
+
+  /* ── Param Table ── */
+  .param-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.9rem;
+  }
+  .param-table th {
+    text-align: left;
+    padding: 10px 14px;
+    background: var(--surface2);
+    color: var(--text2);
+    font-weight: 600;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+  }
+  .param-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .param-table tr:last-child td { border-bottom: none; }
+  .param-table code {
+    font-size: 0.85em;
+  }
+
+  /* ── Difficulty Tag ── */
+  .diff {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .diff.easy { background: rgba(74,222,128,0.15); color: var(--green); }
+  .diff.medium { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .diff.hard { background: rgba(248,113,113,0.15); color: var(--red); }
+  .diff.pro { background: rgba(167,139,250,0.15); color: var(--purple); }
+
+  /* ── Scenario Box ── */
+  .scenario {
+    border-left: 3px solid var(--accent);
+    padding-left: 20px;
+    margin: 20px 0;
+  }
+  .scenario-title {
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: 6px;
+    color: var(--accent);
+  }
+  .scenario-desc { color: var(--text2); font-size: 0.92rem; margin-bottom: 12px; }
+
+  /* ── Tip Box ── */
+  .tip {
+    display: flex;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(108,140,255,0.08);
+    border-radius: 10px;
+    margin: 16px 0;
+    font-size: 0.92rem;
+  }
+  .tip-icon { font-size: 1.2rem; flex-shrink: 0; }
+  .tip-text { color: var(--text2); }
+  .tip-text strong { color: var(--text); }
+
+  /* ── Comparison ── */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .compare-col {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+  }
+  .compare-col h4 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .compare-col.before h4 { color: var(--red); }
+  .compare-col.after h4 { color: var(--green); }
+  .compare-col ul { padding-left: 18px; font-size: 0.9rem; }
+  .compare-col li { margin-bottom: 4px; color: var(--text2); }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text2);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+    margin-top: 80px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 1.8rem; }
+    .compare { grid-template-columns: 1fr; }
+    .flow { flex-direction: column; align-items: flex-start; }
+    .flow-arrow { transform: rotate(90deg); }
+    pre { font-size: 0.8rem; padding: 14px 16px; }
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ════════════════ HERO ════════════════ -->
+<div class="hero">
+  <div class="hero-content">
+    <h1>文件夹重组工具 V6.0</h1>
+    <p class="subtitle">从零开始，用真实场景教你整理文件。从一条命令到复杂流水线，每步都有完整示例。</p>
+    <div class="badges">
+      <span class="badge green">🛡️ 绝对防丢</span>
+      <span class="badge blue">🧵 多线程加速</span>
+      <span class="badge purple">🌐 离线分析</span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ TOC ════════════════ -->
+<div class="container">
+<nav class="toc">
+  <h2>📑 目录</h2>
+  <ol>
+    <li><a href="#s0">准备环境</a></li>
+    <li><a href="#s1">基础：查看一条命令的帮助</a></li>
+    <li><a href="#s2">第一课：扫描并查看目录诊断报告</a></li>
+    <li><a href="#s3">第二课：预览会做什么（不实际修改）</a></li>
+    <li><a href="#s4">第三课：执行清理（真正动手）</a></li>
+    <li><a href="#s5">进阶：清理缓存 + 去重 一条龙</a></li>
+    <li><a href="#s6">进阶：层级扁平化 — 把深层文件提到一层</a></li>
+    <li><a href="#s7">进阶：修复文件权限与属性</a></li>
+    <li><a href="#s8">进阶：离线分析（不在 Windows 上也能用）</a></li>
+    <li><a href="#s9">高级：复合操作流水线</a></li>
+    <li><a href="#s10">高级：多线程调优</a></li>
+    <li><a href="#s11">高级：导出报告 & 回滚</a></li>
+    <li><a href="#s12">参数速查表</a></li>
+    <li><a href="#s13">常见问题</a></li>
+  </ol>
+</nav>
+
+<!-- ════════════════ S0: 环境准备 ════════════════ -->
+<section id="s0">
+  <h2><span class="step easy">0</span> 准备环境</h2>
+  <p>你需要 <strong>Python 3.9+</strong>，推荐在 <strong>Windows</strong> 上以管理员身份运行（离线分析任意系统均可）。</p>
+
+  <h3>检查 Python 版本</h3>
+  <pre><span class="prompt">C:\&gt; </span><span class="cmd">python --version</span>
+<span class="output">Python 3.12.3</span></pre>
+
+  <h3>下载工具</h3>
+  <p>将 <code>文件夹重组工具V6.0.py</code> 放到任意目录，比如 <code>D:\tools\</code></p>
+
+  <h3>运行内置测试（确认工具正常）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--test</span></span>
+<span class="output">Ran 23 tests in 0.002s
+OK</span></pre>
+
+  <div class="card success">
+    <div class="card-title">✅ 看到 "OK" 就说明一切正常，可以开始使用了！</div>
+  </div>
+</section>
+
+<!-- ════════════════ S1: 帮助 ════════════════ -->
+<section id="s1">
+  <h2><span class="step easy">1</span> 查看帮助</h2>
+  <p>任何命令行工具，第一步永远是看帮助：</p>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">-h</span></span>
+<span class="output">usage: 文件夹重组工具V6.0.py [-h] [--from-list FILE [FILE ...]]
+                    [--diagnose] [--preview] [--execute] [-y]
+                    [--detect-zone] [--export FILE] [-v]
+                    [--extra-patterns ...] [--dedup-strategy ...]
+                    [--fix-attr ACTIONS] [--flatten [TARGET_DIR]]
+                    [--force-lock] [--threads N]
+                    [target]
+
+文件夹结构智能重组引擎 V6.0.0 (Windows + 离线分析 | 多线程加速)
+
+positional arguments:
+  target                目标目录路径 (在线模式)
+
+操作模式:
+  --diagnose            仅诊断，不修改
+  --preview             分析 + 预览操作清单
+  --execute             执行操作
+  -y, --yes             跳过确认
+  ...</span></pre>
+
+  <div class="tip">
+    <span class="tip-icon">💡</span>
+    <span class="tip-text"><strong>核心安全设计</strong>：不加 <code>--execute</code> 时，工具 <strong>永远不会修改任何文件</strong>。放心试！</span>
+  </div>
+</section>
+
+<!-- ════════════════ S2: 诊断 ════════════════ -->
+<section id="s2">
+  <h2><span class="step easy">2</span> 扫描并查看诊断报告</h2>
+  <p><span class="diff easy">入门</span> 只扫描，不分析，不修改。就像给目录做一次体检。</p>
+
+  <div class="scenario">
+    <div class="scenario-title">📋 场景：你有一个项目目录，想知道里面有多少文件、占多大空间</div>
+    <div class="scenario-desc">目录：<code>D:\Projects\my-app</code></div>
+  </div>
+
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--diagnose</span></span>
+<span class="output">
+🔍 扫描目录: D:\Projects\my-app
+
+=======================================================
+📊 目录诊断报告
+=======================================================
+  路径: D:\Projects\my-app
+  总项数: 12847 (文件 11203, 目录 1644)
+  总大小: 892.35 MB
+  最大深度: 9
+  符号链接: 0  |  Junction: 0  |  硬链接: 12
+  🔑 属性: 只读 3 / 隐藏 47 / Zone标识 5
+  ⚠️  超长路径 (>260字节): 23 个文件
+
+  📁 层级最深 (Top 5):
+    深度 9: D:\Projects\my-app\node_modules\...\index.js
+    ...
+
+  📦 体积最大目录 (Top 5):
+    234.5 MB: D:\Projects\my-app\node_modules
+    ...
+
+  📋 扩展名分布 (Top 10):
+    .js: 3421 个文件
+    .json: 1205 个文件
+    .ts: 892 个文件
+    ...
+=======================================================</span></pre>
+
+  <h3>加上 Zone 检测（找出从网上下载的文件）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--diagnose</span> <span class="flag">--detect-zone</span></span>
+<span class="output">  🔍 并行检测 Zone.Identifier (11203 个文件, 8 线程)...
+  发现 5 个含 Zone.Identifier 的文件</span></pre>
+
+  <div class="tip">
+    <span class="tip-icon">💡</span>
+    <span class="tip-text"><code>--detect-zone</code> 会多花几秒，但能帮你找出哪些文件是从网上下载的（带有安全标记）。</span>
+  </div>
+</section>
+
+<!-- ════════════════ S3: 预览 ════════════════ -->
+<section id="s3">
+  <h2><span class="step easy">3</span> 预览操作清单</h2>
+  <p><span class="diff easy">入门</span> 工具会分析你的目录，告诉你 <strong>它打算做什么</strong>，但 <strong>不会真的动手</strong>。</p>
+
+  <div class="scenario">
+    <div class="scenario-title">📋 场景：看看有哪些缓存目录和重复文件可以清理</div>
+    <div class="scenario-desc">目录：<code>D:\Projects\my-app</code></div>
+  </div>
+
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--preview</span></span>
+<span class="output">
+🔍 扫描目录: D:\Projects\my-app
+  ...
+
+🔧 分析文件结构...
+  缓存目录标记: 4823 项
+  重复文件标记: 156 项
+  冗余结构解包: 2 项
+
+📋 重复文件清单 (共 52 组):
+  组 1: 1.2 MB (SHA256: a3f5b8c9d2e1...)
+    ✅ 保留: D:\Projects\my-app\src\utils.js (深度 3)
+    🗑️ 删除: D:\Projects\my-app\backup\utils.js (深度 4)
+  ...
+
+📋 结构变更清单 (4981 项):
+-----------------------------------------------------------------
+    1. 🗑️ DELETE D:\Projects\my-app\node_modules (45.2 MB) [-]
+    2. 🗑️ DELETE D:\Projects\my-app\.pytest_cache [-]
+    ...
+-----------------------------------------------------------------
+
+💡 使用 --execute 参数执行实际操作</span></pre>
+
+  <div class="card info">
+    <div class="card-title">ℹ️ 注意输出最后的提示</div>
+    <p style="margin:8px 0 0;font-size:0.9rem;color:var(--text2)">它说"使用 --execute 参数执行实际操作"，意思是：上面只是 <strong>计划</strong>，还没有真正删除任何东西。</p>
+  </div>
+</section>
+
+<!-- ════════════════ S4: 执行 ════════════════ -->
+<section id="s4">
+  <h2><span class="step medium">4</span> 执行清理（真正动手）</h2>
+  <p><span class="diff medium">基础</span> 确认预览结果没问题后，加上 <code>--execute</code> 执行。</p>
+
+  <h3>方式一：交互确认（推荐）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--execute</span></span>
+<span class="output">...
+⚠️  即将执行 4981 项操作。确认？(yes/no): <span class="highlight">yes</span>
+
+  Phase 2: 移动操作...
+  Phase 3: 删除操作...
+    删除进度: 200/4823
+    删除进度: 400/4823
+    ...
+  Phase 4: 空目录清理...
+📝 操作日志: D:\Projects\my-app\.restructure_log\operations_20260413_151400.jsonl
+🔄 回滚脚本: D:\Projects\my-app\.restructure_log\rollback.py</span></pre>
+
+  <h3>方式二：跳过确认（脚本/批量场景）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--execute</span> <span class="flag">-y</span></span></pre>
+
+  <div class="card danger">
+    <div class="card-title">🛡️ 安全保障</div>
+    <p style="margin:8px 0 0;font-size:0.9rem;color:var(--text2)">
+      • 所有"删除"实际是移到 <code>.restructure_trash/</code>，随时可恢复<br>
+      • 每次执行自动生成 <code>rollback.py</code>，运行即可回滚全部操作<br>
+      • 如果同名文件已存在于回收站，自动追加时间戳，绝不覆盖
+    </p>
+  </div>
+</section>
+
+<!-- ════════════════ S5: 缓存+去重 ════════════════ -->
+<section id="s5">
+  <h2><span class="step medium">5</span> 进阶：清理缓存 + 去重一条龙</h2>
+  <p><span class="diff medium">进阶</span> 默认就会清理缓存目录和去重。你还可以自定义。</p>
+
+  <h3>追加自定义缓存模式</h3>
+  <div class="scenario">
+    <div class="scenario-title">📋 场景：除了内置的 30+ 种缓存目录，你想额外清理 "my_build" 和 "temp_output"</div>
+  </div>
+
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--extra-patterns</span> <span class="str">"my_build"</span> <span class="str">"temp_output"</span> <span class="flag">--preview</span></span></pre>
+
+  <h3>选择去重保留策略</h3>
+  <table class="param-table">
+    <tr><th>策略</th><th>参数</th><th>效果</th></tr>
+    <tr><td><strong>shallowest</strong>（默认）</td><td><code>--dedup-strategy shallowest</code></td><td>保留目录层级最浅的文件（通常是最"原始"的位置）</td></tr>
+    <tr><td><strong>newest</strong></td><td><code>--dedup-strategy newest</code></td><td>保留最后修改时间最新的文件</td></tr>
+  </table>
+
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--dedup-strategy</span> <span class="str">newest</span> <span class="flag">--execute</span> <span class="flag">-y</span></span></pre>
+
+  <h3>去重原理（三级哈希，V6.0 使用 SHA256）</h3>
+  <div class="flow">
+    <span class="flow-item scan">按文件大小分组</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item analyze">前 4KB SHA256</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item analyze">完整文件 SHA256</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item preview">标记删除</span>
+  </div>
+  <p class="note">只有三个阶段都匹配的文件才会被判定为重复。V6.0 升级为 SHA256，碰撞概率可忽略不计。</p>
+</section>
+
+<!-- ════════════════ S6: 扁平化 ════════════════ -->
+<section id="s6">
+  <h2><span class="step medium">6</span> 进阶：层级扁平化</h2>
+  <p><span class="diff medium">进阶</span> <span class="diff pro" style="margin-left:4px">V6.0 新增</span> 把深层嵌套的文件全部提取到一个平铺目录中。</p>
+
+  <div class="scenario">
+    <div class="scenario-title">📋 场景：把散落在 10 层子目录里的所有 PDF 提取到一个文件夹</div>
+  </div>
+
+  <h3>提取全部文件到默认目录（<code>_flattened</code>）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--flatten</span> <span class="flag">--execute</span> <span class="flag">-y</span></span>
+<span class="output">  📦 扁平化: 提取 892 个文件到 D:\Projects\_flattened</span></pre>
+
+  <h3>提取到指定目录</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--flatten</span> <span class="path">D:\AllPDFs</span> <span class="flag">--execute</span> <span class="flag">-y</span></span></pre>
+
+  <h3>冲突解决</h3>
+  <p>如果有同名文件，自动追加来源目录名：</p>
+  <div class="compare">
+    <div class="compare-col before">
+      <h4>🔴 扁平化前</h4>
+      <ul>
+        <li>D:\Projects\a\config.json</li>
+        <li>D:\Projects\b\config.json</li>
+        <li>D:\Projects\c\d\config.json</li>
+      </ul>
+    </div>
+    <div class="compare-col after">
+      <h4>🟢 扁平化后</h4>
+      <ul>
+        <li>D:\AllPDFs\config.json</li>
+        <li>D:\AllPDFs\config_from_b.json</li>
+        <li>D:\AllPDFs\config_from_d.json</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tip">
+    <span class="tip-icon">💡</span>
+    <span class="tip-text">扁平化前建议先用 <code>--preview</code> 看看会提取多少文件。也可以先用 <code>--diagnose</code> 了解目录结构。</span>
+  </div>
+</section>
+
+<!-- ════════════════ S7: 权限修复 ════════════════ -->
+<section id="s7">
+  <h2><span class="step medium">7</span> 进阶：修复文件权限与属性</h2>
+  <p><span class="diff medium">进阶</span> 修复只读、隐藏、Zone 标识等问题。</p>
+
+  <table class="param-table">
+    <tr><th>操作</th><th>参数值</th><th>作用</th></tr>
+    <tr><td>授予完全控制权</td><td><code>perm</code></td><td>用 <code>icacls</code> 给当前用户授权</td></tr>
+    <tr><td>去除只读属性</td><td><code>readonly</code></td><td>用 <code>attrib -R</code> 去除</td></tr>
+    <tr><td>去除隐藏属性</td><td><code>hidden</code></td><td>用 <code>attrib -H</code> 去除</td></tr>
+    <tr><td>清除网络标识</td><td><code>zone</code></td><td>删除 Zone.Identifier（网上下载的文件标记）</td></tr>
+    <tr><td>全部修复</td><td><code>all</code></td><td>以上全部</td></tr>
+  </table>
+
+  <h3>示例：清除所有文件的 Zone 标识</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Downloads</span> <span class="flag">--fix-attr</span> <span class="str">zone</span> <span class="flag">--execute</span> <span class="flag">-y</span></span>
+<span class="output">
+🌐 清除网络文件标识 (Zone.Identifier): 5 个文件
+  Zone 清除进度: 5/5</span></pre>
+
+  <h3>示例：组合修复</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--fix-attr</span> <span class="str">zone,readonly</span> <span class="flag">--execute</span> <span class="flag">-y</span></span></pre>
+
+  <div class="tip">
+    <span class="tip-icon">💡</span>
+    <span class="tip-text">权限修复可以和清理操作组合使用 — 见第 9 课"复合操作流水线"。</span>
+  </div>
+</section>
+
+<!-- ════════════════ S8: 离线分析 ════════════════ -->
+<section id="s8">
+  <h2><span class="step hard">8</span> 进阶：离线分析</h2>
+  <p><span class="diff hard">进阶</span> 不在 Windows 上？只需要一个文件列表，就能做完整的诊断分析。</p>
+
+  <h3>第一步：在目标机器上导出文件列表</h3>
+  <p><strong>推荐方式（不会截断长路径）：</strong></p>
+  <pre><span class="prompt">PS C:\&gt; </span><span class="cmd">(Get-ChildItem -Path <span class="str">'D:\'</span> -Recurse -Force).FullName | Out-File <span class="str">'list.txt'</span> -Encoding UTF8</span></pre>
+
+  <p><strong>或者用自定义格式（更精确，包含深度和类型）：</strong></p>
+  <pre><span class="prompt">PS C:\&gt; </span><span class="cmd"># 自定义格式，自动标记目录/文件
+Get-ChildItem -Path <span class="str">'D:\Projects'</span> -Recurse -Force | ForEach-Object {
+    $depth = ($_.FullName -split <span class="str">'\\'</span>).Count - 2
+    $type = if ($_.PSIsContainer) { <span class="str">'DIR'</span> } else { <span class="str">'FILE'</span> }
+    <span class="str">"[{$depth}] $($_.FullName) #$type"</span>
+} | Out-File <span class="str">'list_custom.txt'</span> -Encoding UTF8</span></pre>
+
+  <p>自定义格式长这样：</p>
+  <pre><span class="output">[{0}] D:\Projects #DIR
+[{1}] D:\Projects\src #DIR
+[{2}] D:\Projects\src\main.py #FILE
+[{2}] D:\Projects\src\utils.py #FILE
+[{1}] D:\Projects\tests #DIR</span></pre>
+
+  <h3>第二步：在任意系统上运行分析</h3>
+  <pre><span class="prompt">$ </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--from-list</span> <span class="path">list.txt</span></span>
+<span class="output">
+📂 加载文件列表: list.txt
+   有效路径: 155908 行, 截断跳过: 0, 表头/空行跳过: 0
+   检测到自定义格式，已解析类型: 15110 目录, 140798 文件
+
+   共 155908 条唯一路径
+   构建 155908 个节点 (140798 文件 + 15110 目录 + 0 隐含目录)
+🔧 分析文件结构...
+   分析完成 (2.71s)
+
+=================================================================
+📊 离线诊断报告 — 文件夹重组引擎 V6.0.0
+=================================================================
+  路径: D:\
+  总项数: 155908 (文件 140798, 目录 15110)
+  最大深度: 14
+  ...
+
+🔧 推荐操作:
+  🗑️ 垃圾文件 (.bc!/.td 等):  3 项
+  🗑️ 缓存目录/文件:            5727 项
+  🔄 冗余目录解包:             6 项
+  🗑️ 同名重复文件:             0 项
+
+  📊 总计可清理: 5730 项</span></pre>
+
+  <h3>支持多文件合并</h3>
+  <pre><span class="prompt">$ </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--from-list</span> <span class="path">list_part1.txt</span> <span class="path">list_part2.txt</span> <span class="path">list_part3.txt</span></span></pre>
+
+  <h3>导出为 JSON 报告</h3>
+  <pre><span class="prompt">$ </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--from-list</span> <span class="path">list.txt</span> <span class="flag">--export</span> <span class="path">report.json</span></span>
+<span class="output">📄 JSON 报告已导出: report.json</span></pre>
+
+  <div class="card warn">
+    <div class="card-title">⚠️ 截断警告</div>
+    <p style="margin:8px 0 0;font-size:0.9rem;color:var(--text2)">
+      如果你用 <code>dir /s /b</code> 或 PowerShell 默认宽度导出，长路径会被截断（以 <code>...</code> 结尾）。工具会自动检测并跳过截断行，但数据不完整。<br>
+      <strong>请务必使用 <code>Out-File</code> 方式导出。</strong>
+    </p>
+  </div>
+</section>
+
+<!-- ════════════════ S9: 复合操作 ════════════════ -->
+<section id="s9">
+  <h2><span class="step hard">9</span> 高级：复合操作流水线</h2>
+  <p><span class="diff hard">高级</span> 把多个操作组合在一条命令里，一次搞定。</p>
+
+  <h3>组合 1：诊断 + 清理缓存 + 去重 + 解包 + 修复权限</h3>
+  <div class="scenario">
+    <div class="scenario-title">📋 场景：全面整理一个项目目录</div>
+    <div class="scenario-desc">清理缓存 → 去重 → 解包冗余目录 → 清除 Zone 标识 → 去除只读</div>
+  </div>
+
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects\my-app</span> <span class="flag">--fix-attr</span> <span class="str">zone,readonly</span> <span class="flag">--execute</span> <span class="flag">-y</span></span>
+<span class="output">
+🔍 扫描目录: D:\Projects\my-app
+  🔍 并行检测 Zone.Identifier (11203 个文件, 8 线程)...
+  发现 5 个含 Zone.Identifier 的文件
+
+🔧 分析文件结构...
+  缓存目录标记: 4823 项
+  重复文件标记: 156 项
+  冗余结构解包: 2 项
+
+🌐 清除网络文件标识 (Zone.Identifier): 5 个文件
+🔓 去除只读属性: 3 个文件
+
+📋 结构变更清单 (4981 项):
+    ...
+
+  Phase 2: 移动操作...
+  Phase 3: 删除操作...
+    删除进度: 200/4823
+    ...
+  Phase 4: 空目录清理...
+
+==================================================
+📊 操作报告
+==================================================
+  ✅ 成功处理: 5142 项
+  🗑️ 移入回收站: 4981 项
+==================================================
+🔄 回滚脚本: D:\Projects\my-app\.restructure_log\rollback.py</span></pre>
+
+  <h3>组合 2：离线分析 + 导出 JSON</h3>
+  <pre><span class="prompt">$ </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--from-list</span> <span class="path">server_list.txt</span> <span class="flag">--extra-patterns</span> <span class="str">"build_output"</span> <span class="str">".gradle"</span> <span class="flag">--export</span> <span class="path">server_report.json</span></span></pre>
+
+  <h3>组合 3：扁平化 + 清理（先提文件，再清垃圾）</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd"><span class="comment">REM 第一步：把所有文件提到 _flattened</span>
+python 文件夹重组工具V6.0.py <span class="path">D:\MessyDir</span> <span class="flag">--flatten</span> <span class="flag">--execute</span> <span class="flag">-y</span>
+
+<span class="comment">REM 第二步：清理 _flattened 里的缓存和重复</span>
+python 文件夹重组工具V6.0.py <span class="path">D:\MessyDir\_flattened</span> <span class="flag">--execute</span> <span class="flag">-y</span></span></pre>
+
+  <div class="card info">
+    <div class="card-title">ℹ️ 操作顺序</div>
+    <p style="margin:8px 0 0;font-size:0.9rem;color:var(--text2)">
+      工具内部的执行顺序：<br>
+      ① 权限/属性修复 → ② 移动操作 → ③ 删除操作 → ④ 空目录清理<br>
+      你不需要操心顺序，工具会自动安排。
+    </p>
+  </div>
+</section>
+
+<!-- ════════════════ S10: 多线程 ════════════════ -->
+<section id="s10">
+  <h2><span class="step pro">10</span> 高级：多线程调优</h2>
+  <p><span class="diff pro">高级</span> V6.0 默认使用 <code>min(8, CPU核心数)</code> 个线程。你可以手动调整。</p>
+
+  <table class="param-table">
+    <tr><th>场景</th><th>推荐线程数</th><th>命令</th></tr>
+    <tr><td>SSD + 大量小文件</td><td>8 ~ 16</td><td><code>--threads 12</code> 或 <code>-j 12</code></td></tr>
+    <tr><td>HDD 机械硬盘</td><td>2 ~ 4</td><td><code>-j 2</code></td></tr>
+    <tr><td>默认（自动检测）</td><td>自动</td><td>不加 <code>--threads</code></td></tr>
+  </table>
+
+  <pre><span class="comment"># SSD 上使用 16 线程加速</span>
+<span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\BigProject</span> <span class="flag">--execute</span> <span class="flag">-j</span> <span class="highlight">16</span> <span class="flag">-y</span>
+
+<span class="comment"># HDD 上保守使用 2 线程</span>
+<span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">E:\OldDisk</span> <span class="flag">--execute</span> <span class="flag">-j</span> <span class="highlight">2</span> <span class="flag">-y</span></span></span></pre>
+
+  <h3>哪些阶段会并行？</h3>
+  <div class="flow">
+    <span class="flow-item scan">目录扫描（单线程）</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item analyze">Zone 检测（多线程）</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item analyze">哈希去重（多线程）</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-item execute">移动/删除（多线程）</span>
+  </div>
+</section>
+
+<!-- ════════════════ S11: 导出+回滚 ════════════════ -->
+<section id="s11">
+  <h2><span class="step pro">11</span> 高级：导出报告 & 回滚</h2>
+  <p><span class="diff pro">高级</span></p>
+
+  <h3>导出诊断报告</h3>
+  <pre><span class="comment"># 在线模式：导出为 CSV（Excel 可直接打开）</span>
+<span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--diagnose</span> <span class="flag">--export</span> <span class="path">report.csv</span>
+
+<span class="comment"># 在线模式：导出为 JSON</span>
+<span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--diagnose</span> <span class="flag">--export</span> <span class="path">report.json</span>
+
+<span class="comment"># 离线模式：仅支持 JSON</span>
+<span class="prompt">$ </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="flag">--from-list</span> <span class="path">list.txt</span> <span class="flag">--export</span> <span class="path">report.json</span></span></span></span></pre>
+
+  <h3>回滚操作</h3>
+  <p>每次 <code>--execute</code> 执行后，会在 <code>.restructure_log/</code> 目录生成：</p>
+  <ul style="padding-left:20px;margin-bottom:16px;">
+    <li><code>operations_*.jsonl</code> — 操作日志（每行一条 JSON 记录）</li>
+    <li><code>rollback.py</code> — 自动回滚脚本</li>
+  </ul>
+
+  <p><strong>执行回滚：</strong></p>
+  <pre><span class="prompt">D:\Projects\my-app\.restructure_log&gt; </span><span class="cmd">python rollback.py</span>
+<span class="output">✅ 回滚完成: 恢复 4981 项, 失败 0 项</span></pre>
+
+  <div class="card success">
+    <div class="card-title">🛡️ V6.0 回滚脚本改进</div>
+    <p style="margin:8px 0 0;font-size:0.9rem;color:var(--text2)">
+      V5.3 生成 <code>.bat</code> 文件，文件名含特殊字符（<code>&amp; | &gt; &lt;</code>）时会导致命令注入。<br>
+      V6.0 改为生成 <code>.py</code> 文件，使用 <code>shutil.move()</code> 恢复，天然免疫特殊字符。
+    </p>
+  </div>
+
+  <h3>误删了文件？三种恢复方式</h3>
+  <table class="param-table">
+    <tr><th>方式</th><th>操作</th><th>适用场景</th></tr>
+    <tr><td>① 回滚脚本</td><td><code>python rollback.py</code></td><td>恢复全部操作</td></tr>
+    <tr><td>② 手动找回</td><td>从 <code>.restructure_trash/</code> 复制</td><td>恢复个别文件</td></tr>
+    <tr><td>③ 操作日志</td><td>查看 <code>operations_*.jsonl</code></td><td>定位具体文件的新位置</td></tr>
+  </table>
+</section>
+
+<!-- ════════════════ S12: 参数速查 ════════════════ -->
+<section id="s12">
+  <h2><span class="step easy">12</span> 参数速查表</h2>
+  <table class="param-table">
+    <tr><th>参数</th><th>缩写</th><th>说明</th><th>默认值</th></tr>
+    <tr><td><code>--diagnose</code></td><td>—</td><td>仅诊断，不修改</td><td>—</td></tr>
+    <tr><td><code>--preview</code></td><td>—</td><td>分析 + 预览操作清单</td><td>—</td></tr>
+    <tr><td><code>--execute</code></td><td>—</td><td>执行操作（需确认）</td><td>—</td></tr>
+    <tr><td><code>--yes</code></td><td><code>-y</code></td><td>跳过确认</td><td>否</td></tr>
+    <tr><td><code>--detect-zone</code></td><td>—</td><td>扫描时检测 Zone.Identifier</td><td>否</td></tr>
+    <tr><td><code>--export FILE</code></td><td>—</td><td>导出报告 (CSV/JSON)</td><td>—</td></tr>
+    <tr><td><code>--verbose</code></td><td><code>-v</code></td><td>详细输出</td><td>否</td></tr>
+    <tr><td><code>--extra-patterns</code></td><td>—</td><td>额外的缓存匹配模式</td><td>—</td></tr>
+    <tr><td><code>--dedup-strategy</code></td><td>—</td><td>去重保留策略: shallowest|newest</td><td>shallowest</td></tr>
+    <tr><td><code>--fix-attr</code></td><td>—</td><td>修复权限/属性</td><td>—</td></tr>
+    <tr><td><code>--flatten</code></td><td>—</td><td>层级扁平化 <span class="diff pro" style="font-size:0.65rem">V6.0</span></td><td>—</td></tr>
+    <tr><td><code>--threads N</code></td><td><code>-j N</code></td><td>并行线程数</td><td>auto</td></tr>
+    <tr><td><code>--from-list</code></td><td>—</td><td>离线模式：从文件列表分析</td><td>—</td></tr>
+    <tr><td><code>--force-lock</code></td><td>—</td><td>强制清除锁文件</td><td>否</td></tr>
+    <tr><td><code>--test</code></td><td>—</td><td>运行内置测试</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- ════════════════ S13: FAQ ════════════════ -->
+<section id="s13">
+  <h2><span class="step easy">13</span> 常见问题</h2>
+
+  <h3>Q: 我不小心删了重要文件，怎么办？</h3>
+  <div class="card success">
+    <p style="font-size:0.92rem">别慌。所有"删除"都在 <code>.restructure_trash/</code> 里：<br>
+    ① 运行 <code>python .restructure_log\rollback.py</code> 回滚全部操作<br>
+    ② 或者手动从 <code>.restructure_trash\</code> 复制你需要的文件</p>
+  </div>
+
+  <h3>Q: 工具说"目录被锁定"怎么办？</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--force-lock</span> <span class="flag">--execute</span></span></pre>
+
+  <h3>Q: 我只想看看有多少重复文件，不想删？</h3>
+  <pre><span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">D:\Projects</span> <span class="flag">--preview</span></span>
+<span class="output">  <span class="comment"># 会显示重复文件清单，但不会修改任何文件</span></span></pre>
+
+  <h3>Q: 为什么离线模式的重复文件显示 0 项删除？</h3>
+  <div class="card info">
+    <p style="font-size:0.92rem">V6.0 的安全改进：离线模式如果没有文件大小数据，同名文件 <strong>不会被自动标记删除</strong>，而是标记为"同名疑似重复，请手动确认"。这是为了避免 1GB 视频和 1KB 空文件被误判为重复。</p>
+  </div>
+
+  <h3>Q: HDD 上跑得太慢？</h3>
+  <pre><span class="comment"># 机械硬盘建议减少线程数</span>
+<span class="prompt">D:\tools&gt; </span><span class="cmd">python 文件夹重组工具V6.0.py <span class="path">E:\Data</span> <span class="flag">--execute</span> <span class="flag">-j</span> <span class="highlight">2</span> <span class="flag">-y</span></span></pre>
+
+  <h3>Q: 路径被截断警告</h3>
+  <p>用 PowerShell 重新导出（不会截断）：</p>
+  <pre><span class="prompt">PS C:\&gt; </span><span class="cmd">(Get-ChildItem -Path <span class="str">'D:\'</span> -Recurse -Force).FullName | Out-File <span class="str">'list.txt'</span> -Encoding UTF8</span></pre>
+
+  <h3>Q: 可以在 Linux/Mac 上用吗？</h3>
+  <div class="card info">
+    <p style="font-size:0.92rem">
+      <strong>在线模式</strong>（直接操作文件）：仅支持 Windows。<br>
+      <strong>离线模式</strong>（<code>--from-list</code>）：任意平台，只需要 Python 3.9+。<br>
+      先在 Windows 上导出文件列表，然后拷贝到 Linux/Mac 上分析。
+    </p>
+  </div>
+</section>
+
+</div><!-- /container -->
+
+<footer>
+  <p>文件夹结构智能重组引擎 <a href="#">V6.0.0</a> · 2026-04-13</p>
+  <p style="margin-top:6px">🛡️ 绝对防丢 · 极度容错 · 用户可控</p>
+</footer>
+
+</body>
+</html>

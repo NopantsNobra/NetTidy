@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V5.3 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V6.0 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
 默认为预览模式，必须显式确认才执行物理操作。
 
-V5.3 相比 V5.2 核心变更：
-- 全面多线程支持：诊断、去重、执行三大阶段均可并行
-- 自动线程数：根据 CPU 核心数自动选择线程数（默认 min(8, cpu_count)）
-- Zone 检测并行化：批量并行检测 Zone.Identifier，不再拖慢扫描
-- 去重哈希并行化：QuickHash / FullHash 批量并行计算
-- 移动/删除并行化：IO 操作多线程并发执行
-- 线程安全：所有共享状态通过 Lock 保护
+V6.0 相比 V5.3 核心变更：
+- 安全修复：回滚脚本改为 Python (.py)，彻底杜绝命令注入
+- 安全修复：回收站路径冲突检测，防止同名文件覆盖
+- 安全修复：离线去重增加文件大小比对，不再仅凭文件名判断重复
+- 安全修复：哈希算法从 MD5 升级为 SHA256
+- 新功能：--flatten 参数激活层级扁平化引擎
+- 改进：IO 操作增加重试机制（3次重试，500ms间隔）
+- 改进：硬链接纳入去重候选，保留硬链接节省空间
+- 完善：补充全面的单元测试
 
 环境要求: Windows 7+ / Python 3.9+ / 管理员权限(推荐)
 离线模式: 任意平台 / Python 3.9+ / 仅需文件列表
@@ -73,7 +75,7 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "5.3.0"
+VERSION = "6.0.0"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
@@ -390,7 +392,7 @@ class FileNode:
             fp = wp if os.path.exists(wp) else self.full_path
             with open(fp, "rb") as f:
                 data = f.read(QUICK_HASH_SIZE)
-            self._quick_hash = hashlib.md5(data).hexdigest()
+            self._quick_hash = hashlib.sha256(data).hexdigest()
         except (OSError, IOError):
             self._quick_hash = ""
         return self._quick_hash
@@ -404,7 +406,7 @@ class FileNode:
         try:
             wp = _win_path(self.full_path)
             fp = wp if os.path.exists(wp) else self.full_path
-            h = hashlib.md5()
+            h = hashlib.sha256()
             with open(fp, "rb") as f:
                 while chunk := f.read(65536):
                     h.update(chunk)
@@ -1126,9 +1128,9 @@ class EliminationEngine:
                         break
 
     def deduplicate(self, strategy: str = "shallowest") -> int:
+        # 不再排除硬链接，而是纳入候选；在去重组中优先保留硬链接（不占额外空间）
         files = [n for n in self.nodes
-                 if not n.is_dir and n.action == NodeAction.NONE
-                 and n.reparse_type != ReparseType.HARDLINK]
+                 if not n.is_dir and n.action == NodeAction.NONE]
 
         size_groups: Dict[int, List[FileNode]] = defaultdict(list)
         for f in files:
@@ -1202,7 +1204,11 @@ class EliminationEngine:
                 if len(fgroup) < 2:
                     continue
 
-                if strategy == "shallowest":
+                # 优先保留硬链接（不占额外磁盘空间）
+                hard_link_nodes = [f for f in fgroup if f.reparse_type == ReparseType.HARDLINK]
+                if hard_link_nodes:
+                    keep = hard_link_nodes[0]
+                elif strategy == "shallowest":
                     keep = min(fgroup, key=lambda n: n.depth)
                 else:
                     keep = max(fgroup, key=lambda n: n.last_modified)
@@ -1485,27 +1491,35 @@ class ExecutionEngine:
         target_dir = os.path.dirname(target)
         os.makedirs(target_dir, exist_ok=True)
 
-        try:
-            if Win32IO.exists(target):
-                target = self._resolve_conflict(target)
-                node.target_path = target
+        last_error = None
+        for attempt in range(3):
+            try:
+                if Win32IO.exists(target):
+                    target = self._resolve_conflict(target)
+                    node.target_path = target
 
-            if not Win32IO.move(node.full_path, target):
-                src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
-                dst_wp = _win_path(target)
-                shutil.copy2(src_wp, dst_wp)
-                Win32IO.delete_file(node.full_path)
+                if not Win32IO.move(node.full_path, target):
+                    src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
+                    dst_wp = _win_path(target)
+                    shutil.copy2(src_wp, dst_wp)
+                    Win32IO.delete_file(node.full_path)
 
-            with self._lock:
-                self._log_op("MOVE", node.full_path, target)
-                node.status = NodeStatus.SUCCESS
-                self.stats["success"] += 1
-        except OSError as e:
-            with self._lock:
-                node.status = NodeStatus.LOCKED
-                node.error_msg = str(e)
-                self.stats["locked"] += 1
-                self.errors.add(node.full_path, "MoveFailed", str(e))
+                with self._lock:
+                    self._log_op("MOVE", node.full_path, target)
+                    node.status = NodeStatus.SUCCESS
+                    self.stats["success"] += 1
+                return
+            except OSError as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(0.5)  # 重试间隔 500ms
+                    continue
+                # 最后一次重试失败
+                with self._lock:
+                    node.status = NodeStatus.LOCKED
+                    node.error_msg = str(e)
+                    self.stats["locked"] += 1
+                    self.errors.add(node.full_path, "MoveFailed", str(e))
 
     def _process_delete(self, node: FileNode, dry_run: bool):
         if not Win32IO.exists(node.full_path):
@@ -1520,27 +1534,35 @@ class ExecutionEngine:
                 self.stats["success"] += 1
             return
 
-        try:
-            trash_target = self._get_trash_path(node.full_path)
-            os.makedirs(os.path.dirname(trash_target), exist_ok=True)
+        last_error = None
+        for attempt in range(3):
+            try:
+                trash_target = self._get_trash_path(node.full_path)
+                os.makedirs(os.path.dirname(trash_target), exist_ok=True)
 
-            if not Win32IO.move(node.full_path, trash_target):
-                src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
-                dst_wp = _win_path(trash_target)
-                shutil.copy2(src_wp, dst_wp)
-                Win32IO.delete_file(node.full_path)
+                if not Win32IO.move(node.full_path, trash_target):
+                    src_wp = _win_path(node.full_path) if Win32IO.exists(node.full_path) else node.full_path
+                    dst_wp = _win_path(trash_target)
+                    shutil.copy2(src_wp, dst_wp)
+                    Win32IO.delete_file(node.full_path)
 
-            with self._lock:
-                self._log_op("DELETE", node.full_path, trash_target, status="TRASHED")
-                node.status = NodeStatus.TRASHED
-                self.stats["success"] += 1
-                self.stats["trashed"] += 1
-        except OSError as e:
-            with self._lock:
-                node.status = NodeStatus.LOCKED
-                node.error_msg = str(e)
-                self.stats["locked"] += 1
-                self.errors.add(node.full_path, "DeleteFailed", str(e))
+                with self._lock:
+                    self._log_op("DELETE", node.full_path, trash_target, status="TRASHED")
+                    node.status = NodeStatus.TRASHED
+                    self.stats["success"] += 1
+                    self.stats["trashed"] += 1
+                return
+            except OSError as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(0.5)  # 重试间隔 500ms
+                    continue
+                # 最后一次重试失败
+                with self._lock:
+                    node.status = NodeStatus.LOCKED
+                    node.error_msg = str(e)
+                    self.stats["locked"] += 1
+                    self.errors.add(node.full_path, "DeleteFailed", str(e))
 
     def _cleanup_empty_dirs(self):
         dirs = sorted(
@@ -1574,7 +1596,16 @@ class ExecutionEngine:
             rel = os.path.relpath(original_path, self.root_path)
         except ValueError:
             rel = os.path.basename(original_path)
-        return os.path.join(self.trash_dir, rel)
+        target = os.path.join(self.trash_dir, rel)
+        # 防止同名文件覆盖：如果目标已存在，追加时间戳后缀
+        if Win32IO.exists(target):
+            base, ext = os.path.splitext(target)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            target = f"{base}_{ts}{ext}"
+            # 如果仍存在（极小概率），追加 UUID
+            if Win32IO.exists(target):
+                target = f"{base}_{ts}_{uuid.uuid4().hex[:6]}{ext}"
+        return target
 
     def _log_op(self, action: str, source: str, target: str, status: str = "SUCCESS"):
         # 注意: 调用方需确保线程安全 (在 self._lock 内调用)
@@ -1618,20 +1649,25 @@ class ExecutionEngine:
 
     def generate_rollback_script(self) -> str:
         if not self.op_logs:
-            return "@echo off\nrem 无操作记录，无需回滚\n"
+            return "#!/usr/bin/env python3\n# 无操作记录，无需回滚\nimport sys\nsys.exit(0)\n"
 
-        mkdir_dirs: Set[str] = set()
         lines = [
-            "@echo off",
-            "chcp 65001 >nul",
-            "rem ============================================",
-            "rem 回滚脚本 - 自动生成",
-            f"rem 生成时间: {datetime.now().isoformat()}",
-            f"rem 共 {len(self.op_logs)} 条操作记录",
-            "rem ============================================",
-            "",
+            '#!/usr/bin/env python3',
+            '"""回滚脚本 - 自动生成"""',
+            f'# 生成时间: {datetime.now().isoformat()}',
+            f'# 共 {len(self.op_logs)} 条操作记录',
+            '',
+            'import os',
+            'import shutil',
+            'import sys',
+            '',
+            'def main():',
+            '    restored = 0',
+            '    errors = 0',
+            '',
         ]
 
+        mkdir_dirs: Set[str] = set()
         for entry in reversed(self.op_logs):
             if entry.action in ("MOVE", "DELETE"):
                 src_dir = os.path.dirname(entry.source)
@@ -1639,25 +1675,35 @@ class ExecutionEngine:
                     mkdir_dirs.add(src_dir)
 
         for d in sorted(mkdir_dirs):
-            safe_d = d.replace('"', '""')
-            lines.append(f'mkdir "{safe_d}" 2>nul')
+            lines.append(f'    os.makedirs(r{chr(34)}{d}{chr(34)}, exist_ok=True)')
 
-        lines.append("")
-        lines.append("rem --- 操作回滚 ---")
+        lines.append('')
+        lines.append('    # --- 操作回滚 ---')
 
         for entry in reversed(self.op_logs):
-            src = entry.source.replace('"', '""')
-            dst = entry.target.replace('"', '""')
-            if entry.action == "MOVE":
-                lines.append(f'move /Y "{dst}" "{src}"')
-            elif entry.action == "DELETE":
-                lines.append(f'move /Y "{dst}" "{src}"')
+            if entry.action in ("MOVE", "DELETE"):
+                lines.append(f'    try:')
+                lines.append(f'        shutil.move(r{chr(34)}{entry.target}{chr(34)}, r{chr(34)}{entry.source}{chr(34)})')
+                lines.append(f'        restored += 1')
+                lines.append(f'    except Exception as e:')
+                lines.append(f'        print(f"❌ 回滚失败: {entry.source} — {{e}}")')
+                lines.append(f'        errors += 1')
+                lines.append('')
             elif entry.action == "RMDIR":
-                lines.append(f'mkdir "{src}" 2>nul')
+                lines.append(f'    try:')
+                lines.append(f'        os.makedirs(r{chr(34)}{entry.source}{chr(34)}, exist_ok=True)')
+                lines.append(f'        restored += 1')
+                lines.append(f'    except Exception as e:')
+                lines.append(f'        print(f"❌ 目录重建失败: {entry.source} — {{e}}")')
+                lines.append(f'        errors += 1')
+                lines.append('')
 
-        lines.append("")
-        lines.append('echo ✅ 回滚完成')
-        return "\r\n".join(lines)
+        lines.append('    print(f"✅ 回滚完成: 恢复 {restored} 项, 失败 {errors} 项")')
+        lines.append('    return 0 if errors == 0 else 1')
+        lines.append('')
+        lines.append('if __name__ == "__main__":')
+        lines.append('    sys.exit(main())')
+        return '\n'.join(lines)
 
     def generate_report(self) -> str:
         lines = [
@@ -1702,7 +1748,7 @@ def _truncate_name(name: str, max_bytes: int) -> str:
 
     base, ext = os.path.splitext(name)
     ext_bytes = len(ext.encode("utf-8"))
-    name_hash = hashlib.md5(name.encode("utf-8")).hexdigest()[:8]
+    name_hash = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
     hash_suffix = f"_{name_hash}"
     hash_bytes = len(hash_suffix.encode("utf-8"))
 
@@ -2125,7 +2171,7 @@ class OfflineEliminationEngine:
                         break
 
     def deduplicate_by_name(self) -> int:
-        """基于文件名的离线去重"""
+        """基于文件名的离线去重（V6.0: 增加文件大小比对）"""
         files = [n for n in self.nodes if not n.is_dir and n.action == NodeAction.NONE]
 
         name_groups: Dict[str, List[VirtualFileNode]] = defaultdict(list)
@@ -2137,20 +2183,41 @@ class OfflineEliminationEngine:
             if len(group) < 2:
                 continue
 
-            keep = min(group, key=lambda n: n.depth)
-            group.sort(key=lambda n: n.depth)
+            # 检查是否有 size_bytes 数据可用
+            has_size_data = any(n.size_bytes > 0 for n in group)
 
-            self.duplicate_groups.append({
-                "name": name,
-                "keep": keep.full_path,
-                "delete": [n.full_path for n in group if n.full_path != keep.full_path],
-            })
+            if has_size_data:
+                # 按大小分组，只有同名且同大小才视为真正的重复
+                size_subgroups: Dict[int, List[VirtualFileNode]] = defaultdict(list)
+                for n in group:
+                    size_subgroups[n.size_bytes].append(n)
 
-            for n in group:
-                if n.full_path != keep.full_path:
-                    n.action = NodeAction.DELETE
-                    n.reason = f"同名重复 (保留: 深度{keep.depth})"
-                    dup_count += 1
+                for size, subgroup in size_subgroups.items():
+                    if len(subgroup) < 2:
+                        continue
+                    keep = min(subgroup, key=lambda n: n.depth)
+                    self.duplicate_groups.append({
+                        "name": name,
+                        "size": size,
+                        "keep": keep.full_path,
+                        "delete": [n.full_path for n in subgroup if n.full_path != keep.full_path],
+                    })
+                    for n in subgroup:
+                        if n.full_path != keep.full_path:
+                            n.action = NodeAction.DELETE
+                            n.reason = f"同名同大小重复 (保留: 深度{keep.depth})"
+                            dup_count += 1
+            else:
+                # 无大小数据：标记为"需人工确认"，不自动删除
+                for n in group:
+                    if n.action == NodeAction.NONE:
+                        n.reason = "同名疑似重复，请手动确认"
+                        self.duplicate_groups.append({
+                            "name": name,
+                            "size": None,
+                            "keep": n.full_path,
+                            "delete": [m.full_path for m in group if m.full_path != n.full_path],
+                        })
 
         return dup_count
 
@@ -2280,8 +2347,8 @@ class FolderRestructureEngine:
             print(engine.generate_report())
 
             rollback = engine.generate_rollback_script()
-            rollback_path = os.path.join(self.log_dir, "rollback.bat")
-            with open(rollback_path, "w", encoding="utf-8-sig") as f:
+            rollback_path = os.path.join(self.log_dir, "rollback.py")
+            with open(rollback_path, "w", encoding="utf-8") as f:
                 f.write(rollback)
             print(f"🔄 回滚脚本: {rollback_path}")
 
@@ -2345,7 +2412,8 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
                          cache_count: int, junk_count: int,
                          dup_count: int, dup_groups: List[Dict],
                          unpacked: int, nodes: List[VirtualFileNode],
-                         truncated_count: int, skipped_count: int):
+                         truncated_count: int, skipped_count: int,
+                         flatten_count: int = 0):
     sep_line = "=" * 65
     print(f"\n{sep_line}")
     print(f"📊 离线诊断报告 — 文件夹重组引擎 V{VERSION}")
@@ -2390,6 +2458,8 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
     print(f"  🗑️ 缓存目录/文件:            {cache_count} 项")
     print(f"  🔄 冗余目录解包:             {unpacked} 项")
     print(f"  🗑️ 同名重复文件:             {dup_count} 项")
+    if flatten_count:
+        print(f"  📦 可扁平化文件:             {flatten_count} 项")
 
     total_delete = junk_count + cache_count + dup_count
     print(f"\n  📊 总计可清理: {total_delete} 项")
@@ -2425,6 +2495,8 @@ def print_offline_report(stats: Dict, parse_stats: Dict,
     print(f"✅ 诊断完成")
     print(f"   可删除: {total_delete} 项")
     print(f"   可移动(解包): {moved} 项")
+    if flatten_count:
+        print(f"   可扁平化: {flatten_count} 项")
     print(f"   无操作: {sum(1 for n in nodes if n.action == NodeAction.NONE)} 项")
     print(sep_line)
 
@@ -2461,6 +2533,10 @@ def main():
 
   # 全部权限修复 (仅 Windows)
   python folder_restructure.py D:\\Projects --fix-attr all --execute
+
+  # 层级扁平化 (仅 Windows)
+  python folder_restructure.py D:\\Projects --flatten --execute
+  python folder_restructure.py D:\\Projects --flatten D:\\Flattened --execute
 
   # 指定线程数 (默认自动检测 CPU 核心数，最多 8 线程)
   python folder_restructure.py D:\\Projects --execute --threads 12
@@ -2499,6 +2575,10 @@ def main():
     # 权限修复
     parser.add_argument("--fix-attr", metavar="ACTIONS",
                        help="修复权限/属性: perm,readonly,hidden,zone,all")
+
+    # 扁平化
+    parser.add_argument("--flatten", nargs="?", const="", metavar="TARGET_DIR",
+                       help="层级扁平化：提取文件到单层目录 (默认: 目标目录下的 _flattened)")
 
     # 安全
     parser.add_argument("--force-lock", action="store_true", help="强制清除锁文件")
@@ -2549,12 +2629,18 @@ def main():
         restruct = OfflineRestructureEngine(nodes, root)
         unpacked = restruct.unpack_redundant()
 
+        # 离线扁平化 (预览)
+        flatten_count = 0
+        if args.flatten is not None:
+            flatten_count = sum(1 for n in nodes if not n.is_dir and n.action == NodeAction.NONE)
+
         elapsed = time.time() - t0
         print(f"   分析完成 ({elapsed:.2f}s)")
 
         print_offline_report(stats, parse_stats, cache_count, junk_count,
                             dup_count, dup_groups, unpacked, nodes,
-                            parser_obj.total_truncated, parser_obj.total_skipped)
+                            parser_obj.total_truncated, parser_obj.total_skipped,
+                            flatten_count=flatten_count)
 
         # JSON 导出
         if args.export:
@@ -2571,6 +2657,7 @@ def main():
                         "junk_cleanup": junk_count,
                         "duplicates": dup_count,
                         "redundant_unpack": unpacked,
+                        "flatten_candidates": flatten_count,
                     },
                     "duplicate_groups": dup_groups[:50],
                 }
@@ -2644,12 +2731,22 @@ def main():
         print(f"  重复文件标记: {analysis['duplicates_marked']} 项")
         print(f"  冗余结构解包: {analysis['redundant_unpacked']} 项")
 
+        # 扁平化
+        flatten_count = 0
+        if args.flatten is not None:
+            flatten_target = args.flatten if args.flatten else os.path.join(engine.target_path, "_flattened")
+            print(f"\n📦 层级扁平化: 目标目录 = {flatten_target}")
+            flatten_engine = FlattenEngine(engine.nodes, engine.target_path, engine.errors)
+            flatten_engine.extract_files(flatten_target)
+            flatten_count = sum(1 for n in engine.nodes if n.action == NodeAction.MOVE and n.target_path)
+            print(f"  扁平化文件: {flatten_count} 项")
+
         # 去重预览
         dup_groups = engine.get_duplicate_preview()
         if dup_groups:
             print(f"\n📋 重复文件清单 (共 {len(dup_groups)} 组):")
             for g in dup_groups[:20]:
-                print(f"  组 {g['group_id']}: {g['size']} (MD5: {g['hash']}...)")
+                print(f"  组 {g['group_id']}: {g['size']} (SHA256: {g['hash']}...)")
                 print(f"    ✅ 保留: {g['keep']['path']} (深度 {g['keep']['depth']})")
                 for d in g["delete"]:
                     print(f"    🗑️ 删除: {d['path']} (深度 {d['depth']})")
@@ -2715,5 +2812,227 @@ def main():
         lock.release()
 
 
+# ============================================================
+# 单元测试 (V6.0 新增)
+# ============================================================
+
+def run_tests():
+    """运行内置单元测试"""
+    import unittest
+    import tempfile
+
+    class TestSanitizeFilename(unittest.TestCase):
+        def test_normal(self):
+            self.assertEqual(_sanitize_filename("hello.txt"), "hello.txt")
+
+        def test_illegal_chars(self):
+            result = _sanitize_filename('file<>:"|?*.txt')
+            for c in '<>:"|?*\x00':
+                self.assertNotIn(c, result)
+
+        def test_reserved_name(self):
+            result = _sanitize_filename("CON")
+            self.assertTrue(result.startswith("_"))
+
+        def test_empty(self):
+            result = _sanitize_filename("")
+            self.assertEqual(result, "_unnamed")
+
+        def test_dots_spaces(self):
+            result = _sanitize_filename("  ...  ")
+            self.assertNotEqual(result, "")
+            self.assertFalse(result.startswith(" "))
+
+    class TestTruncateName(unittest.TestCase):
+        def test_short_name_unchanged(self):
+            name = "short.txt"
+            result = _truncate_name(name, 100)
+            self.assertEqual(result, name)
+
+        def test_long_name_truncated(self):
+            name = "a" * 300 + ".txt"
+            result = _truncate_name(name, 50)
+            self.assertLessEqual(len(result.encode("utf-8")), 50)
+            self.assertTrue(result.endswith(".txt"))
+
+        def test_hash_appended(self):
+            name = "x" * 200 + ".dat"
+            result = _truncate_name(name, 40)
+            self.assertIn("_", result)
+
+    class TestFmtSize(unittest.TestCase):
+        def test_bytes(self):
+            self.assertIn("B", _fmt_size(500))
+
+        def test_kb(self):
+            self.assertIn("KB", _fmt_size(2048))
+
+        def test_mb(self):
+            self.assertIn("MB", _fmt_size(5 * 1024 * 1024))
+
+        def test_gb(self):
+            self.assertIn("GB", _fmt_size(3 * 1024 * 1024 * 1024))
+
+        def test_zero(self):
+            self.assertIn("B", _fmt_size(0))
+
+    class TestWinPath(unittest.TestCase):
+        def test_roundtrip_normal(self):
+            path = r"C:\Users\test\file.txt"
+            wp = _win_path(path)
+            sp = _short_path(wp)
+            if IS_WINDOWS:
+                self.assertEqual(sp, path)
+            else:
+                self.assertEqual(sp, path)  # 非 Windows 直接返回
+
+        def test_unc_path(self):
+            path = r"\\server\share\file.txt"
+            wp = _win_path(path)
+            if IS_WINDOWS:
+                self.assertTrue(wp.startswith("\\\\?\\UNC\\"))
+                sp = _short_path(wp)
+                self.assertEqual(sp, path)
+            else:
+                # 非 Windows 平台直接返回原路径
+                self.assertEqual(wp, path)
+
+    class TestVirtualFileNode(unittest.TestCase):
+        def test_creation(self):
+            node = VirtualFileNode(
+                full_path=r"C:\test\file.txt",
+                file_name="file.txt",
+                extension=".txt",
+                size_bytes=1024,
+                depth=1,
+                is_dir=False,
+            )
+            self.assertEqual(node.file_name, "file.txt")
+            self.assertEqual(node.size_bytes, 1024)
+            self.assertFalse(node.is_dir)
+
+    class TestOfflineDedupByName(unittest.TestCase):
+        def test_size_aware_dedup(self):
+            """同名同大小应标记删除，同名不同大小应保留"""
+            nodes = [
+                VirtualFileNode(r"C:\a\video.mp4", "video.mp4", ".mp4",
+                                size_bytes=1024 * 1024, depth=1),
+                VirtualFileNode(r"C:\b\video.mp4", "video.mp4", ".mp4",
+                                size_bytes=1024 * 1024, depth=2),
+                VirtualFileNode(r"C:\c\video.mp4", "video.mp4", ".mp4",
+                                size_bytes=100, depth=1),
+            ]
+            engine = OfflineEliminationEngine(nodes)
+            count = engine.deduplicate_by_name()
+            self.assertEqual(count, 1)  # 只有同大小的那对
+            self.assertEqual(nodes[0].action, NodeAction.NONE)
+            self.assertEqual(nodes[1].action, NodeAction.DELETE)
+            self.assertEqual(nodes[2].action, NodeAction.NONE)
+
+        def test_no_size_data_marks_review(self):
+            """无大小数据时应标记为需确认，不自动删除"""
+            nodes = [
+                VirtualFileNode(r"C:\a\doc.txt", "doc.txt", ".txt",
+                                size_bytes=0, depth=1),
+                VirtualFileNode(r"C:\b\doc.txt", "doc.txt", ".txt",
+                                size_bytes=0, depth=2),
+            ]
+            engine = OfflineEliminationEngine(nodes)
+            count = engine.deduplicate_by_name()
+            self.assertEqual(count, 0)  # 不自动删除
+            self.assertIn("手动确认", nodes[0].reason)
+            self.assertIn("手动确认", nodes[1].reason)
+
+    class TestFileListParser(unittest.TestCase):
+        def test_custom_format(self):
+            """测试自定义格式"""
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              delete=False, encoding="utf-8") as f:
+                f.write("[{1}] C:\\Projects\\src #DIR\n")
+                f.write("[{2}] C:\\Projects\\src\\main.py #FILE\n")
+                f.write("[{1}] C:\\Projects\\tests #DIR\n")
+                f.write("[{2}] C:\\Projects\\tests\\test_main.py #FILE\n")
+                tmppath = f.name
+
+            parser = FileListParser()
+            lines = parser.load_files([tmppath])
+            os.unlink(tmppath)
+
+            self.assertEqual(len(lines), 4)
+            self.assertTrue(parser._has_custom_format)
+            self.assertEqual(parser._type_map[r"C:\Projects\src"], True)
+            self.assertEqual(parser._type_map[r"C:\Projects\src\main.py"], False)
+
+        def test_pure_path_list(self):
+            """测试纯路径列表"""
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              delete=False, encoding="utf-8") as f:
+                f.write("C:\\Projects\\src\\main.py\n")
+                f.write("C:\\Projects\\src\\util.py\n")
+                f.write("C:\\Projects\\README.md\n")
+                tmppath = f.name
+
+            parser = FileListParser()
+            lines = parser.load_files([tmppath])
+            os.unlink(tmppath)
+
+            self.assertEqual(len(lines), 3)
+            self.assertFalse(parser._has_custom_format)
+
+        def test_truncated_line_detection(self):
+            """测试截断行检测"""
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              delete=False, encoding="utf-8") as f:
+                f.write("C:\\Projects\\normal_file.txt\n")
+                f.write("C:\\Projects\\very_long_truncated_path_that_ends_with_dots...\n")
+                f.write("C:\\Projects\\another_file.txt\n")
+                tmppath = f.name
+
+            parser = FileListParser()
+            lines = parser.load_files([tmppath])
+            os.unlink(tmppath)
+
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(parser.total_truncated, 1)
+
+    class TestRollbackScript(unittest.TestCase):
+        def test_rollback_generates_python(self):
+            """V6.0: 回滚脚本应为 Python 格式"""
+            engine = ExecutionEngine([], "/tmp/test", "/tmp/log", "/tmp/trash")
+            engine.op_logs.append(OperationLog(
+                seq=1, action="MOVE",
+                source=r"C:\original\file.txt",
+                target=r"C:\trash\file.txt",
+                timestamp="2026-01-01T00:00:00",
+            ))
+            script = engine.generate_rollback_script()
+            self.assertIn("shutil.move", script)
+            self.assertNotIn("move /Y", script)
+            self.assertIn("import shutil", script)
+
+        def test_empty_rollback(self):
+            engine = ExecutionEngine([], "/tmp/test", "/tmp/log", "/tmp/trash")
+            script = engine.generate_rollback_script()
+            self.assertIn("无需回滚", script)
+
+    # 运行所有测试
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    for test_class in [
+        TestSanitizeFilename, TestTruncateName, TestFmtSize,
+        TestWinPath, TestVirtualFileNode, TestOfflineDedupByName,
+        TestFileListParser, TestRollbackScript,
+    ]:
+        suite.addTests(loader.loadTestsFromTestCase(test_class))
+
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    return result.wasSuccessful()
+
+
 if __name__ == "__main__":
+    # 支持 --test 参数运行内置测试
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        success = run_tests()
+        sys.exit(0 if success else 1)
     main()
