@@ -22,6 +22,7 @@
     size_str = _fmt_size(1024 * 1024)
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 添加类型注解、docstring 完善
     8.0: 初始模块化版本
 """
@@ -59,10 +60,10 @@ PathLike = Union[str, os.PathLike]
 
 def _win_path(path: str) -> str:
     """
-    转换为 Windows 长路径格式 (\\?\)
+    转换为 Windows 长路径格式 (\\\\?\\)
     
     Windows API 默认支持最长 260 字符的路径。
-    使用 \\?\ 前缀可突破此限制，支持最长 32767 字符的路径。
+    使用 \\\\?\\ 前缀可突破此限制，支持最长 32767 字符的路径。
     
     Args:
         path: 原始路径
@@ -71,10 +72,10 @@ def _win_path(path: str) -> str:
         长路径格式的路径
         
     Example:
-        >>> _win_path("C:\\test\\file.txt")
-        '\\\\?\\C:\\test\\file.txt'
-        >>> _win_path("\\\\server\\share\\file.txt")
-        '\\\\?\\UNC\\server\\share\\file.txt'
+        >>> _win_path("C:\\\\test\\\\file.txt")
+        '\\\\\\\\?\\\\C:\\\\test\\\\file.txt'
+        >>> _win_path("\\\\\\\\server\\\\share\\\\file.txt")
+        '\\\\\\\\?\\\\UNC\\\\server\\\\share\\\\file.txt'
     """
     if not IS_WINDOWS:
         return path
@@ -93,14 +94,14 @@ def _short_path(path: str) -> str:
     从长路径格式还原为普通路径
     
     Args:
-        path: \\?\ 格式的长路径
+        path: \\\\?\\ 格式的长路径
         
     Returns:
         普通路径格式
         
     Example:
-        >>> _short_path("\\\\?\\C:\\test\\file.txt")
-        'C:\\test\\file.txt'
+        >>> _short_path("\\\\\\\\?\\\\C:\\\\test\\\\file.txt")
+        'C:\\\\test\\\\file.txt'
     """
     if path.startswith("\\\\?\\UNC\\"):
         return "\\" + path[7:]
@@ -337,6 +338,9 @@ def _fmt_size(size_bytes: int, precision: int = 2) -> str:
     """
     if size_bytes < 0:
         return "未知"
+    
+    if size_bytes == 0:
+        return "0 B"
     
     units = ["B", "KB", "MB", "GB", "TB", "PB"]
     size = float(size_bytes)

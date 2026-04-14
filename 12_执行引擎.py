@@ -22,6 +22,7 @@
     engine.generate_rollback_script()
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 回收站支持、多线程执行、类型注解完善
     8.0: 初始模块化版本
 """
@@ -37,7 +38,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Set
 
 from .常量定义 import (
     VERSION,

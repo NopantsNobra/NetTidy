@@ -12,6 +12,7 @@
     - 所有业务模块
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 现代化 CLI、类型注解完善
     8.0: 初始模块化版本
 """
@@ -444,13 +445,13 @@ def main():
     
     # 运行测试
     if args.test:
-        from 单元测试 import run_tests
+        from .单元测试 import run_tests
         success = run_tests()
         sys.exit(0 if success else 1)
     
     # 生成默认配置
     if args.init_config:
-        from 配置管理 import get_default_config_template, save_config
+        from .配置管理 import get_default_config_template, save_config
         config = get_default_config_template()
         save_config(config, "restructure_config.json")
         print("✅ 配置模板已生成: restructure_config.json")
@@ -482,7 +483,7 @@ def main():
     
     # 手动线程数
     if args.threads:
-        from 配置管理 import update_workers
+        from .配置管理 import update_workers
         update_workers(args.threads)
     
     # 安全检查

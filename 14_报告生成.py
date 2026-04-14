@@ -17,6 +17,7 @@
     gen.generate(stats, nodes, dup_groups, freed_bytes, "report.html")
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 现代化 UI、响应式设计
     8.0: 初始模块化版本
 """

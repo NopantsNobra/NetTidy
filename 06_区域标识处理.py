@@ -15,6 +15,7 @@
         ZoneIdentifierHandler.clear_zone_identifier("download.exe")
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 简化实现、错误处理增强
     8.0: 初始模块化版本
 """

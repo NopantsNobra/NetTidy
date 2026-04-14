@@ -4,8 +4,8 @@
 职责：各模块的单元测试
 
 运行方式：
-    python -m folder_restructure_v9 --test
-    python -m unittest folder_restructure_v9.单元测试 -v
+    python -m folder_restructure_v10 --test
+    python -m unittest folder_restructure_v10.单元测试 -v
 
 依赖模块：
     - 所有业务模块

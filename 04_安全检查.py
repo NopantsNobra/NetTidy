@@ -19,6 +19,7 @@
         pass
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 类结构修正、方法归位、类型注解完善
     8.0: 初始模块化版本
 """
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -63,12 +65,12 @@ class ErrorCollector:
     """
     
     _SEQ_COUNTER: int = 0
-    _COUNTER_LOCK = None  # 简化版本，实际应使用 threading.Lock
+    _COUNTER_LOCK = None  # 类级别计数器锁（实例锁在 __init__ 中创建）
     
     def __init__(self):
         """初始化错误收集器"""
         self.errors: List[ErrorEntry] = []
-        self._lock = __import__('threading').Lock()
+        self._lock = threading.Lock()
     
     def add(
         self,

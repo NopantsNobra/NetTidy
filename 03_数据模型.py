@@ -20,6 +20,7 @@
     log = OperationLog(seq=1, action="DELETE", ...)
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 完整类型注解、属性验证、数据类优化
     8.0: 初始模块化版本
 """
@@ -224,6 +225,12 @@ class FileNode:
             格式化的修改时间
         """
         return _fmt_timestamp(self.last_modified)
+    
+    @property
+    def size_str(self) -> str:
+        """获取格式化的文件大小字符串"""
+        from .工具函数 import _fmt_size
+        return _fmt_size(self.size_bytes)
     
     @property
     def is_marked(self) -> bool:

@@ -19,6 +19,7 @@
     stats = engine.get_stats()
 
 版本历史：
+    10.0: 最终审计版本，修正逻辑错误与文档一致性
     9.0: 多种分组模式、冲突处理、类型注解完善
     8.0: 初始模块化版本
 """
@@ -408,7 +409,7 @@ class FlattenEngine:
             return "1KB-1MB"
         elif size_bytes < 100 * 1024 * 1024:
             return "1MB-100MB"
-        elif size_bytes < 1024 * 1024 * 1024:
+        elif size_bytes <= 1024 * 1024 * 1024:
             return "100MB-1GB"
         else:
             return "大于1GB"
