@@ -91,16 +91,12 @@ class ErrorCollector:
         """
         with self._lock:
             ErrorCollector._SEQ_COUNTER += 1
-            seq = ErrorCollector._SEQ_COUNTER
-        
-        entry = ErrorEntry(
-            seq=seq,
-            path=path,
-            error_type=error_type,
-            message=message,
-        )
-        
-        with self._lock:
+            entry = ErrorEntry(
+                seq=ErrorCollector._SEQ_COUNTER,
+                path=path,
+                error_type=error_type,
+                message=message,
+            )
             self.errors.append(entry)
         
         return entry
@@ -343,7 +339,11 @@ class LockManager:
     
     def __enter__(self) -> "LockManager":
         """上下文管理器入口"""
-        self.acquire()
+        if not self.acquire():
+            raise RuntimeError(
+                f"无法获取目录锁: {self.target_path}，"
+                f"请检查是否有其他进程正在操作，或使用 --force-lock 清除"
+            )
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:

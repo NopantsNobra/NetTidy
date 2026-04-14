@@ -297,7 +297,7 @@ DEFAULT_CONFIG: Dict = {
     # 去重策略: shallowest | newest | largest | hardlink
     "dedup_strategy": "shallowest",
     
-    # 扁平化模式: single | ext | date | prefix
+    # 扁平化模式: single | ext | date | prefix | size
     "flatten_mode": "single",
     
     # 是否使用系统回收站

@@ -35,7 +35,7 @@ import shutil
 import stat
 import time
 from ctypes import wintypes, POINTER, byref
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple, Callable, Dict
 
 from .常量定义 import (
     IS_WINDOWS,
@@ -81,6 +81,90 @@ if IS_WINDOWS:
     except (AttributeError, OSError):
         _kernel32 = None
         _shell32 = None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Win32Handle - 文件句柄上下文管理器
+# ═══════════════════════════════════════════════════════════════════
+
+class Win32Handle:
+    """
+    Windows 文件句柄上下文管理器
+    
+    确保在任何情况下都能正确释放文件句柄资源。
+    使用 with 语句管理句柄生命周期，防止资源泄漏。
+    
+    使用示例:
+        >>> with Win32Handle(path, access, flags) as handle:
+        ...     if handle.is_valid():
+        ...         # 执行操作
+        ...         pass
+    """
+    
+    def __init__(self, path: str, access: int = 0x80000000, 
+                 share: int = 0x00000007, flags: int = 0):
+        """
+        初始化句柄管理器
+        
+        Args:
+            path: 文件路径
+            access: 访问模式 (默认 GENERIC_READ)
+            share: 共享模式 (默认 FILE_SHARE_ALL)
+            flags: 打开标志
+        """
+        self._path = path
+        self._access = access
+        self._share = share
+        self._flags = flags
+        self._handle = None
+    
+    def __enter__(self) -> 'Win32Handle':
+        """进入上下文，打开文件句柄"""
+        if not _WIN32_AVAILABLE or _kernel32 is None:
+            return self
+        
+        OPEN_EXISTING = 3
+        
+        try:
+            wp = _win_path(self._path)
+            self._handle = _kernel32.CreateFileW(
+                wp,
+                self._access,
+                self._share,
+                None,
+                OPEN_EXISTING,
+                self._flags,
+                None
+            )
+        except Exception:
+            self._handle = None
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文，关闭文件句柄"""
+        self.close()
+        return False
+    
+    def is_valid(self) -> bool:
+        """检查句柄是否有效"""
+        return self._handle is not None and self._handle != -1
+    
+    @property
+    def handle(self):
+        """获取原始句柄"""
+        return self._handle
+    
+    def close(self):
+        """显式关闭句柄"""
+        if self._handle is not None and self._handle != -1:
+            try:
+                if _kernel32 is not None:
+                    _kernel32.CloseHandle(self._handle)
+            except Exception:
+                pass
+            finally:
+                self._handle = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -509,6 +593,8 @@ class Win32IO:
         """
         创建硬链接
         
+        跨卷操作会失败并返回 False（不静默回退为复制）。
+        
         Args:
             new_path: 新文件路径（硬链接）
             existing_path: 已存在文件的路径
@@ -523,8 +609,13 @@ class Win32IO:
             except OSError:
                 return False
         
+        # 检查是否跨卷
+        src_drive = os.path.splitdrive(os.path.abspath(existing_path))[0].lower()
+        dst_drive = os.path.splitdrive(os.path.abspath(new_path))[0].lower()
+        if src_drive and dst_drive and src_drive != dst_drive:
+            return False
+        
         try:
-            # Windows CreateHardLinkW
             _kernel32.CreateHardLinkW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID]
             _kernel32.CreateHardLinkW.restype = wintypes.BOOL
             
@@ -532,8 +623,7 @@ class Win32IO:
             return bool(result)
         
         except (AttributeError, OSError):
-            # 回退：复制文件
-            return cls.copy_file(existing_path, new_path)
+            return False
     
     @classmethod
     def create_symlink(cls, link_path: str, target_path: str, is_dir: bool = False) -> bool:
@@ -592,28 +682,18 @@ class Win32IO:
         try:
             import struct
             
-            GENERIC_READ = 0x80000000
-            FILE_SHARE_ALL = 0x00000007
-            OPEN_EXISTING = 3
             FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
             FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
             FSCTL_GET_REPARSE_POINT = 0x000900A8
             
-            wp = _win_path(path)
-            handle = _kernel32.CreateFileW(
-                wp,
-                GENERIC_READ,
-                FILE_SHARE_ALL,
-                None,
-                OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-                None
-            )
+            flags = FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS
             
-            if handle == -1 or handle is None:
-                return None
-            
-            try:
+            # 使用上下文管理器确保句柄正确释放
+            with Win32Handle(path, flags=flags) as handle_ctx:
+                if not handle_ctx.is_valid():
+                    return None
+                
+                handle = handle_ctx.handle
                 buf = ctypes.create_string_buffer(1024)
                 bytes_returned = wintypes.DWORD()
                 
@@ -631,9 +711,6 @@ class Win32IO:
                 if result:
                     tag = struct.unpack_from("<I", buf.raw, 0)[0]
                     return tag
-            
-            finally:
-                _kernel32.CloseHandle(handle)
         
         except Exception:
             pass
@@ -833,10 +910,13 @@ class RecycleBin:
             return False, "仅支持 Windows 系统"
         
         try:
-            flags = 0x0001 | 0x0004  # SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI
+            SHERB_NOCONFIRMATION = 0x0001
+            SHERB_NOSOUND = 0x0002
+            SHERB_NOPROGRESSUI = 0x0004
             
+            flags = SHERB_NOPROGRESSUI | SHERB_NOSOUND
             if not confirm:
-                flags |= 0x0002  # SHERB_NOCONFIRMATION
+                flags |= SHERB_NOCONFIRMATION
             
             _shell32.SHEmptyRecycleBinW(None, None, flags)
             return True, "成功"
@@ -892,6 +972,7 @@ def atomic_move(src: str, dst: str, max_retries: int = 3) -> bool:
 
 __all__ = [
     "Win32IO",
+    "Win32Handle",
     "RecycleBin",
     "safe_remove",
     "atomic_move",

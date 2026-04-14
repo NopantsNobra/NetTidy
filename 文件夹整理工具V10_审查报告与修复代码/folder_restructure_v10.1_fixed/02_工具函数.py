@@ -32,10 +32,11 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import uuid
 from datetime import datetime, timezone
 from functools import partial
-from typing import Optional, Union, Callable, TypeVar
+from typing import Optional, Union, Callable, TypeVar, Iterator
 
 from .常量定义 import (
     IS_WINDOWS,
@@ -633,15 +634,15 @@ def _escape_html(text: str) -> str:
 
 def _escape_shell(text: str) -> str:
     """
-    Shell 特殊字符转义
-    
+    Shell 特殊字符转义（使用 shlex.quote）
+
     Args:
         text: 原始文本
-        
+
     Returns:
         转义后的文本
     """
-    return text.replace(" ", "\\ ").replace("'", "\\'").replace('"', '\\"')
+    return shlex.quote(text)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -679,7 +680,7 @@ def _safe_dict_get(
         return default
 
 
-def _batch_items(items: list, batch_size: int) -> list:
+def _batch_items(items: list, batch_size: int) -> Iterator[list]:
     """
     将列表分批
     
@@ -688,7 +689,7 @@ def _batch_items(items: list, batch_size: int) -> list:
         batch_size: 每批大小
         
     Returns:
-        分批后的列表
+        分批后的迭代器
         
     Example:
         >>> list(_batch_items([1,2,3,4,5], 2))

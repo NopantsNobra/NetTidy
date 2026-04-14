@@ -99,6 +99,7 @@ class FileNode:
     action: NodeAction = NodeAction.NONE
     status: NodeStatus = NodeStatus.PENDING
     target_path: str = ""
+    trash_path: str = ""  # 回收站路径（用于硬链接回滚）
     reason: str = ""
     error_msg: str = ""
     
@@ -396,6 +397,7 @@ class OperationLog:
         status: 操作状态
         size_bytes: 文件大小
         error: 错误信息
+        extra: 额外信息（如 trash_path 用于硬链接回滚）
     """
     
     seq: int
@@ -406,6 +408,7 @@ class OperationLog:
     status: str = "SUCCESS"
     size_bytes: int = 0
     error: str = ""
+    extra: Optional[Dict[str, Any]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

@@ -197,24 +197,47 @@ class PermissionEngine:
     def remove_hidden(
         self,
         dry_run: bool = True,
+        exclude_patterns: Optional[List[str]] = None,
     ) -> Dict[str, int]:
         """
         移除隐藏属性
         
         Args:
             dry_run: 是否模拟运行
+            exclude_patterns: 排除模式列表（如 [".git*", ".idea*", ".env*"]）
+                            如果为 None，使用默认排除列表
             
         Returns:
             统计字典
         """
-        items = [n for n in self.nodes if n.is_hidden and not n.is_dir]
+        import fnmatch
         
-        # 排除以 "." 开头的常规隐藏文件（如 .gitignore），
-        # 但保留 .restructure* 前缀的内部目录相关文件
+        # 默认排除常见的版本控制和配置文件
+        default_exclude = [
+            ".git*", ".gitignore", ".gitattributes",
+            ".idea*", ".vscode*", ".vs*",
+            ".env*", ".dockerenv",
+            ".npmrc", ".nvmrc",
+            ".python-version", ".ruby-version",
+            ".editorconfig", ".eslintrc*", ".prettierrc*",
+            ".dockerignore", ".hg*", ".svn*",
+        ]
+        exclude = exclude_patterns if exclude_patterns is not None else default_exclude
+        
+        # 筛选出隐藏的普通文件
+        hidden_items = [n for n in self.nodes if n.is_hidden and not n.is_dir]
+        
+        def should_exclude(node: FileNode) -> bool:
+            """检查是否应该排除该文件"""
+            for pattern in exclude:
+                if fnmatch.fnmatch(node.file_name, pattern):
+                    return True
+            return False
+        
+        # 保留 .restructure* 前缀的内部文件，排除外部隐藏文件
         items = [
-            n for n in items
-            if n.file_name.startswith(".restructure")
-            or not n.file_name.startswith(".")
+            n for n in hidden_items
+            if n.file_name.startswith(".restructure") or not should_exclude(n)
         ]
         
         if not items:
@@ -224,6 +247,10 @@ class PermissionEngine:
         print(f"\n👁️ 移除隐藏属性: {len(items)} 个文件")
         
         if dry_run:
+            for node in items[:10]:
+                print(f"  [HIDDEN] remove: {node.file_name}")
+            if len(items) > 10:
+                print(f"  ... 还有 {len(items) - 10} 项")
             return self.stats
         
         workers = min(runtime.max_workers, 8)

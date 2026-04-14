@@ -179,10 +179,8 @@ class OfflineAnalyzer:
         return len(self.nodes)
     
     def _get_extension(self, filename: str) -> str:
-        """获取扩展名"""
-        if "." not in filename:
-            return ""
-        return "." + filename.rsplit(".", 1)[1].lower()
+        """获取扩展名（与主代码 _create_node 保持一致）"""
+        return os.path.splitext(filename)[1].lower()
     
     def analyze(self) -> Dict[str, Any]:
         """
@@ -295,7 +293,7 @@ class OfflineAnalyzer:
     
     def generate_report(self, output_path: str) -> bool:
         """
-        生成分析报告
+        生成分析报告（JSON 格式）
         
         Args:
             output_path: 输出文件路径
@@ -326,6 +324,40 @@ class OfflineAnalyzer:
             return True
         except OSError as e:
             print(f"❌ 保存失败: {e}")
+            return False
+    
+    def generate_html_report(self, output_path: str) -> bool:
+        """
+        生成 HTML 格式的分析报告
+        
+        Args:
+            output_path: 输出文件路径
+            
+        Returns:
+            是否成功
+        """
+        if not self.results:
+            self.analyze()
+        
+        try:
+            from .报告生成 import HTMLReportGenerator
+            
+            # 将 VirtualFileNode 转换为 FileNode（供报告生成器使用）
+            nodes = [n.to_filenode() for n in self.nodes]
+            stats = self.results.get("stats", {})
+            
+            generator = HTMLReportGenerator()
+            generator.generate(
+                stats=stats,
+                nodes=nodes,
+                dup_groups=[],
+                freed_bytes=0,
+                output_path=output_path,
+            )
+            print(f"✅ HTML 报告已保存: {output_path}")
+            return True
+        except Exception as e:
+            print(f"❌ HTML 报告生成失败: {e}")
             return False
 
 

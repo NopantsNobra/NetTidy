@@ -164,20 +164,28 @@ class ExecutionEngine:
         else:
             print(f"💾 使用 {runtime.max_workers} 线程并行处理...")
         
-        # 执行移动
-        if move_nodes:
-            print("\n📦 Phase 1: 移动操作")
-            self._process_batch(move_nodes, self._process_move, dry_run)
+        try:
+            # 执行移动
+            if move_nodes:
+                print("\n📦 Phase 1: 移动操作")
+                self._process_batch(move_nodes, self._process_move, dry_run)
+            
+            # 执行删除
+            if delete_nodes:
+                print("\n🗑️ Phase 2: 删除操作")
+                self._process_batch(delete_nodes, self._process_delete, dry_run)
+            
+            # 执行硬链接
+            if hardlink_nodes:
+                print("\n🔗 Phase 3: 硬链接操作")
+                self._process_batch(hardlink_nodes, self._process_hardlink, dry_run)
         
-        # 执行删除
-        if delete_nodes:
-            print("\n🗑️ Phase 2: 删除操作")
-            self._process_batch(delete_nodes, self._process_delete, dry_run)
-        
-        # 执行硬链接
-        if hardlink_nodes:
-            print("\n🔗 Phase 3: 硬链接操作")
-            self._process_batch(hardlink_nodes, self._process_hardlink, dry_run)
+        except KeyboardInterrupt:
+            print("\n\n⚠️ 用户中断，正在保存已执行的操作日志...")
+            if not dry_run:
+                self._save_logs()
+                self.save_rollback_script()
+            raise
         
         # 保存日志
         if not dry_run:
@@ -365,6 +373,16 @@ class ExecutionEngine:
             self._log(seq, "HARDLINK", source, target, "FAILED")
             return
         
+        # 检查是否跨卷
+        src_drive = os.path.splitdrive(source)[0].lower()
+        tgt_drive = os.path.splitdrive(target)[0].lower()
+        if src_drive and tgt_drive and src_drive != tgt_drive:
+            node.status = NodeStatus.FAILED
+            node.error_msg = f"硬链接失败：跨卷操作不支持（{src_drive} → {tgt_drive}）"
+            self.stats["failed"] += 1
+            self._log(seq, "HARDLINK", source, target, "FAILED")
+            return
+        
         if dry_run:
             node.status = NodeStatus.SUCCESS
             self.stats["success"] += 1
@@ -381,9 +399,12 @@ class ExecutionEngine:
             # 在 source 原位置创建指向 target 的硬链接
             if Win32IO.create_hard_link(source, target):
                 node.status = NodeStatus.HARDLINKED
+                node.target_path = target  # 保留文件路径
+                node.trash_path = trash_path  # 记录回收站路径用于回滚
                 self.stats["hardlinked"] += 1
                 self.stats["success"] += 1
-                self._log(seq, "HARDLINK", source, target, "HARDLINKED")
+                # 记录完整的回滚信息
+                self._log(seq, "HARDLINK", source, target, "HARDLINKED", trash_path=trash_path)
             else:
                 # 硬链接失败，恢复原文件
                 Win32IO.move_file(trash_path, source)
@@ -433,6 +454,7 @@ class ExecutionEngine:
         source: str,
         target: str,
         status: str,
+        trash_path: Optional[str] = None,
     ) -> None:
         """记录操作日志"""
         with self._lock:
@@ -443,6 +465,7 @@ class ExecutionEngine:
                 target=target,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 status=status,
+                extra={"trash_path": trash_path} if trash_path else None,
             )
             self.op_logs.append(log)
     
@@ -543,17 +566,20 @@ class ExecutionEngine:
                 needed_dirs.add(os.path.dirname(log.source))
         
         for d in sorted(needed_dirs):
-            lines.append(f"    os.makedirs({json.dumps(d)}, exist_ok=True)")
+            lines.append(f"    os.makedirs({repr(d)}, exist_ok=True)")
         
         lines.append("")
         lines.append("    # === 回滚操作 ===")
         
         for log in self.op_logs:
+            src = repr(log.source)
+            tgt = repr(log.target)
+            
             if log.action == "MOVE":
                 lines.append(f"    # [{log.seq}] MOVE: {log.source}")
                 lines.append(f"    try:")
-                lines.append(f"        if os.path.exists({json.dumps(log.target)}):")
-                lines.append(f"            shutil.move({json.dumps(log.target)}, {json.dumps(log.source)})")
+                lines.append(f"        if os.path.exists({tgt}):")
+                lines.append(f"            shutil.move({tgt}, {src})")
                 lines.append(f"        restored += 1")
                 lines.append(f"    except Exception as e:")
                 lines.append(f'        print(f"❌ 回滚失败: {log.source} - {{e}}")')
@@ -563,9 +589,9 @@ class ExecutionEngine:
             elif log.action == "DELETE" and log.status == "TRASHED":
                 lines.append(f"    # [{log.seq}] DELETE (from trash): {log.source}")
                 lines.append(f"    try:")
-                lines.append(f"        if os.path.exists({json.dumps(log.target)}):")
-                lines.append(f"            os.makedirs(os.path.dirname({json.dumps(log.source)}), exist_ok=True)")
-                lines.append(f"            shutil.move({json.dumps(log.target)}, {json.dumps(log.source)})")
+                lines.append(f"        if os.path.exists({tgt}):")
+                lines.append(f"            os.makedirs(os.path.dirname({src}), exist_ok=True)")
+                lines.append(f"            shutil.move({tgt}, {src})")
                 lines.append(f"        restored += 1")
                 lines.append(f"    except Exception as e:")
                 lines.append(f'        print(f"❌ 回滚失败: {log.source} - {{e}}")')
@@ -577,17 +603,34 @@ class ExecutionEngine:
                 lines.append(f"    # 需要从系统回收站手动恢复")
                 lines.append("")
             
-            elif log.action == "HARDLINK":
-                lines.append(f"    # [{log.seq}] HARDLINK: {log.source}")
+            elif log.action == "HARDLINK" and log.status == "HARDLINKED":
+                # 硬链接操作已成功：source 位置现在是硬链接，target 是保留文件
+                # 原文件在回收站中（trash_path）
+                trash_path = log.extra.get("trash_path", "") if log.extra else ""
+                
+                lines.append(f"    # [{log.seq}] HARDLINK 回滚")
+                lines.append(f"    # source 位置现在是硬链接 → 删除硬链接")
+                if trash_path:
+                    lines.append(f"    # 原文件在回收站: {trash_path}")
                 lines.append(f"    try:")
-                lines.append(f"        if os.path.exists({json.dumps(log.target)}):")
-                lines.append(f"            os.remove({json.dumps(log.target)})")
-                lines.append(f"        if os.path.exists({json.dumps(log.source)}):")
-                lines.append(f"            shutil.move({json.dumps(log.source)}, {json.dumps(log.target)})")
+                lines.append(f"        if os.path.exists({src}):")
+                lines.append(f"            os.remove({src})")
+                if trash_path:
+                    lines.append(f"        # 从回收站恢复原文件")
+                    lines.append(f"        if os.path.exists(r\"{trash_path}\"):")
+                    lines.append(f"            shutil.move(r\"{trash_path}\", {src})")
+                    lines.append(f'            print(f"✅ 已恢复原文件: {src}")')
+                else:
+                    lines.append(f'        print(f"✅ 已删除硬链接: {src}")')
+                    lines.append(f'        print(f"   ⚠️ 原文件在回收站中，请手动恢复")')
                 lines.append(f"        restored += 1")
                 lines.append(f"    except Exception as e:")
-                lines.append(f'        print(f"❌ 回滚失败: {log.target} - {{e}}")')
+                lines.append(f'        print(f"❌ 回滚失败: {log.source} - {{e}}")')
                 lines.append(f"        errors += 1")
+                lines.append("")
+            
+            elif log.action == "HARDLINK" and log.status != "HARDLINKED":
+                lines.append(f"    # [{log.seq}] HARDLINK 未执行（{log.status}），跳过")
                 lines.append("")
         
         lines.append(f'    print(f"✅ 回滚完成: 恢复 {{restored}} 项, 失败 {{errors}} 项")')

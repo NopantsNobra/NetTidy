@@ -243,12 +243,16 @@ def validate_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if threads is not None:
         if not isinstance(threads, int) or threads < 1:
             errors.append("threads 必须为正整数")
+        elif threads > 64:
+            errors.append("threads 建议不超过 64，当前值: {threads}")
     
     # 验证节流时间
     throttle = config.get("throttle_ms")
     if throttle is not None:
         if not isinstance(throttle, (int, float)) or throttle < 0:
             errors.append("throttle_ms 必须为非负数")
+        elif throttle > 10000:
+            errors.append(f"throttle_ms 建议不超过 10000，当前值: {throttle}")
     
     # 验证排除路径
     exclude_paths = config.get("exclude_paths", [])
@@ -256,13 +260,40 @@ def validate_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
         errors.append("exclude_paths 必须为列表")
     else:
         for path in exclude_paths:
-            if ".." in os.path.normpath(path):
+            if not isinstance(path, str):
+                errors.append(f"排除路径必须为字符串: {path}")
+            elif ".." in os.path.normpath(path):
                 errors.append(f"排除路径不允许路径穿越: {path}")
     
     # 验证 ext_group_map
     ext_map = config.get("ext_group_map")
-    if ext_map is not None and not isinstance(ext_map, dict):
-        errors.append("ext_group_map 必须为字典")
+    if ext_map is not None:
+        if not isinstance(ext_map, dict):
+            errors.append("ext_group_map 必须为字典")
+        else:
+            for group, exts in ext_map.items():
+                if not isinstance(exts, list):
+                    errors.append(f"ext_group_map[{group}] 必须为列表")
+                elif not all(isinstance(e, str) for e in exts):
+                    errors.append(f"ext_group_map[{group}] 中的扩展名必须为字符串")
+    
+    # 验证 min_file_size
+    min_size = config.get("min_file_size")
+    if min_size is not None:
+        if not isinstance(min_size, int) or min_size < 0:
+            errors.append("min_file_size 必须为非负整数")
+    
+    # 验证 max_depth
+    max_depth = config.get("max_depth")
+    if max_depth is not None:
+        if not isinstance(max_depth, int) or max_depth < 0:
+            errors.append("max_depth 必须为非负整数")
+    
+    # 验证 hash_threshold
+    hash_threshold = config.get("hash_threshold")
+    if hash_threshold is not None:
+        if not isinstance(hash_threshold, int) or hash_threshold < 0:
+            errors.append("hash_threshold 必须为非负整数")
     
     return len(errors) == 0, errors
 

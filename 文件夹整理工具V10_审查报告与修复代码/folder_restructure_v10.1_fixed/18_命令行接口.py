@@ -464,7 +464,7 @@ def main():
         analyzer.analyze()
         
         if args.html_report:
-            analyzer.generate_report(args.html_report)
+            analyzer.generate_html_report(args.html_report)
         
         if args.export:
             analyzer.generate_report(args.export)
@@ -519,6 +519,20 @@ def main():
             print(f"  文件: {stats.get('total_files', 0):,}")
             print(f"  目录: {stats.get('total_dirs', 0):,}")
             print(f"  大小: {stats.get('total_size_str', '?')}")
+            if stats.get('hidden_count', 0) > 0:
+                print(f"  隐藏: {stats['hidden_count']}")
+            if stats.get('readonly_count', 0) > 0:
+                print(f"  只读: {stats['readonly_count']}")
+            if stats.get('symlink_count', 0) > 0:
+                print(f"  符号链接: {stats['symlink_count']}")
+            if stats.get('junction_count', 0) > 0:
+                print(f"  Junction: {stats['junction_count']}")
+            if stats.get('hardlink_count', 0) > 0:
+                print(f"  硬链接: {stats['hardlink_count']}")
+            if stats.get('zone_count', 0) > 0:
+                print(f"  🌐 Zone.Identifier: {stats['zone_count']}")
+            if stats.get('long_path_count', 0) > 0:
+                print(f"  ⚠️ 超长路径: {stats['long_path_count']}")
         
         elif run_mode in ("preview", "execute", "full"):
             # 确定分析模式
@@ -528,6 +542,8 @@ def main():
                 analyze_mode = "junk"
             elif args.only_dedup:
                 analyze_mode = "dup"
+            elif args.only_flatten:
+                analyze_mode = "none"  # 仅扁平化，跳过分析
             else:
                 analyze_mode = "all"
             
@@ -535,7 +551,7 @@ def main():
             engine.scan(detect_zone=args.detect_zone, verbose=args.verbose)
             
             # 分析
-            if args.only_perm:
+            if args.only_perm or analyze_mode == "none":
                 pass  # 跳过分析
             else:
                 engine.analyze(mode=analyze_mode, dedup_strategy=args.dedup_strategy)
