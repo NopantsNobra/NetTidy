@@ -1,8 +1,0 @@
-# 顶层入口（推荐）
-python 文件夹重组工具V7_0.py [参数]
-
-# 或作为包导入
-from 文件夹重组工具V7_0 import FolderRestructureEngine
-``
-
-原始的单文件 `folder_reorganizer_v7_0.py`（2935 行）已拆分为 8 个职责清晰的模块，最大的 `执行引擎.py` 为 1024 行，可读性大幅提升。

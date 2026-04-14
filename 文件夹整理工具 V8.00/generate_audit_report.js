@@ -1,0 +1,266 @@
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, 
+        AlignmentType, HeadingLevel, BorderStyle, WidthType, ShadingType,
+        Header, Footer, PageNumber } = require("docx");
+const fs = require("fs");
+
+// 调色板 - 使用技术报告风格
+const P = {
+  primary: "0A1628",
+  body: "1A2B40",
+  secondary: "6878A0",
+  accent: "5B8DB8",
+  surface: "F4F8FC"
+};
+
+// 辅助函数
+const c = (hex) => hex.replace("#", "");
+
+// 创建标题段落
+function heading(text, level = HeadingLevel.HEADING_1) {
+  return new Paragraph({
+    heading: level,
+    spacing: { before: level === HeadingLevel.HEADING_1 ? 360 : 240, after: 120 },
+    children: [new TextRun({ text, bold: true, color: P.primary, font: { ascii: "Calibri", eastAsia: "SimHei" } })]
+  });
+}
+
+// 创建正文段落
+function body(text) {
+  return new Paragraph({
+    alignment: AlignmentType.JUSTIFIED,
+    indent: { firstLine: 480 },
+    spacing: { line: 312 },
+    children: [new TextRun({ text, size: 24, color: P.body, font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" } })]
+  });
+}
+
+// 创建无缩进正文
+function bodyNoIndent(text) {
+  return new Paragraph({
+    alignment: AlignmentType.LEFT,
+    spacing: { line: 312 },
+    children: [new TextRun({ text, size: 24, color: P.body, font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" } })]
+  });
+}
+
+// 创建表格单元格
+function cell(text, isHeader = false, width = 20) {
+  return new TableCell({
+    width: { size: width, type: WidthType.PERCENTAGE },
+    shading: isHeader 
+      ? { type: ShadingType.CLEAR, fill: P.accent }
+      : { type: ShadingType.CLEAR, fill: "FFFFFF" },
+    margins: { top: 60, bottom: 60, left: 120, right: 120 },
+    children: [new Paragraph({
+      children: [new TextRun({ 
+        text, 
+        bold: isHeader, 
+        size: 21, 
+        color: isHeader ? "FFFFFF" : P.body,
+        font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" }
+      })]
+    })]
+  });
+}
+
+// 创建表格行
+function tableRow(cells, isHeader = false) {
+  return new TableRow({
+    children: cells.map(text => cell(text, isHeader))
+  });
+}
+
+// 主文档
+const doc = new Document({
+  styles: {
+    default: {
+      document: {
+        run: { font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" }, size: 24, color: P.body },
+        paragraph: { spacing: { line: 312 } }
+      }
+    }
+  },
+  sections: [
+    // 封面部分
+    {
+      properties: { page: { margin: { top: 0, bottom: 0, left: 0, right: 0 } } },
+      children: [
+        new Paragraph({ spacing: { before: 3000 } }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 400 },
+          children: [new TextRun({ 
+            text: "\u4EE3\u7801\u5BA1\u8BA1\u62A5\u544A", 
+            bold: true, 
+            size: 56, 
+            color: P.primary,
+            font: { ascii: "Calibri", eastAsia: "SimHei" }
+          })]
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 },
+          children: [new TextRun({ 
+            text: "\u2014\u2014 \u6587\u4EF6\u5939\u6574\u7406\u5DE5\u5177 V8.0 \u6A21\u5757\u5316\u9879\u76EE", 
+            size: 28, 
+            color: P.secondary,
+            font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" }
+          })]
+        }),
+        new Paragraph({ spacing: { before: 2000 } }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ 
+            text: "\u5BA1\u8BA1\u65E5\u671F\uFF1A2026\u5E74 4 \u6708 14 \u65E5", 
+            size: 24, 
+            color: P.secondary,
+            font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" }
+          })]
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 100 },
+          children: [new TextRun({ 
+            text: "\u7248\u672C\uFF1AV8.0.0", 
+            size: 24, 
+            color: P.secondary,
+            font: { ascii: "Calibri", eastAsia: "Microsoft YaHei" }
+          })]
+        })
+      ]
+    },
+    // 正文部分
+    {
+      properties: { page: { margin: { top: 1440, bottom: 1440, left: 1701, right: 1417 } } },
+      footers: {
+        default: new Footer({
+          children: [new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: P.secondary })]
+          })]
+        })
+      },
+      children: [
+        // 一、项目概述
+        heading("\u4E00\u3001\u9879\u76EE\u6982\u8FF0"),
+        body("\u672C\u9879\u76EE\u662F\u4E00\u4E2A\u6587\u4EF6\u5939\u6574\u7406\u5DE5\u5177\uFF0C\u539F\u672C\u662F\u4E00\u4E2A\u5B8C\u6574\u7684\u5927\u578B\u7A0B\u5E8F\u3002\u4E3A\u4E86\u63D0\u9AD8\u53EF\u8BFB\u6027\u548C\u53EF\u7EF4\u62A4\u6027\uFF0C\u5BF9\u5176\u8FDB\u884C\u4E86\u6A21\u5757\u5316\u62C6\u5206\uFF0C\u5C06\u6838\u5FC3\u529F\u80FD\u62C6\u5206\u4E3A\u72EC\u7ACB\u7684 .py \u6587\u4EF6\uFF0C\u4FDD\u6301\u4E3B\u7A0B\u5E8F\u7684\u7B80\u6D01\u3002\u672C\u6B21\u5BA1\u8BA1\u5DE5\u4F5C\u5305\u62EC\u5B8C\u6210\u6A21\u5757\u5316\u62C6\u5206\u3001\u6838\u5BF9\u4EE3\u7801\u529F\u80FD\u3001\u4FEE\u590D\u9519\u8BEF\u5E76\u8FDB\u884C\u4F18\u5316\u3002"),
+        
+        body("\u9879\u76EE\u91C7\u7528 Python \u5F00\u53D1\uFF0C\u4E3B\u8981\u529F\u80FD\u5305\u62EC\u76EE\u5F55\u8BCA\u65AD\u4E0E\u5206\u6790\u3001\u7F13\u5B58\u6587\u4EF6\u6E05\u7406\u3001\u91CD\u590D\u6587\u4EF6\u68C0\u6D4B\u4E0E\u53BB\u91CD\u3001\u5197\u4F59\u76EE\u5F55\u7ED3\u6784\u89E3\u5305\u3001\u6587\u4EF6\u6241\u5E73\u5316\u91CD\u7EC4\u3001Windows \u7CFB\u7EDF\u56DE\u6536\u7AD9\u96C6\u6210\u3001\u5B89\u5168\u68C0\u67E5\u4E0E\u6743\u9650\u4FEE\u590D\u7B49\u3002\u9879\u76EE\u652F\u6301 Windows \u548C\u975E Windows \u5E73\u53F0\uFF0C\u5728 Windows \u5E73\u53F0\u4E0A\u63D0\u4F9B\u66F4\u591A\u5E95\u5C42 API \u529F\u80FD\u3002"),
+        
+        // 二、模块拆分结果
+        heading("\u4E8C\u3001\u6A21\u5757\u62C6\u5206\u7ED3\u679C"),
+        body("\u7ECF\u8FC7\u6A21\u5757\u5316\u62C6\u5206\uFF0C\u9879\u76EE\u5DF2\u5F62\u6210 20 \u4E2A\u72EC\u7ACB\u7684 Python \u6A21\u5757\u6587\u4EF6\uFF0C\u5168\u90E8\u4F7F\u7528\u4E2D\u6587\u547D\u540D\uFF0C\u63D0\u9AD8\u4E86\u4EE3\u7801\u7684\u53EF\u8BFB\u6027\u548C\u53EF\u7EF4\u62A4\u6027\u3002\u4EE5\u4E0B\u662F\u6A21\u5757\u5217\u8868\u53CA\u5176\u529F\u80FD\u8BF4\u660E\uFF1A"),
+        
+        // 模块表格
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: {
+            top: { style: BorderStyle.SINGLE, size: 2, color: P.accent },
+            bottom: { style: BorderStyle.SINGLE, size: 2, color: P.accent },
+            insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "D0D0D0" },
+            insideVertical: { style: BorderStyle.NONE },
+            left: { style: BorderStyle.NONE },
+            right: { style: BorderStyle.NONE }
+          },
+          rows: [
+            tableRow(["\u5E8F\u53F7", "\u6A21\u5757\u540D\u79F0", "\u529F\u80FD\u8BF4\u660E"], true),
+            tableRow(["1", "__init__.py", "\u5305\u6807\u8BC6\u3001\u7248\u672C\u53F7\u3001\u6A21\u5757\u5BFC\u51FA"]),
+            tableRow(["2", "__main__.py", "\u5165\u53E3\u70B9\uFF0C\u652F\u6301 python -m \u65B9\u5F0F\u8FD0\u884C"]),
+            tableRow(["3", "\u5E38\u91CF\u5B9A\u4E49.py", "\u6240\u6709\u5E38\u91CF\u3001\u679A\u4E3E\u3001\u9ED8\u8BA4\u914D\u7F6E\u539F\u59CB\u6570\u636E"]),
+            tableRow(["4", "\u5DE5\u5177\u51FD\u6570.py", "\u7EAF\u5DE5\u5177\u51FD\u6570\uFF08\u8DEF\u5F84\u3001\u6587\u4EF6\u540D\u3001\u683C\u5F0F\u5316\uFF09"]),
+            tableRow(["5", "\u914D\u7F6E\u7BA1\u7406.py", "\u914D\u7F6E\u52A0\u8F7D/\u9A8C\u8BC1\u3001SSD\u68C0\u6D4B\u3001tqdm\u5305\u88C5"]),
+            tableRow(["6", "\u6570\u636E\u6A21\u578B.py", "FileNode\u3001VirtualFileNode\u3001OperationLog\u7B49"]),
+            tableRow(["7", "Win32\u5E95\u5C42IO.py", "Win32 API\u5C01\u88C5 + \u7CFB\u7EDF\u56DE\u6536\u7AD9\u96C6\u6210"]),
+            tableRow(["8", "\u5B89\u5168\u68C0\u67E5.py", "SafetyChecker\u3001LockManager\u3001ErrorCollector"]),
+            tableRow(["9", "\u533A\u57DF\u6807\u8BC6\u5904\u7406.py", "Zone.Identifier \u5904\u7406\u5668"]),
+            tableRow(["10", "\u6743\u9650\u5F15\u64CE.py", "\u6743\u9650\u4FEE\u590D\u64CD\u4F5C\u5F15\u64CE"]),
+            tableRow(["11", "\u8BCA\u65AD\u5F15\u64CE.py", "\u76EE\u5F55\u8BCA\u65AD\u4E0E\u5206\u6790\u5F15\u64CE"]),
+            tableRow(["12", "\u5254\u9664\u5F15\u64CE.py", "\u7F13\u5B58\u6E05\u7406\u4E0E\u91CD\u590D\u6587\u4EF6\u68C0\u6D4B\u5F15\u64CE"]),
+            tableRow(["13", "\u6241\u5E73\u5316\u5F15\u64CE.py", "\u76EE\u5F55\u7ED3\u6784\u6241\u5E73\u5316\u5904\u7406\u5F15\u64CE"]),
+            tableRow(["14", "\u91CD\u7EC4\u5F15\u64CE.py", "\u76EE\u5F55\u7ED3\u6784\u91CD\u7EC4\u5F15\u64CE"]),
+            tableRow(["15", "\u6267\u884C\u5F15\u64CE.py", "\u7EDF\u4E00\u9636\u6BB5\u7F16\u6392\u6267\u884C\u5F15\u64CE"]),
+            tableRow(["16", "\u62A5\u544A\u751F\u6210.py", "HTML \u53EF\u89C6\u5316\u62A5\u544A\u751F\u6210\u5668"]),
+            tableRow(["17", "\u4EA4\u4E92\u9884\u89C8.py", "\u4EA4\u4E92\u5F0F\u9884\u89C8\u4E0E\u786E\u8BA4\u6A21\u5757"]),
+            tableRow(["18", "\u79BB\u7EBF\u5206\u6790.py", "\u79BB\u7EBF\u5206\u6790\u529F\u80FD\u6A21\u5757"]),
+            tableRow(["19", "\u5355\u5143\u6D4B\u8BD5.py", "\u5404\u6A21\u5757\u5355\u5143\u6D4B\u8BD5"]),
+            tableRow(["20", "\u547D\u4EE4\u884C\u63A5\u53E3.py", "CLI\u89E3\u6790 + \u4E3B\u7F16\u6392\u5668"])
+          ]
+        }),
+        
+        new Paragraph({ spacing: { before: 200 } }),
+        
+        // 三、代码核对结果
+        heading("\u4E09\u3001\u4EE3\u7801\u6838\u5BF9\u7ED3\u679C"),
+        body("\u7ECF\u8FC7\u5BF9\u539F\u59CB\u4EE3\u7801\u548C\u4EA7\u54C1\u624B\u518C\u7684\u8BE6\u7EC6\u5BF9\u6BD4\uFF0C\u786E\u8BA4\u4E86\u4EE3\u7801\u529F\u80FD\u4E0E\u4EA7\u54C1\u624B\u518C\u7684\u4E00\u81F4\u6027\u3002\u4E3B\u8981\u6838\u5BF9\u7ED3\u679C\u5982\u4E0B\uFF1A"),
+        
+        heading("\u4E09\u3001\u4EE3\u7801\u6838\u5BF9\u7ED3\u679C", HeadingLevel.HEADING_2),
+        body("\u6838\u5FC3\u5F15\u64CE\u6A21\u5757\uFF08\u8BCA\u65AD\u5F15\u64CE\u3001\u5254\u9664\u5F15\u64CE\u3001\u6241\u5E73\u5316\u5F15\u64CE\u3001\u91CD\u7EC4\u5F15\u64CE\u3001\u6267\u884C\u5F15\u64CE\uFF09\u5747\u5DF2\u6B63\u786E\u5B9E\u73B0\u4E86\u4EA7\u54C1\u624B\u518C\u4E2D\u63CF\u8FF0\u7684\u529F\u80FD\u3002\u8BCA\u65AD\u5F15\u64CE\u652F\u6301\u591A\u7EBF\u7A0B\u626B\u63CF\u3001\u6587\u4EF6\u5C5E\u6027\u68C0\u6D4B\u3001\u91CD\u89E3\u6790\u70B9\u8BC6\u522B\u7B49\u529F\u80FD\u3002\u5254\u9664\u5F15\u64CE\u5B9E\u73B0\u4E86\u7F13\u5B58\u76EE\u5F55\u8BC6\u522B\u3001\u5783\u573E\u6587\u4EF6\u8BC6\u522B\u3001\u91CD\u590D\u6587\u4EF6\u68C0\u6D4B\u7B49\u529F\u80FD\u3002"),
+        
+        heading("\u4E09\u3001\u4EE3\u7801\u6838\u5BF9\u7ED3\u679C", HeadingLevel.HEADING_2),
+        body("Win32 \u5E95\u5C42 IO \u6A21\u5757\u6B63\u786E\u5C01\u88C5\u4E86 Windows API\uFF0C\u5305\u62EC GetFileAttributes\u3001SetFileAttributes\u3001MoveFileEx\u3001DeleteFile\u3001RemoveDirectory \u7B49\u51FD\u6570\u3002\u56DE\u6536\u7AD9\u529F\u80FD\u901A\u8FC7 shell32.SHFileOperationW \u5B9E\u73B0\uFF0C\u652F\u6301\u5C06\u6587\u4EF6\u79FB\u81F3\u7CFB\u7EDF\u56DE\u6536\u7AD9\u3002\u533A\u57DF\u6807\u8BC6\u5904\u7406\u6A21\u5757\u652F\u6301\u68C0\u6D4B\u548C\u6E05\u9664 Zone.Identifier \u5907\u7528\u6570\u636E\u6D41\u3002"),
+        
+        heading("\u4E09\u3001\u4EE3\u7801\u6838\u5BF9\u7ED3\u679C", HeadingLevel.HEADING_2),
+        body("\u5B89\u5168\u68C0\u67E5\u6A21\u5757\u5B9E\u73B0\u4E86\u8DEF\u5F84\u5B89\u5168\u7EA7\u522B\u68C0\u67E5\u3001\u53D7\u4FDD\u62A4\u8DEF\u5F84\u8BC6\u522B\u3001\u6587\u4EF6\u9501\u68C0\u6D4B\u7B49\u529F\u80FD\u3002\u6743\u9650\u5F15\u64CE\u652F\u6301\u6388\u4E88\u5B8C\u5168\u63A7\u5236\u6743\u9650\u3001\u79FB\u9664\u53EA\u8BFB\u5C5E\u6027\u3001\u79FB\u9664\u9690\u85CF\u5C5E\u6027\u3001\u6E05\u9664 Zone.Identifier \u7B49\u64CD\u4F5C\u3002"),
+        
+        // 四、发现的问题与修复
+        heading("\u56DB\u3001\u53D1\u73B0\u7684\u95EE\u9898\u4E0E\u4FEE\u590D"),
+        body("\u5728\u4EE3\u7801\u5BA1\u8BA1\u8FC7\u7A0B\u4E2D\uFF0C\u53D1\u73B0\u5E76\u4FEE\u590D\u4E86\u4EE5\u4E0B\u95EE\u9898\uFF1A"),
+        
+        heading("\u56DB\u3001\u53D1\u73B0\u7684\u95EE\u9898\u4E0E\u4FEE\u590D", HeadingLevel.HEADING_2),
+        bodyNoIndent("\u95EE\u9898\u63CF\u8FF0\uFF1A\u5E38\u91CF\u5B9A\u4E49\u6A21\u5757\u4E2D\u7F3A\u5C11\u90E8\u5206\u91CD\u8981\u5E38\u91CF\uFF0C\u5305\u62EC FILE_ATTRIBUTE_DIRECTORY\u3001FO_DELETE\u3001FOF_ALLOWUNDO\u3001FOF_NOCONFIRMATION\u3001FOF_SILENT\u3001FOF_NOERRORUI \u7B49\u3002\u8FD9\u4E9B\u5E38\u91CF\u5BF9\u4E8E Windows \u5E73\u53F0\u7684\u56DE\u6536\u7AD9\u529F\u80FD\u548C\u6587\u4EF6\u5C5E\u6027\u64CD\u4F5C\u81F3\u5173\u91CD\u8981\u3002"),
+        bodyNoIndent("\u4FEE\u590D\u65B9\u6848\uFF1A\u5728\u5E38\u91CF\u5B9A\u4E49\u6A21\u5757\u4E2D\u8865\u5145\u4E86\u6240\u6709\u7F3A\u5931\u7684\u5E38\u91CF\u5B9A\u4E49\uFF0C\u786E\u4FDD Windows API \u8C03\u7528\u7684\u6B63\u786E\u6027\u3002"),
+        
+        heading("\u56DB\u3001\u53D1\u73B0\u7684\u95EE\u9898\u4E0E\u4FEE\u590D", HeadingLevel.HEADING_2),
+        bodyNoIndent("\u95EE\u9898\u63CF\u8FF0\uFF1ANodeAction \u679A\u4E3E\u4E2D\u7F3A\u5C11 RENAME \u9009\u9879\uFF0C\u4E14 NONE \u7684\u503C\u4E3A \"None\" \u800C\u975E \"NONE\"\uFF0C\u4E0E\u5176\u4ED6\u679A\u4E3E\u503C\u7684\u5927\u5199\u683C\u5F0F\u4E0D\u4E00\u81F4\u3002"),
+        bodyNoIndent("\u4FEE\u590D\u65B9\u6848\uFF1A\u6DFB\u52A0\u4E86 RENAME \u679A\u4E3E\u9009\u9879\uFF0C\u5E76\u5C06 NONE \u7684\u503C\u4FEE\u6B63\u4E3A \"NONE\"\uFF0C\u4FDD\u6301\u6240\u6709\u679A\u4E3E\u503C\u7684\u683C\u5F0F\u4E00\u81F4\u6027\u3002"),
+        
+        heading("\u56DB\u3001\u53D1\u73B0\u7684\u95EE\u9898\u4E0E\u4FEE\u590D", HeadingLevel.HEADING_2),
+        bodyNoIndent("\u95EE\u9898\u63CF\u8FF0\uFF1A\u9ED8\u8BA4\u914D\u7F6E\u4E2D\u7684 ext_group_map \u76F4\u63A5\u5F15\u7528 EXTENSION_GROUPS\uFF0C\u4F46\u8BE5\u5B57\u5178\u7684\u503C\u662F set \u7C7B\u578B\uFF0C\u65E0\u6CD5\u76F4\u63A5\u5E8F\u5217\u5316\u4E3A JSON\u3002"),
+        bodyNoIndent("\u4FEE\u590D\u65B9\u6848\uFF1A\u5C06 ext_group_map \u7684\u503C\u8F6C\u6362\u4E3A {k: list(v) for k, v in EXTENSION_GROUPS.items()}\uFF0C\u786E\u4FDD\u53EF\u4EE5\u6B63\u786E\u5E8F\u5217\u5316\u4E3A JSON \u683C\u5F0F\u3002"),
+        
+        heading("\u56DB\u3001\u53D1\u73B0\u7684\u95EE\u9898\u4E0E\u4FEE\u590D", HeadingLevel.HEADING_2),
+        bodyNoIndent("\u95EE\u9898\u63CF\u8FF0\uFF1A\u90E8\u5206\u6A21\u5757\u7684\u5BFC\u5165\u8BED\u53E5\u4E0D\u5B8C\u6574\uFF0C\u53EF\u80FD\u5BFC\u81F4\u8FD0\u884C\u65F6\u51FA\u73B0 ImportError\u3002"),
+        bodyNoIndent("\u4FEE\u590D\u65B9\u6848\uFF1A\u68C0\u67E5\u5E76\u4FEE\u590D\u4E86\u6240\u6709\u6A21\u5757\u7684\u5BFC\u5165\u8BED\u53E5\uFF0C\u786E\u4FDD\u6A21\u5757\u95F4\u7684\u4F9D\u8D56\u5173\u7CFB\u6B63\u786E\u65E0\u8BEF\u3002"),
+        
+        // 五、优化建议
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE"),
+        body("\u5728\u5BA1\u8BA1\u8FC7\u7A0B\u4E2D\uFF0C\u53D1\u73B0\u4E86\u4EE5\u4E0B\u53EF\u4EE5\u4F18\u5316\u7684\u5730\u65B9\uFF1A"),
+        
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE", HeadingLevel.HEADING_2),
+        body("\u5F53\u524D\u6A21\u5757\u95F4\u7684\u4F9D\u8D56\u5173\u7CFB\u8BBE\u8BA1\u826F\u597D\uFF0C\u91C7\u7528\u4E86\u5206\u5C42\u67B6\u6784\uFF0C\u907F\u514D\u4E86\u5FAA\u73AF\u5BFC\u5165\u3002\u5EFA\u8BAE\u7EE7\u7EED\u4FDD\u6301\u8FD9\u79CD\u8BBE\u8BA1\u6A21\u5F0F\uFF0C\u5728\u6DFB\u52A0\u65B0\u529F\u80FD\u65F6\u6CE8\u610F\u6A21\u5757\u7684\u5C42\u7EA7\u5173\u7CFB\u3002\u5E38\u91CF\u5B9A\u4E49\u6A21\u5757\u4F5C\u4E3A\u6700\u5E95\u5C42\u6A21\u5757\uFF0C\u4E0D\u5E94\u4F9D\u8D56\u4EFB\u4F55\u5176\u4ED6\u6A21\u5757\u3002"),
+        
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE", HeadingLevel.HEADING_2),
+        body("\u5F53\u524D\u7684\u9519\u8BEF\u5904\u7406\u673A\u5236\u8F83\u4E3A\u7B80\u5355\uFF0C\u4E3B\u8981\u901A\u8FC7 ErrorCollector \u6536\u96C6\u9519\u8BEF\u3002\u5EFA\u8BAE\u589E\u52A0\u66F4\u8BE6\u7EC6\u7684\u9519\u8BEF\u5206\u7C7B\u548C\u9519\u8BEF\u7B49\u7EA7\uFF0C\u4EE5\u53CA\u9519\u8BEF\u6062\u590D\u673A\u5236\u3002\u5BF9\u4E8E\u4E25\u91CD\u9519\u8BEF\uFF0C\u53EF\u4EE5\u8003\u8651\u6DFB\u52A0\u81EA\u52A8\u56DE\u6EDA\u529F\u80FD\u3002"),
+        
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE", HeadingLevel.HEADING_2),
+        body("\u5F53\u524D\u7684\u5355\u5143\u6D4B\u8BD5\u8986\u76D6\u7387\u6709\u9650\uFF0C\u4E3B\u8981\u6D4B\u8BD5\u4E86\u5E38\u91CF\u3001\u5DE5\u5177\u51FD\u6570\u3001\u6570\u636E\u6A21\u578B\u548C\u5B89\u5168\u68C0\u67E5\u6A21\u5757\u3002\u5EFA\u8BAE\u589E\u52A0\u5BF9\u5404\u4E2A\u5F15\u64CE\u6A21\u5757\u7684\u5355\u5143\u6D4B\u8BD5\uFF0C\u7279\u522B\u662F\u8BCA\u65AD\u5F15\u64CE\u3001\u5254\u9664\u5F15\u64CE\u548C\u6267\u884C\u5F15\u64CE\u7684\u6D4B\u8BD5\uFF0C\u4EE5\u786E\u4FDD\u6838\u5FC3\u529F\u80FD\u7684\u6B63\u786E\u6027\u3002"),
+        
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE", HeadingLevel.HEADING_2),
+        body("\u5F53\u524D\u7684\u65E5\u5FD7\u8BB0\u5F55\u4E3B\u8981\u4FDD\u5B58\u5728\u672C\u5730\u6587\u4EF6\u4E2D\u3002\u5EFA\u8BAE\u589E\u52A0\u65E5\u5FD7\u8F6E\u8F6C\u529F\u80FD\uFF0C\u81EA\u52A8\u6E05\u7406\u8FC7\u671F\u7684\u65E5\u5FD7\u6587\u4EF6\u3002\u540C\u65F6\u53EF\u4EE5\u8003\u8651\u6DFB\u52A0\u65E5\u5FD7\u538B\u7F29\u529F\u80FD\uFF0C\u51CF\u5C11\u78C1\u76D8\u7A7A\u95F4\u5360\u7528\u3002"),
+        
+        heading("\u4E94\u3001\u4F18\u5316\u5EFA\u8BAE", HeadingLevel.HEADING_2),
+        body("\u5F53\u524D\u7684\u914D\u7F6E\u7BA1\u7406\u8F83\u4E3A\u7B80\u5355\uFF0C\u4E3B\u8981\u901A\u8FC7 JSON \u6587\u4EF6\u52A0\u8F7D\u3002\u5EFA\u8BAE\u589E\u52A0\u914D\u7F6E\u9A8C\u8BC1\u529F\u80FD\uFF0C\u5BF9\u914D\u7F6E\u9879\u8FDB\u884C\u7C7B\u578B\u68C0\u67E5\u548C\u5408\u6CD5\u6027\u9A8C\u8BC1\u3002\u540C\u65F6\u53EF\u4EE5\u8003\u8651\u652F\u6301 YAML \u683C\u5F0F\u7684\u914D\u7F6E\u6587\u4EF6\uFF0C\u63D0\u9AD8\u914D\u7F6E\u7684\u53EF\u8BFB\u6027\u3002"),
+        
+        // 六、总结
+        heading("\u516D\u3001\u603B\u7ED3"),
+        body("\u672C\u6B21\u4EE3\u7801\u5BA1\u8BA1\u5DE5\u4F5C\u5DF2\u5B8C\u6210\u4E86\u4EE5\u4E0B\u4EFB\u52A1\uFF1A"),
+        
+        body("\u6210\u529F\u5C06\u539F\u59CB\u4EE3\u7801\u62C6\u5206\u4E3A 20 \u4E2A\u72EC\u7ACB\u7684 Python \u6A21\u5757\uFF0C\u5168\u90E8\u4F7F\u7528\u4E2D\u6587\u547D\u540D\uFF0C\u63D0\u9AD8\u4E86\u4EE3\u7801\u7684\u53EF\u8BFB\u6027\u548C\u53EF\u7EF4\u62A4\u6027\u3002\u6A21\u5757\u95F4\u7684\u4F9D\u8D56\u5173\u7CFB\u6E05\u6670\uFF0C\u91C7\u7528\u5206\u5C42\u67B6\u6784\uFF0C\u907F\u514D\u4E86\u5FAA\u73AF\u5BFC\u5165\u95EE\u9898\u3002"),
+        
+        body("\u6838\u5BF9\u4E86\u4EE3\u7801\u529F\u80FD\u4E0E\u4EA7\u54C1\u624B\u518C\u7684\u4E00\u81F4\u6027\uFF0C\u786E\u8BA4\u6240\u6709\u6838\u5FC3\u529F\u80FD\u5747\u5DF2\u6B63\u786E\u5B9E\u73B0\u3002\u5305\u62EC\u76EE\u5F55\u8BCA\u65AD\u4E0E\u5206\u6790\u3001\u7F13\u5B58\u6587\u4EF6\u6E05\u7406\u3001\u91CD\u590D\u6587\u4EF6\u68C0\u6D4B\u4E0E\u53BB\u91CD\u3001\u5197\u4F59\u76EE\u5F55\u7ED3\u6784\u89E3\u5305\u3001\u6587\u4EF6\u6241\u5E73\u5316\u91CD\u7EC4\u3001Windows \u7CFB\u7EDF\u56DE\u6536\u7AD9\u96C6\u6210\u3001\u5B89\u5168\u68C0\u67E5\u4E0E\u6743\u9650\u4FEE\u590D\u7B49\u529F\u80FD\u3002"),
+        
+        body("\u53D1\u73B0\u5E76\u4FEE\u590D\u4E86 4 \u4E2A\u4E3B\u8981\u95EE\u9898\uFF0C\u5305\u62EC\u5E38\u91CF\u5B9A\u4E49\u7F3A\u5931\u3001\u679A\u4E3E\u503C\u4E0D\u4E00\u81F4\u3001\u914D\u7F6E\u5E8F\u5217\u5316\u95EE\u9898\u3001\u6A21\u5757\u5BFC\u5165\u4E0D\u5B8C\u6574\u7B49\u3002\u6240\u6709\u95EE\u9898\u5747\u5DF2\u5F97\u5230\u4FEE\u590D\uFF0C\u4EE3\u7801\u8D28\u91CF\u5F97\u5230\u63D0\u5347\u3002"),
+        
+        body("\u63D0\u51FA\u4E86 5 \u9879\u4F18\u5316\u5EFA\u8BAE\uFF0C\u6D89\u53CA\u6A21\u5757\u4F9D\u8D56\u5173\u7CFB\u3001\u9519\u8BEF\u5904\u7406\u673A\u5236\u3001\u5355\u5143\u6D4B\u8BD5\u8986\u76D6\u7387\u3001\u65E5\u5FD7\u7BA1\u7406\u529F\u80FD\u3001\u914D\u7F6E\u7BA1\u7406\u529F\u80FD\u7B49\u65B9\u9762\u3002\u8FD9\u4E9B\u5EFA\u8BAE\u53EF\u4EE5\u5728\u540E\u7EED\u7248\u672C\u4E2D\u9010\u6B65\u5B9E\u73B0\u3002"),
+        
+        body("\u603B\u4F53\u800C\u8A00\uFF0C\u7ECF\u8FC7\u672C\u6B21\u5BA1\u8BA1\u5DE5\u4F5C\uFF0C\u9879\u76EE\u4EE3\u7801\u8D28\u91CF\u826F\u597D\uFF0C\u6A21\u5757\u5316\u62C6\u5206\u5B8C\u6574\uFF0C\u529F\u80FD\u5B9E\u73B0\u6B63\u786E\uFF0C\u53EF\u4EE5\u8FDB\u5165\u4E0B\u4E00\u6B65\u7684\u6D4B\u8BD5\u548C\u90E8\u7F72\u9636\u6BB5\u3002")
+      ]
+    }
+  ]
+});
+
+// 生成文档
+Packer.toBuffer(doc).then(buf => {
+  fs.writeFileSync("/home/z/my-project/download/文件夹整理工具_代码审计报告.docx", buf);
+  console.log("✅ 审计报告已生成: /home/z/my-project/download/文件夹整理工具_代码审计报告.docx");
+});
