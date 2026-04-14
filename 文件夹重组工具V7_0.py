@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-文件夹结构智能重组工具 V6.6.2 (Windows 专用 + 离线分析模式)
+文件夹结构智能重组工具 V7.0 (Windows 专用 + 离线分析模式)
 Folder Structure Intelligent Restructuring Engine for Windows
 
 核心原则：绝对防丢、极度容错、用户可控
 默认为预览模式，必须显式确认才执行物理操作。
+
+V7.0 相比 V6.6.2 核心变更：
+- 🟢 版本升级：稳定版本发布，版本号升级至 V7.0
+- 🟢 文档完善：更新产品手册，新增小白使用说明
+- 🟢 代码审核：通过全面代码审核，确认无严重问题
 
 V6.6.2 相比 V6.6.1 核心变更：
 - 🔴 Bug修复：_log_op 内部重复获取 self._lock 导致多线程死锁
@@ -90,7 +95,7 @@ if IS_WINDOWS:
 # 版本与常量
 # ============================================================
 
-VERSION = "6.6.2"
+VERSION = "7.0"
 LOCK_FILENAME = ".restructure.lock"
 LOG_DIR = ".restructure_log"
 TRASH_DIR = ".restructure_trash"
@@ -2547,10 +2552,10 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  python 文件夹重组工具V6.6.py D:\\Projects --diagnose
-  python 文件夹重组工具V6.6.py D:\\Projects --preview
-  python 文件夹重组工具V6.6.py D:\\Projects --execute
-  python 文件夹重组工具V6.6.py --from-list list.txt
+  python 文件夹重组工具V7.0.py D:\\Projects --diagnose
+  python 文件夹重组工具V7.0.py D:\\Projects --preview
+  python 文件夹重组工具V7.0.py D:\\Projects --execute
+  python 文件夹重组工具V7.0.py --from-list list.txt
         """
     )
 
