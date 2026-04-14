@@ -1,6 +1,7 @@
 """
 文件夹整理工具入口点
-支持 python -m 文件夹整理工具 方式运行
+====================
+支持 python -m folder_restructure_v8 方式运行
 """
 
 from .命令行接口 import main
