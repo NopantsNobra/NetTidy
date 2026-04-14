@@ -338,13 +338,18 @@ class ExecutionEngine:
             self._log(seq, "DELETE", source, "", "LOCKED")
     
     def _process_hardlink(self, node: FileNode, dry_run: bool) -> None:
-        """处理硬链接操作"""
+        """
+        处理硬链接操作
+        
+        将被标记的重复文件（source）替换为指向保留文件（target）的硬链接。
+        流程：source 移入回收站 → 在 source 原位置创建指向 target 的硬链接。
+        """
         with self._lock:
             self._seq += 1
             seq = self._seq
         
-        source = node.full_path
-        target = node.target_path
+        source = node.full_path    # 被标记的重复文件（要被替换为硬链接）
+        target = node.target_path  # 保留文件（不应被改动）
         
         if not Win32IO.exists(source):
             node.status = NodeStatus.VANISHED
@@ -354,7 +359,7 @@ class ExecutionEngine:
         
         if not target or not Win32IO.exists(target):
             node.status = NodeStatus.FAILED
-            node.error_msg = "目标文件不存在"
+            node.error_msg = "保留文件不存在"
             self.stats["failed"] += 1
             self._log(seq, "HARDLINK", source, target, "FAILED")
             return
@@ -365,25 +370,20 @@ class ExecutionEngine:
             self._log(seq, "HARDLINK", source, target, "SUCCESS")
             return
         
-        # 安全操作：先移入回收站，再创建硬链接
+        # 安全操作：先将 source 移入回收站备份
         trash_path = self._get_trash_path(source)
         
         try:
-            # 移动到回收站
             if not Win32IO.move_file(source, trash_path):
                 raise OSError("移动到回收站失败")
             
-            try:
-                # 创建硬链接
-                if Win32IO.create_hard_link(target, source):
-                    node.status = NodeStatus.HARDLINKED
-                    self.stats["hardlinked"] += 1
-                    self.stats["success"] += 1
-                    self._log(seq, "HARDLINK", source, target, "HARDLINKED")
-                else:
-                    raise OSError("创建硬链接失败")
-            
-            except OSError:
+            # 在 source 原位置创建指向 target 的硬链接
+            if Win32IO.create_hard_link(source, target):
+                node.status = NodeStatus.HARDLINKED
+                self.stats["hardlinked"] += 1
+                self.stats["success"] += 1
+                self._log(seq, "HARDLINK", source, target, "HARDLINKED")
+            else:
                 # 硬链接失败，恢复原文件
                 Win32IO.move_file(trash_path, source)
                 node.status = NodeStatus.FAILED
@@ -392,6 +392,12 @@ class ExecutionEngine:
                 self._log(seq, "HARDLINK", source, target, "FAILED")
         
         except OSError as e:
+            # 尝试恢复
+            try:
+                if Win32IO.exists(trash_path) and not Win32IO.exists(source):
+                    Win32IO.move_file(trash_path, source)
+            except OSError:
+                pass
             node.status = NodeStatus.FAILED
             node.error_msg = str(e)
             self.stats["failed"] += 1

@@ -102,7 +102,7 @@ WINDOWS_RESERVED: FrozenSet[str] = frozenset({
 
 CACHE_DIR_PATTERNS: List[str] = [
     # 版本控制
-    "node_modules", "__pycache__", ".git", ".svn", ".hg", ". CVS",
+    "node_modules", "__pycache__", ".git", ".svn", ".hg", "CVS",
     # 构建输出
     "target", "build", "dist", "out", "bin", "obj", ".gradle", ".mvn",
     # IDE

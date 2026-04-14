@@ -90,31 +90,31 @@ class RestructureEngine:
         解包冗余目录结构
         
         识别形如 A/A/file.txt 的冗余嵌套，自动合并为 A/file.txt。
+        条件：目录内只有一个子目录，且子目录名 == 父目录名。
         
         Returns:
             解包的目录数量
         """
         unpacked = 0
         
-        # 构建目录树
+        # 构建目录树：parent_path -> [子目录节点]
         dir_children: Dict[str, List[FileNode]] = defaultdict(list)
+        dir_map: Dict[str, FileNode] = {}
         for node in self.nodes:
             if node.is_dir:
                 parent = os.path.dirname(node.full_path)
                 dir_children[parent].append(node)
+                dir_map[node.full_path] = node
         
-        # 构建路径前缀映射
-        node_by_path: Dict[str, FileNode] = {}
-        for node in self.nodes:
-            node_by_path[node.full_path.lower()] = node
+        root_lower = self.root_path.lower()
         
         # 找出可解包的冗余结构
-        # 条件：目录名 == 父目录名
-        for parent_lower, children in list(dir_children.items()):
-            if parent_lower.lower() == self.root_path.lower():
+        # 条件：父目录只有一个活跃子目录，且子目录名 == 父目录名
+        for parent_path, children in list(dir_children.items()):
+            if parent_path.lower() == root_lower:
                 continue
             
-            parent_name = os.path.basename(parent_lower)
+            parent_name = os.path.basename(parent_path)
             active_children = [
                 c for c in children
                 if c.action == NodeAction.NONE and c.is_dir
@@ -125,21 +125,23 @@ class RestructureEngine:
             
             child = active_children[0]
             
-            # 检查目录名是否与父目录名相同
+            # 检查目录名是否与父目录名相同（冗余嵌套）
             if child.file_name.lower() != parent_name.lower():
                 continue
             
-            # 解包：提升子项，删除冗余目录
+            # 解包：将冗余子目录的所有子项提升到父目录
             child_prefix = child.full_path.lower() + os.sep
             
             for node in self.nodes:
+                if node == child:
+                    continue
                 if node.full_path.lower().startswith(child_prefix):
-                    if node.action == NodeAction.NONE or node.full_path == child.full_path:
+                    if node.action != NodeAction.NONE:
                         continue
                     
-                    # 计算新路径
+                    # 计算新路径：从 child 内部相对路径移到 parent 下
                     rel = os.path.relpath(node.full_path, child.full_path)
-                    new_path = os.path.join(parent_lower, rel)
+                    new_path = os.path.join(parent_path, rel)
                     
                     node.target_path = new_path
                     node.action = NodeAction.MOVE

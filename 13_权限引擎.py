@@ -208,11 +208,12 @@ class PermissionEngine:
         """
         items = [n for n in self.nodes if n.is_hidden and not n.is_dir]
         
-        # 排除系统隐藏目录
+        # 排除以 "." 开头的常规隐藏文件（如 .gitignore），
+        # 但保留 .restructure* 前缀的内部目录相关文件
         items = [
             n for n in items
-            if not n.file_name.startswith(".")
-            or n.file_name.startswith(".restructure")
+            if n.file_name.startswith(".restructure")
+            or not n.file_name.startswith(".")
         ]
         
         if not items:

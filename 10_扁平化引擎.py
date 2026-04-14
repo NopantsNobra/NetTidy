@@ -423,6 +423,7 @@ class FlattenEngine:
         生成唯一文件名
         
         处理文件名冲突，添加来源目录后缀。
+        同时检查内存集合和磁盘上的已有文件。
         
         Args:
             directory: 目标目录
@@ -432,7 +433,11 @@ class FlattenEngine:
         Returns:
             唯一文件名
         """
-        if filename not in existing:
+        def _is_available(name: str) -> bool:
+            return name not in existing and not os.path.exists(os.path.join(directory, name))
+        
+        if _is_available(filename):
+            existing.add(filename)
             return filename
         
         # 分离文件名和扩展名
@@ -442,7 +447,8 @@ class FlattenEngine:
         counter = 2
         while True:
             new_name = f"{base}_{counter}{ext}"
-            if new_name not in existing:
+            if _is_available(new_name):
+                existing.add(new_name)
                 return new_name
             counter += 1
             
@@ -450,7 +456,9 @@ class FlattenEngine:
                 # 使用 UUID
                 import uuid
                 uid = uuid.uuid4().hex[:8]
-                return f"{base}_{uid}{ext}"
+                new_name = f"{base}_{uid}{ext}"
+                existing.add(new_name)
+                return new_name
     
     # ═══════════════════════════════════════════════════════════════
     # 结果

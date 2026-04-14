@@ -78,7 +78,7 @@ class OfflineAnalyzer:
                 data = json.load(f)
             
             self.root_path = data.get("root_path", "")
-            self.scan_timestamp = data.get("scan_timestamp", "")
+            self.scan_timestamp = data.get("scan_timestamp") or data.get("scan_time", "")
             
             # 重建节点
             for node_data in data.get("nodes", []):

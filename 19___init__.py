@@ -43,6 +43,8 @@ __all__ = [
     "FolderRestructureEngine",
     # 入口
     "main",
+    # 版本
+    "__version__",
 ]
 
 # 导入核心组件

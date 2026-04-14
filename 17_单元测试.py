@@ -4,8 +4,8 @@
 职责：各模块的单元测试
 
 运行方式：
-    python -m folder_restructure_v8.单元测试
-    python -m unittest folder_restructure_v8.单元测试 -v
+    python -m folder_restructure_v9 --test
+    python -m unittest folder_restructure_v9.单元测试 -v
 
 依赖模块：
     - 所有业务模块
@@ -20,22 +20,19 @@ import unittest
 from datetime import datetime
 from typing import List
 
-# 添加父目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from 常量定义 import (
+from .常量定义 import (
     VERSION, IS_WINDOWS, NodeAction, NodeStatus, ReparseType,
     SafetyLevel, PermissionAction, DedupStrategy, FlattenMode,
     CACHE_DIR_PATTERNS, JUNK_FILE_PATTERNS, EXTENSION_GROUPS,
     DEFAULT_CONFIG, WINDOWS_RESERVED, ILLEGAL_CHARS,
 )
-from 工具函数 import (
+from .工具函数 import (
     _sanitize_filename, _truncate_name, _fmt_size, _parse_size,
     _win_path, _short_path, _unique_filename, _escape_html,
 )
-from 数据模型 import FileNode, VirtualFileNode, OperationLog, ErrorEntry, DuplicateGroup
-from 安全检查 import SafetyChecker, LockManager, ErrorCollector
-from 配置管理 import RuntimeConfig, load_config, validate_config
+from .数据模型 import FileNode, VirtualFileNode, OperationLog, ErrorEntry, DuplicateGroup
+from .安全检查 import SafetyChecker, LockManager, ErrorCollector
+from .配置管理 import RuntimeConfig, load_config, validate_config
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -409,7 +406,7 @@ class TestFlatten(unittest.TestCase):
     
     def test_size_category(self):
         """测试大小分类"""
-        from 扁平化引擎 import FlattenEngine
+        from .扁平化引擎 import FlattenEngine
         
         engine = FlattenEngine([], "/tmp")
         
@@ -420,7 +417,7 @@ class TestFlatten(unittest.TestCase):
     
     def test_ext_classification(self):
         """测试扩展名分类"""
-        from 扁平化引擎 import FlattenEngine
+        from .扁平化引擎 import FlattenEngine
         
         engine = FlattenEngine([], "/tmp")
         
@@ -438,7 +435,7 @@ class TestElimination(unittest.TestCase):
     
     def test_mark_junk_files(self):
         """测试垃圾文件标记"""
-        from 剔除引擎 import EliminationEngine
+        from .剔除引擎 import EliminationEngine
         
         nodes = [
             FileNode(full_path="/test/file.txt", file_name="file.txt", extension=".txt"),
@@ -464,7 +461,7 @@ class TestExecution(unittest.TestCase):
     
     def test_get_trash_path_format(self):
         """测试回收站路径格式"""
-        from 执行引擎 import ExecutionEngine
+        from .执行引擎 import ExecutionEngine
         
         nodes = [FileNode(full_path="/test/file.txt", file_name="file.txt", extension=".txt")]
         engine = ExecutionEngine(nodes, "/test", "/logs", "/trash")
@@ -477,7 +474,7 @@ class TestExecution(unittest.TestCase):
     
     def test_generate_rollback_script_empty(self):
         """测试空回滚脚本"""
-        from 执行引擎 import ExecutionEngine
+        from .执行引擎 import ExecutionEngine
         
         nodes = []
         engine = ExecutionEngine(nodes, "/test", "/logs", "/trash")

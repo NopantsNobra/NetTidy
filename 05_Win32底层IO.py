@@ -65,6 +65,9 @@ from .工具函数 import _win_path
 # Win32 API 初始化
 # ═══════════════════════════════════════════════════════════════════
 
+_WIN32_AVAILABLE: bool = False
+"""Win32 API 是否实际可用"""
+
 if IS_WINDOWS:
     try:
         _kernel32 = ctypes.windll.kernel32
@@ -72,9 +75,9 @@ if IS_WINDOWS:
         
         # 设置错误模式
         _kernel32.SetErrorMode(0x0003)  # SEM_FAILCRITICALERRORS | SEM_NOALIGNMENTFAULTEXCEPT
+        _WIN32_AVAILABLE = True
         
     except (AttributeError, OSError):
-        IS_WINDOWS = False
         _kernel32 = None
         _shell32 = None
 
@@ -120,7 +123,7 @@ class Win32IO:
         Returns:
             是否存在
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return os.path.exists(path)
         
         attrs = cls.get_file_attributes(path)
@@ -129,7 +132,7 @@ class Win32IO:
     @classmethod
     def is_file(cls, path: str) -> bool:
         """检查是否为文件"""
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return os.path.isfile(path)
         
         attrs = cls.get_file_attributes(path)
@@ -140,7 +143,7 @@ class Win32IO:
     @classmethod
     def is_dir(cls, path: str) -> bool:
         """检查是否为目录"""
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return os.path.isdir(path)
         
         attrs = cls.get_file_attributes(path)
@@ -163,7 +166,7 @@ class Win32IO:
         Returns:
             文件属性值，失败返回 None
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return None
         
         # 尝试长路径
@@ -191,7 +194,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return False
         
         paths_to_try = [_win_path(path), path]
@@ -289,7 +292,7 @@ class Win32IO:
         Returns:
             stat_result 或 None
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 return os.lstat(path)
             except OSError:
@@ -345,7 +348,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 shutil.move(src, dst)
                 return True
@@ -417,7 +420,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 os.remove(path)
                 return True
@@ -455,7 +458,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 if recursive:
                     shutil.rmtree(path)
@@ -512,7 +515,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 os.link(existing_path, new_path)
                 return True
@@ -544,7 +547,7 @@ class Win32IO:
         Returns:
             是否成功
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             try:
                 os.symlink(target_path, link_path)
                 return True
@@ -582,7 +585,7 @@ class Win32IO:
         Returns:
             重解析点标签值，或 None
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return None
         
         try:
@@ -702,7 +705,7 @@ class RecycleBin:
         Returns:
             (是否支持, 说明消息)
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return False, "仅支持 Windows 系统"
         
         if _shell32 is None:
@@ -721,7 +724,7 @@ class RecycleBin:
         Returns:
             是否启用
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return False
         
         try:
@@ -760,7 +763,7 @@ class RecycleBin:
         Returns:
             (是否成功, 消息)
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return False, "仅支持 Windows 系统"
         
         support, msg = cls.check_support()
@@ -825,7 +828,7 @@ class RecycleBin:
         Returns:
             (是否成功, 消息)
         """
-        if not IS_WINDOWS:
+        if not _WIN32_AVAILABLE:
             return False, "仅支持 Windows 系统"
         
         try:

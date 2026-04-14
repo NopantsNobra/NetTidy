@@ -46,6 +46,8 @@ from typing import List, Dict, Optional, Set, Any, Tuple
 from .常量定义 import (
     IS_WINDOWS,
     VERSION,
+    LOG_DIR,
+    TRASH_DIR,
     FILE_ATTRIBUTE_HIDDEN,
     FILE_ATTRIBUTE_READONLY,
     FILE_ATTRIBUTE_SYSTEM,
@@ -149,14 +151,17 @@ class DiagnosticEngine:
         if verbose:
             print(f"\n📂 扫描目录: {self.root_path}")
         
+        # 内部目录始终排除
+        internal_dirs = {LOG_DIR.lower(), TRASH_DIR.lower()}
+        
         # 遍历目录
         for dirpath, dirnames, filenames in os.walk(self.root_path, topdown=True):
-            # 过滤排除的目录
-            if self.exclude_paths:
-                dirnames[:] = [
-                    d for d in dirnames
-                    if os.path.normpath(os.path.join(dirpath, d)) not in self.exclude_paths
-                ]
+            # 过滤排除的目录（包括内部目录）
+            dirnames[:] = [
+                d for d in dirnames
+                if d.lower() not in internal_dirs
+                and os.path.normpath(os.path.join(dirpath, d)) not in self.exclude_paths
+            ]
             
             # 处理目录
             for dirname in dirnames:
