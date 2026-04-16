@@ -1,68 +1,121 @@
-"""同生共死检查器：分支型终点（第二档）下的子项提取判定。 """
+"""目录结构整理器：基于修订版规则实现穿透、同生共死、冻结与提级。"""
 from __future__ import annotations
 from typing import List, TYPE_CHECKING
-from nesttidy.runtime.logger import get_logger
 
 if TYPE_CHECKING:
     from nesttidy.core.node import FileNode
 
-logger = get_logger(__name__)
+class FolderCleaner:
+    """目录结构整理器：彻底剥离无用嵌套，智能处理分叉与提级。"""
 
-class CoExtractor:
-    """同生共死检查器：决定是否提取分支下的所有单文件叶子节点。"""
+    def clean(self, node: "FileNode", is_root: bool = False):
+        """
+        核心递归清理函数（自底向上）
+        :param node: 当前处理的节点
+        :param is_root: 是否为根目录锚定点，根目录绝不被穿透剥离
+        """
+        # 1. 递归清理所有子节点（自底向上，保证处理当前节点时，子节点已是干净状态）
+        for child in node.children[:]:  # 使用切片拷贝，防止迭代中修改导致问题
+            if not child.is_file:
+                self.clean(child, is_root=False)
 
-    def check(self, parent_node: "FileNode", children: List["FileNode"]) -> List["FileNode"]:
-        """检查并决定是否提取子项。"""
-        # 筛选出 sw>0 且第四档的节点（这些是"向上抛出"的黑盒子）
-        extract_pool = [
-            c for c in children 
-            if not c.is_file and c.sw > 0 and c.tier == 4
-        ]
+        # 2. 穿透（剥洋葱）：如果子目录是空壳（0文件1子目录），用孙子目录替换它
+        # 注意：根目录绝对不穿透
+        if not is_root:
+            self._penetrate(node)
 
-        if not extract_pool:
-            return children
+        # 3. 同生共死检查（分叉点判断）
+        frozen = self._check_co_extraction(node)
 
-        # ══════════════════════════════════════════════════
-        # 【致命修复】必须同时校验文件数和目录数
-        # 防止 f=1, d=1 的第四档黑盒被错误提取，导致子目录被静默丢弃
-        # ══════════════════════════════════════════════════
-        can_extract = all(
-            c._resolved_file_count == 1 and c._resolved_dir_count == 0 
-            for c in extract_pool
-        )
+        # 4. 单文件提级（只有在未冻结的情况下才执行）
+        if not frozen:
+            self._extract_single_files(node)
 
-        if not can_extract:
-            logger.debug(f"[同生共死] {parent_node.name!r} 存在非单文件子项或黑盒，不提取")
-            return children
+    def _penetrate(self, node: "FileNode"):
+        """穿透逻辑：撕掉 0文件1目录 的无用包装纸"""
+        changed = True
+        while changed:
+            changed = False
+            i = 0
+            while i < len(node.children):
+                child = node.children[i]
+                if child.is_file:
+                    i += 1
+                    continue
 
-        logger.debug(f"[同生共死] {parent_node.name!r} 全部子项为单文件叶，提取 {len(extract_pool)} 个文件")
-        
-        extracted_files: List["FileNode"] = []
-        kept_children: List["FileNode"] = []
+                # 动态获取子节点的文件和目录数（因为递归可能已改变其内部结构）
+                child_files = [c for c in child.children if c.is_file]
+                child_dirs = [c for c in child.children if not c.is_file]
 
-        # 使用 id() 进行精确的内存对象匹配，防止极低概率的 __eq__ 重载问题
-        pool_ids = {id(c) for c in extract_pool}
+                # 符合穿透条件：0个文件，且只有1个子目录
+                if len(child_files) == 0 and len(child_dirs) == 1:
+                    grandchild = child_dirs[0]
+                    # 记录被撕掉的壳，用于溯源防撞车
+                    grandchild.ancestry_chain = child.ancestry_chain + [child.name]
+                    # 替换掉子目录
+                    node.children[i] = grandchild
+                    changed = True
+                    # 继续检查这个位置，因为 grandchild 可能也是个空壳（连续穿透）
+                    continue 
+                i += 1
 
-        for child in children:
-            if id(child) in pool_ids:
-                file_node = self._extract_single_file(child)
-                if file_node:
-                    extracted_files.append(file_node)
-                    logger.debug(f"[同生共死] 提取: {file_node.name!r} (来自 {child.name!r})")
+    def _check_co_extraction(self, node: "FileNode") -> bool:
+        """
+        同生共死检查：处理分叉点
+        :return: 是否触发冻结（全留情况返回 True）
+        """
+        current_files = [c for c in node.children if c.is_file]
+        current_dirs = [c for c in node.children if not c.is_file]
+
+        # 触发条件：当前目录无文件，且有两个及以上的子目录（分叉点）
+        if len(current_files) == 0 and len(current_dirs) > 1:
+            # 检查是否所有子目录都严格满足：只有1个文件，0个子目录
+            all_single_file = all(
+                len([c for c in d.children if c.is_file]) == 1 and 
+                len([c for c in d.children if not c.is_file]) == 0
+                for d in current_dirs
+            )
+
+            if all_single_file:
+                # 情况A：全提。将所有子目录中的单文件扒出来，放到当前目录下
+                for d in current_dirs:
+                    file_node = next(c for c in d.children if c.is_file)
+                    # 记录来源防撞车
+                    file_node.ancestry_chain = d.ancestry_chain + [d.name]
+                    node.children.append(file_node)
+                
+                # 删除所有子目录
+                node.children = [c for c in node.children if c.is_file]
+                return False  # 全提后不冻结
             else:
-                kept_children.append(child)
+                # 情况B：全留。触发冻结，禁止后续的单文件提级，保护分类结构
+                return True
 
-        return kept_children + extracted_files
+        return False  # 非分叉点，不冻结
 
-    def _extract_single_file(self, node: "FileNode") -> "FileNode | None":
-        """从第四档节点中提取唯一的文件节点。"""
-        for child in node.children:
+    def _extract_single_files(self, node: "FileNode"):
+        """单文件提级：将只有1个文件的子目录壳子扔掉，文件提上来"""
+        i = 0
+        while i < len(node.children):
+            child = node.children[i]
             if child.is_file:
-                # 继承父节点的血统链（加上父节点名）
-                child.ancestry_chain = node.ancestry_chain + [node.name]
-                child.sw = node.sw
-                return child
-        return None
+                i += 1
+                continue
+
+            child_files = [c for c in child.children if c.is_file]
+            child_dirs = [c for c in child.children if not c.is_file]
+
+            # 严格判定：只有1个文件，且没有更深的子目录
+            if len(child_files) == 1 and len(child_dirs) == 0:
+                file_node = child_files[0]
+                # 记录被扔掉的壳
+                file_node.ancestry_chain = child.ancestry_chain + [child.name]
+                # 提至当前目录（替换该子目录）
+                node.children[i] = file_node
+                # 不增加 i，因为列表原地修改了，当前位置已经是新提上来的 file_node
+                continue 
+            
+            i += 1
 
 # 模块级单例
-co_extractor = CoExtractor()
+folder_cleaner = FolderCleaner()
