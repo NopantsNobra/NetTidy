@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import REPORT_DIR_NAME
 from .model import OperationPlan
+from .storage import record_plan
 
 
 def new_report_dir(base_dir: str | None = None) -> Path:
@@ -53,6 +54,7 @@ def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None)
         for row in plan.issues:
             item = row.to_dict()
             writer.writerow({k: item.get(k, "") for k in writer.fieldnames})
+    record_plan(plan, str(out))
     return out
 
 
@@ -80,4 +82,3 @@ def markdown_summary(plan: OperationPlan) -> str:
         lines.append(f"- {name}: {op_counts[name]}")
     lines.extend(["", "## 安全边界", "", "- 计划已冻结。", "- 文件最高只提升到资源根目录内。", "- copy 模式不修改源目录。", "- move 模式需要显式确认并写入事务日志。", ""])
     return "\n".join(lines)
-

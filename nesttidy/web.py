@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import html
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
 
+from .duplicate import detect_duplicates
+from .executor import execute_plan
 from .healthcheck import run_healthcheck
+from .manual_pdf import write_manual_pdf
 from .planner import build_plan
+from .repair import repair_permissions, rows_as_dicts
 from .reports import write_plan_report
+from .storage import list_history
 
 LAST_PLAN = None
 
@@ -49,15 +52,28 @@ INDEX_HTML = """<!doctype html>
       <select id="mode"><option value="batch">批量整理：整理所选目录下的每个子文件夹</option><option value="single">单个资源整理：整理所选目录本身</option></select>
       <label>copy 输出目录（只在安全复制时需要）</label>
       <input id="output" placeholder="例如 D:\\下载\\理巢输出_20260514_2130">
+      <label>重复文件检测级别</label>
+      <select id="dupLevel"><option value="standard">标准检查：大小 + 首尾哈希</option><option value="fast">快速检查：大小 + 文件名</option><option value="deep">深度检查：完整哈希</option></select>
       <p>
         <button onclick="makePlan()">生成试运行计划</button>
+        <button onclick="runDuplicate()">重复文件诊断</button>
+        <button onclick="executeCopy()">执行安全复制</button>
         <button class="secondary" onclick="exportReport()">导出报告</button>
+        <button class="secondary" onclick="loadHistory()">查看历史</button>
+        <button class="secondary" onclick="makeManual()">生成 PDF 手册</button>
+      </p>
+      <p>
+        <label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label>
+        <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label>
+        <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier</label>
+        <button class="secondary" onclick="runRepair()">执行所选权限修复</button>
       </p>
       <p id="msg" class="muted"></p>
     </section>
     <section class="grid" id="stats"></section>
     <section><h2>预览映射</h2><div id="preview"></div></section>
     <section><h2>异常项</h2><div id="issues"></div></section>
+    <section><h2>诊断 / 历史</h2><div id="diagnostics"></div></section>
     <section><h2>健康检查</h2><div id="health"></div></section>
   </main>
 <script>
@@ -80,6 +96,42 @@ async function exportReport() {
   try {
     const data = await api('/api/report', {});
     document.getElementById('msg').textContent = '报告已导出：' + data.report_dir;
+  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
+}
+async function runDuplicate() {
+  document.getElementById('msg').textContent = '正在执行重复文件诊断...';
+  try {
+    const data = await api('/api/duplicates', {selected_root: root.value, level: dupLevel.value});
+    diagnostics.innerHTML = table(data.rows.slice(0, 500), ['duplicate_group_id','path','size','hash_method','suggested_keep','reason']);
+    document.getElementById('msg').textContent = '诊断完成；仅报告，不自动删除。';
+  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
+}
+async function runRepair() {
+  document.getElementById('msg').textContent = '正在执行所选权限修复...';
+  try {
+    const data = await api('/api/repair', {selected_root: root.value, clear_readonly: fixReadonly.checked, clear_hidden: fixHidden.checked, clear_zone_identifier: fixZone.checked});
+    diagnostics.innerHTML = table(data.rows.slice(0, 500), ['path','action','status','message']);
+    document.getElementById('msg').textContent = '权限修复完成。';
+  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
+}
+async function executeCopy() {
+  if (!output.value) { document.getElementById('msg').innerHTML = '<span class="error">安全复制需要填写输出目录。</span>'; return; }
+  try {
+    const data = await api('/api/execute-copy', {});
+    diagnostics.innerHTML = table(data.issues || [], ['path','stage','code','message','final_status']);
+    document.getElementById('msg').textContent = `copy 完成：完成 ${data.completed}，跳过 ${data.skipped}，失败 ${data.failed}`;
+  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
+}
+async function loadHistory() {
+  try {
+    const data = await fetch('/api/history').then(r=>r.json());
+    diagnostics.innerHTML = table(data, ['created_at','mode','selected_root','operation_count','issue_count','report_dir']);
+  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
+}
+async function makeManual() {
+  try {
+    const data = await api('/api/manual', {});
+    document.getElementById('msg').textContent = 'PDF 手册已生成：' + data.manual_pdf;
   } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
 }
 function render(plan) {
@@ -116,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/health":
             rows = [item.__dict__ for item in run_healthcheck()]
             self.send_json(rows)
+        elif self.path == "/api/history":
+            self.send_json(list_history())
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -131,6 +185,24 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("尚未生成计划")
                 report_dir = write_plan_report(LAST_PLAN)
                 self.send_json({"report_dir": str(report_dir)})
+            elif self.path == "/api/duplicates":
+                rows = detect_duplicates(body.get("selected_root", ""), body.get("level", "standard"))
+                self.send_json({"rows": [row.__dict__ for row in rows]})
+            elif self.path == "/api/repair":
+                rows = repair_permissions(
+                    body.get("selected_root", ""),
+                    clear_readonly=bool(body.get("clear_readonly")),
+                    clear_hidden=bool(body.get("clear_hidden")),
+                    clear_zone_identifier=bool(body.get("clear_zone_identifier")),
+                )
+                self.send_json({"rows": rows_as_dicts(rows)})
+            elif self.path == "/api/execute-copy":
+                if LAST_PLAN is None:
+                    raise ValueError("尚未生成计划")
+                result = execute_plan(LAST_PLAN, "copy")
+                self.send_json({"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
+            elif self.path == "/api/manual":
+                self.send_json({"manual_pdf": str(write_manual_pdf("理巢_NestTidy_简要操作手册.pdf"))})
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
         except Exception as exc:
@@ -166,4 +238,3 @@ def serve(host: str, port: int) -> None:
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"理巢 NestTidy 已启动：http://{host}:{port}")
     httpd.serve_forever()
-
