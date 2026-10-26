@@ -110,6 +110,11 @@ class RuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
             touch(root / "正片" / "movie.mkv")
+            touch(root / "正片" / "movie.srt")
+            # 并列第二个目录、且各含两个文件：R1（单链穿透）与 R4（单文件提级）都不触发，
+            # 本用例只考察 R0；R1/R2 的目录删除行为由 tests/test_rule_seams.py 覆盖。
+            touch(root / "花絮" / "extra.mkv")
+            touch(root / "花絮" / "extra.srt")
             (root / "空壳" / "更空").mkdir(parents=True)
             plan = build_plan(str(root), "single")
             self.assertTrue(any(op.op_type == "rmdir" for op in plan.operations))

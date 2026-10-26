@@ -29,7 +29,7 @@ python -m nesttidy.app plan "D:\下载\资源包\电影A" --mode single --report
 python -m unittest discover -s tests
 ```
 
-27 个用例，Windows 上必须全绿。POSIX 通过不算通过——历史上两个只在 Windows 暴露的缺陷就是这么漏掉的。
+42 个用例，Windows 上必须全绿。POSIX 通过不算通过——历史上两个只在 Windows 暴露的缺陷就是这么漏掉的。
 
 ## 项目结构
 
@@ -123,6 +123,7 @@ python -m nesttidy.app manual
 |---|---|
 | `v0.4.1` | 建立规范与规模预算、规则对照表、路线图；测试 14→27 全绿；修 3 个 Windows 专属缺陷 |
 | `v0.4.2` | 补齐规则接缝用例（P0×R1 三例、R2 多层链、`stable_key` 确定性），测试 27→35；实测暴露「剥壳不删壳」与「R5 前缀重复」两处缺陷，记录于 `ROADMAP.md` M1.5 |
+| `v0.5.0` | **规则版本升 `P0-R0-R5-v2`**：剥壳改为结果导向登记空目录（壳真正被删掉）、R5 多轮前缀改为替换而非叠加；测试 35→42 全绿 |
 
 ## 常用操作
 

@@ -112,17 +112,128 @@ class ShellChainTests(unittest.TestCase):
             self.assertNotIn("C", segments, "中间壳 C 应被折叠")
 
 
+class ShellRemovalTests(unittest.TestCase):
+    """缺陷①：剥壳必须登记 rmdir，否则文件搬走了、空壳全留在磁盘上。
+
+    R3 全提、R4 提级都登记了 rmdir，唯独 R1/R2 只改内存树。
+    判定：遗漏，不是设计 —— 用户跑完发现空壳一个没少，等于核心功能失效。
+    """
+
+    def test_r1_penetration_registers_every_shell_in_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "课程A"
+            touch(root / "百度网盘" / "解压后" / "正文" / "01.mp4")
+            touch(root / "百度网盘" / "解压后" / "正文" / "02.mp4")
+            plan = build_plan(str(root), "single")
+
+            self.assertEqual(rel_targets(plan, root), ["01.mp4", "02.mp4"])
+            self.assertEqual(
+                rel_dirs(plan, root),
+                sorted([str(Path("百度网盘")), str(Path("百度网盘") / "解压后"), str(Path("百度网盘") / "解压后" / "正文")]),
+            )
+
+    def test_r1_registers_descendants_of_penetrated_node(self) -> None:
+        """穿透点下面还有子目录时，子目录的旧路径同样会变空，必须一并登记。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "剧集A"
+            touch(root / "壳1" / "壳2" / "内层" / "S01" / "a.mkv")
+            touch(root / "壳1" / "壳2" / "内层" / "S02" / "b.mkv")
+            plan = build_plan(str(root), "single")
+
+            self.assertEqual(rel_targets(plan, root), sorted([str(Path("S01") / "a.mkv"), str(Path("S02") / "b.mkv")]))
+            self.assertEqual(
+                rel_dirs(plan, root),
+                sorted([
+                    str(Path("壳1")),
+                    str(Path("壳1") / "壳2"),
+                    str(Path("壳1") / "壳2" / "内层"),
+                    str(Path("壳1") / "壳2" / "内层" / "S01"),
+                    str(Path("壳1") / "壳2" / "内层" / "S02"),
+                ]),
+            )
+
+    def test_r2_absorb_registers_collapsed_shells(self) -> None:
+        """R2 保留最外层壳名（合集/A），只折叠 A 以内的 B、C，且折叠掉的壳必须登记删除。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源A"
+            touch(root / "marker.txt")
+            touch(root / "合集" / "A" / "B" / "C" / "file.txt")
+            touch(root / "合集" / "其他" / "x.txt")
+            touch(root / "合集" / "其他" / "y.txt")
+            plan = build_plan(str(root), "single")
+
+            dirs = rel_dirs(plan, root)
+            for inner in (str(Path("A") / "B"), str(Path("A") / "B" / "C")):
+                self.assertIn(str(Path("合集") / inner), dirs, f"内层壳 {inner} 未被登记删除")
+            self.assertNotIn(str(Path("合集") / "A"), dirs, "A 是最外层壳，保留其名字承载内容")
+            self.assertNotIn(str(Path("合集")), dirs, "合集 保留内容，不得删除")
+            self.assertNotIn(str(Path("合集") / "其他"), dirs, "其他 保留内容，不得删除")
+
+    def test_rmdir_refuses_non_empty_dir_without_claiming_success(self) -> None:
+        """do_rmdir 遇到非空目录必须返回未执行，不能被上层计入成功。"""
+        from nesttidy.executor import do_rmdir
+        from nesttidy.model import Operation
+
+        def rmdir_op(path: Path) -> Operation:
+            return Operation(
+                op_id="t",
+                resource_root_id="directory",
+                op_type="rmdir",
+                source_path=str(path),
+                target_path=None,
+                rule_trace=["测试"],
+                risk_level="medium",
+                precheck={},
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "非空"
+            touch(target / "still.txt")
+
+            self.assertFalse(do_rmdir(rmdir_op(target), None), "非空目录不得报告删除成功")
+            self.assertTrue(target.exists())
+            self.assertTrue(do_rmdir(rmdir_op(Path(tmp) / "不存在"), None), "不存在视为已达目的")
+
+    def test_move_execution_leaves_no_shell_dirs(self) -> None:
+        """端到端：真实执行后磁盘上不得残留任何壳目录（R1 穿透链 + R2 折叠链各一）。"""
+        from nesttidy.executor import execute_plan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = (Path(tmp) / "树").resolve()
+            touch(base / "电影A" / "百度网盘" / "解压后" / "正文" / "01.mp4")
+            touch(base / "合集" / "A" / "B" / "C" / "file.txt")
+            touch(base / "合集" / "其他" / "x.txt")
+            touch(base / "合集" / "其他" / "y.txt")
+
+            plan = build_plan(str(base), "batch")
+            execute_plan(plan, "move", confirm_move=True, transaction_log=str(Path(tmp) / "tx.jsonl"))
+
+            left_dirs = sorted(str(p.relative_to(base)) for p in base.rglob("*") if p.is_dir())
+            self.assertEqual(
+                left_dirs,
+                sorted([str(Path("电影A")), str(Path("合集")), str(Path("合集") / "A"), str(Path("合集") / "其他")]),
+                "壳目录 电影A/百度网盘/解压后/正文、合集/A/B、合集/A/B/C 均应消失",
+            )
+            left_files = sorted(str(p.relative_to(base)) for p in base.rglob("*") if p.is_file())
+            self.assertEqual(
+                left_files,
+                sorted([
+                    str(Path("电影A") / "01.mp4"),
+                    str(Path("合集") / "A" / "file.txt"),
+                    str(Path("合集") / "其他" / "x.txt"),
+                    str(Path("合集") / "其他" / "y.txt"),
+                ]),
+            )
+
+
 class MultiRoundConflictTests(unittest.TestCase):
     """缺口 4：R5 需要多轮才能解决的撞名。"""
 
-    @unittest.expectedFailure
     def test_r5_multi_round_conflict_uses_ancestor_chain(self) -> None:
         """Group1/A/cover.jpg + Group2/A/cover.jpg：两轮冲突后应为 Group1-A-cover.jpg。
 
-        当前实现输出 Group1-A-A-cover.jpg —— 第二轮把「A-」又贴到了已带前缀的名字前面。
         规则表述是「按 original_path 由近及远加祖先名前缀」，第二轮的前缀应**替换**
-        第一轮前缀（祖先链 Group1→A），而不是在 current_name 上叠加。
-        判定：实现与规则表述不符，需裁决（升 RULE_VERSION）后再改，故此处标记为预期失败。
+        第一轮前缀（祖先链 Group1→A），而不是在 current_name 上叠加成 Group1-A-A-cover.jpg。
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
@@ -140,6 +251,41 @@ class MultiRoundConflictTests(unittest.TestCase):
                     str(Path("合集") / "Group2-A-cover.jpg"),
                 ]),
             )
+
+    def test_r5_three_rounds_stay_bounded(self) -> None:
+        """三轮以上冲突时前缀不得重复累积，长度必须与祖先深度线性相关。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源A"
+            touch(root / "marker.txt")
+            for group in ("G1", "G2"):
+                touch(root / "合集" / group / "A" / "B" / "cover.jpg")
+            plan = build_plan(str(root), "single")
+            names = sorted(Path(m.planned_target_path).name for m in plan.mappings if m.planned_target_path.endswith(".jpg"))
+
+            self.assertEqual(names, ["G1-A-B-cover.jpg", "G2-A-B-cover.jpg"])
+            for name in names:
+                self.assertNotIn("-A-A", name)
+                self.assertNotIn("-B-B", name)
+
+    def test_r5_cleaned_name_is_not_repeated_in_prefix(self) -> None:
+        """清洗后的基础名不得参与前缀累积：前缀来自祖先链，基础名只出现一次。"""
+        from nesttidy.rules import VFile, resolve_names
+
+        node = VDir(name="合集", original_path=Path("资源A") / "合集")
+        for group in ("G1", "G2"):
+            node.files.append(
+                VFile(
+                    name="_con.txt",  # con.txt 被清洗为 _con.txt（Windows 保留设备名）
+                    original_path=Path("资源A") / "合集" / group / "A" / "con.txt",
+                    size=1,
+                    mtime_ns=0,
+                )
+            )
+        resolve_names(node)
+        names = sorted(f.name for f in node.files)
+        self.assertEqual(names, ["G1-A-_con.txt", "G2-A-_con.txt"])
+        for name in names:
+            self.assertEqual(name.count("_con"), 1, "基础名被重复拼进前缀")
 
 
 class StableKeyTests(unittest.TestCase):

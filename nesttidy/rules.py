@@ -205,6 +205,8 @@ def resolve_names(node: VDir) -> None:
     entries: list[VFile | VDir] = [*node.dirs, *node.files]
     if not entries:
         return
+    # 基础名在改名前快照一次：前缀只由祖先链决定，绝不把上一轮前缀叠进下一轮。
+    base_names = {id(entry): entry.name for entry in entries}
     rounds = 0
     while rounds < 64:
         buckets: dict[str, list[VFile | VDir]] = {}
@@ -215,7 +217,7 @@ def resolve_names(node: VDir) -> None:
             return
         for group in conflicts:
             for entry in group:
-                entry.name = prefixed_name(entry.original_path, entry.name, rounds + 1)
+                entry.name = prefixed_name(entry.original_path, base_names[id(entry)], rounds + 1)
                 if isinstance(entry, VFile):
                     entry.conflict_trace.append(f"R5 撞名重命名: {entry.name}")
                     entry.traces.append("R5 撞名重命名")
@@ -225,11 +227,17 @@ def resolve_names(node: VDir) -> None:
     raise ValueError(f"无法解决命名冲突: {node.original_path}")
 
 
-def prefixed_name(original_path: Path, current_name: str, depth: int) -> str:
+def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
+    """取 original_path 由近及远 depth 个祖先，前缀化基础名。
+
+    前缀是「祖先链」的完整表达，第 N 轮必须**替换**前 N-1 轮的前缀，而不是续接：
+    cover.jpg → A-cover.jpg → Group1-A-cover.jpg（正确）
+    cover.jpg → A-cover.jpg → Group1-A-A-cover.jpg（错误，A 的信息重复）
+    """
     parents = [part for part in original_path.parent.parts if part]
     selected = list(reversed(parents))[:depth]
     prefix = "-".join(reversed(selected))
-    return f"{prefix}-{current_name}" if prefix else current_name
+    return f"{prefix}-{base_name}" if prefix else base_name
 
 
 def final_files(node: VDir, base: Path) -> list[tuple[VFile, Path]]:

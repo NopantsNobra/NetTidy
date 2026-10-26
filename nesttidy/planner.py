@@ -9,7 +9,15 @@ from pathlib import Path
 from . import __version__
 from .config import INCOMPLETE_SUFFIXES, OUTPUT_DIR_PREFIX, REPORT_DIR_NAME, RULE_VERSION
 from .model import ExecutionIssue, MappingEntry, Operation, OperationPlan
-from .rules import build_tree, final_files, process_node, prune_empty_dirs, apply_root_chain_penetration, resolve_names
+from .rules import (
+    VDir,
+    apply_root_chain_penetration,
+    build_tree,
+    final_files,
+    process_node,
+    prune_empty_dirs,
+    resolve_names,
+)
 
 
 def utc_now() -> str:
@@ -88,6 +96,19 @@ def snapshot_digest(paths: list[Path]) -> str:
     return h.hexdigest()
 
 
+def collect_dir_paths(tree: VDir) -> list[Path]:
+    """在树被规则改写之前，记下所有被扫描到的目录原路径。"""
+    paths: list[Path] = []
+
+    def walk(node: VDir) -> None:
+        for child in node.dirs:
+            paths.append(child.original_path)
+            walk(child)
+
+    walk(tree)
+    return paths
+
+
 def build_plan(selected_root: str, mode: str = "batch", output_root: str | None = None) -> OperationPlan:
     selected = Path(selected_root).resolve()
     roots, root_issues = resource_roots(selected, mode)
@@ -100,6 +121,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
     for root in roots:
         resource_id = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
         tree, scan_issues = build_tree(root, should_skip_path)
+        scanned_dirs = collect_dir_paths(tree)
         for raw in scan_issues:
             code = str(raw["code"]).split(":", 1)[0]
             issues.append(issue(str(raw["path"]), "scan", code, str(raw["message"])))
@@ -110,7 +132,9 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
         else:
             process_node(tree, local_removed)
         removed_dirs.update(path.resolve() for path in local_removed if path.resolve() != root)
+        local_targets: list[Path] = []
         for file_item, target in final_files(tree, root):
+            local_targets.append(target)
             estimated_space += file_item.size
             if file_item.original_path.resolve() == target.resolve() and not file_item.name_cleaning_trace:
                 op_type = "keep"
@@ -149,6 +173,17 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
                 )
             )
 
+        # 剥壳（R1/R2）只重挂内存树，被丢弃的壳节点不会自己进 local_removed。
+        # 统一按「执行后是否还有文件落在该目录里」判定：没有就必然变空，必须登记删除。
+        # 这条同时覆盖穿透点下方被重新挂载的子目录——它们的旧路径同样会变空。
+        if not output_root:
+            for scanned in scanned_dirs:
+                resolved = scanned.resolve()
+                if resolved == root or resolved in removed_dirs:
+                    continue
+                if not any(resolved in target.parents for target in local_targets):
+                    removed_dirs.add(resolved)
+
     for dir_path in sorted(removed_dirs, key=lambda p: str(p).casefold(), reverse=True):
         operations.append(
             Operation(
@@ -157,7 +192,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
                 op_type="rmdir",
                 source_path=str(dir_path),
                 target_path=None,
-                rule_trace=["R0/R1/R3/R4 产生的空目录清理"],
+                rule_trace=["R0/R1/R2/R3/R4 产生的空目录清理"],
                 risk_level="medium",
                 precheck={},
             )

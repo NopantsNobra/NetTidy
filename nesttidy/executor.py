@@ -59,8 +59,13 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
                     do_move(op, tx_path)
                     completed += 1
                 elif op.op_type == "rmdir":
-                    do_rmdir(op, tx_path)
-                    completed += 1
+                    if do_rmdir(op, tx_path):
+                        completed += 1
+                    else:
+                        skipped += 1
+                        issues.append(
+                            issue(str(op.source_path), "execute", "RMDIR_SKIPPED_NON_EMPTY", "目录非空，未删除")
+                        )
                 else:
                     skipped += 1
         except Exception as exc:
@@ -123,16 +128,18 @@ def do_move(op: Operation, tx_path: Path | None) -> None:
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
 
 
-def do_rmdir(op: Operation, tx_path: Path | None) -> None:
+def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
+    """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
     assert op.source_path
     path = Path(op.source_path)
     if not path.exists():
-        return
+        return True
     if any(path.iterdir()):
-        return
+        return False
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
     path.rmdir()
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
+    return True
 
 
 def write_tx(tx_path: Path | None, row: dict) -> None:
