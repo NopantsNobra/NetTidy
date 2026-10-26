@@ -18,7 +18,7 @@ def new_report_dir(base_dir: str | None = None) -> Path:
     return path
 
 
-def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None) -> Path:
+def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None, db_path: str | Path | None = None) -> Path:
     out = Path(report_dir).resolve() if report_dir else new_report_dir()
     out.mkdir(parents=True, exist_ok=True)
     data = plan.to_dict()
@@ -54,7 +54,8 @@ def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None)
         for row in plan.issues:
             item = row.to_dict()
             writer.writerow({k: item.get(k, "") for k in writer.fieldnames})
-    record_plan(plan, str(out))
+    # 历史库跟随报告目录，而非进程工作目录：报告写在哪，历史就记在哪。
+    record_plan(plan, str(out), db_path=db_path or out.parent / "history.sqlite")
     return out
 
 

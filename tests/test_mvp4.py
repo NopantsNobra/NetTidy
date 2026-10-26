@@ -12,7 +12,7 @@ from nesttidy.manual_pdf import write_manual_pdf
 from nesttidy.planner import build_plan
 from nesttidy.repair import repair_permissions
 from nesttidy.recovery import undo_transaction
-from nesttidy.reports import write_plan_report
+from nesttidy.reports import new_report_dir, write_plan_report
 from nesttidy.storage import list_history
 
 
@@ -46,12 +46,32 @@ class MVP4Tests(unittest.TestCase):
     def test_history_records_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源"
-            report_dir = Path(tmp) / "reports"
+            report_root = Path(tmp) / "理巢报告"
             touch(root / "正片" / "movie.mkv")
             plan = build_plan(str(root), "single")
+            report_dir = new_report_dir(str(report_root))
             write_plan_report(plan, report_dir)
-            rows = list_history(db_path=Path.cwd() / "理巢报告" / "history.sqlite")
+            rows = list_history(db_path=report_root / "history.sqlite")
             self.assertTrue(any(row["plan_id"] == plan.plan_id for row in rows))
+
+    def test_report_does_not_write_to_cwd(self) -> None:
+        """报告与历史库必须落在指定目录，不得污染进程工作目录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源"
+            report_root = Path(tmp) / "理巢报告"
+            isolated_cwd = Path(tmp) / "cwd"
+            isolated_cwd.mkdir()
+            touch(root / "正片" / "movie.mkv")
+            plan = build_plan(str(root), "single")
+            report_dir = new_report_dir(str(report_root))
+            previous = Path.cwd()
+            os.chdir(isolated_cwd)
+            try:
+                write_plan_report(plan, report_dir)
+            finally:
+                os.chdir(previous)
+            self.assertTrue((report_root / "history.sqlite").exists())
+            self.assertFalse((isolated_cwd / "理巢报告").exists(), "工作目录被污染")
 
     def test_manual_pdf_is_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

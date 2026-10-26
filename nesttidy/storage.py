@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from .config import REPORT_DIR_NAME
@@ -38,7 +39,9 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 def record_plan(plan: OperationPlan, report_dir: str | None = None, db_path: str | Path | None = None) -> None:
     data = plan.to_dict()
-    with connect(db_path) as conn:
+    # sqlite3.Connection 的 with 只提交事务、不关闭连接；必须显式关闭，
+    # 否则 Windows 上文件句柄泄漏，目录无法删除（POSIX 下不会暴露）。
+    with closing(connect(db_path)) as conn:
         conn.execute(
             """
             insert or replace into task_history
@@ -62,7 +65,7 @@ def record_plan(plan: OperationPlan, report_dir: str | None = None, db_path: str
 
 
 def list_history(limit: int = 50, db_path: str | Path | None = None) -> list[dict]:
-    with connect(db_path) as conn:
+    with closing(connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

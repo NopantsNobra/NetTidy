@@ -1,0 +1,32 @@
+# 统一换行：入库一律 LF，避免 autocrlf 造成整文件 diff
+* text=auto
+
+*.py      text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.html    text eol=lf
+*.toml    text eol=lf
+*.spec    text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Windows 批处理需要 CRLF
+*.bat     text eol=crlf
+
+# 二进制：禁止换行转换与文本 diff
+*.pdf     binary
+*.docx    binary
+*.doc     binary
+*.xlsx    binary
+*.zip     binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.sqlite  binary
+*.exe     binary
+*.dll     binary

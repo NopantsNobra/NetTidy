@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 运行产物（报告、历史库、事务日志）
+理巢报告/
+理巢输出_*/
+transaction_log.jsonl
+
+# 本地原始存档与构建脚本
+_archive/
+_gitbuild*/
+
+# 工作区记忆与工具配置
+.workbuddy/
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
