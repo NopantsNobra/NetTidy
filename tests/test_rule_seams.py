@@ -140,7 +140,9 @@ class ShellRemovalTests(unittest.TestCase):
             touch(root / "壳1" / "壳2" / "内层" / "S02" / "b.mkv")
             plan = build_plan(str(root), "single")
 
-            self.assertEqual(rel_targets(plan, root), sorted([str(Path("S01") / "a.mkv"), str(Path("S02") / "b.mkv")]))
+            # 0.5.1 基线：R1 之后仍要跑 R3。S01、S02 都是「单文件无子目录」，
+            # 属于分叉口全提，文件落到资源根；旧基线 S01\a.mkv 是 R1 短路留下的错误结果。
+            self.assertEqual(rel_targets(plan, root), ["a.mkv", "b.mkv"])
             self.assertEqual(
                 rel_dirs(plan, root),
                 sorted([
@@ -286,6 +288,67 @@ class MultiRoundConflictTests(unittest.TestCase):
         self.assertEqual(names, ["G1-A-_con.txt", "G2-A-_con.txt"])
         for name in names:
             self.assertEqual(name.count("_con"), 1, "基础名被重复拼进前缀")
+
+
+class R1TailRuleTests(unittest.TestCase):
+    """0.5.1 回归：R1 是前置步骤，不是终态。
+
+    历史缺陷：planner 把 R1 与 process_node 写成 if/else 二选一，
+    只要穿透成立，穿透点以下 R2/R3/R4 一条都不跑。
+    既有案例为何没抓到——R2/R3/R4 的夹具大多在资源根塞了 marker.txt，
+    根上有文件就不会触发 R1，测试从没在「真实形态」下跑过。
+    """
+
+    def test_penetrated_tree_still_runs_subtree_rules(self) -> None:
+        """手册 0.5 父级保护示例：无根文件，穿透到合集后 A 内部的壳仍须被吸收。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源包"
+            touch(root / "合集" / "A" / "外壳" / "正文" / "file.txt")
+            touch(root / "合集" / "B" / "b1.txt")
+            touch(root / "合集" / "B" / "b2.txt")
+            plan = build_plan(str(root), "single")
+
+            self.assertEqual(rel_targets(plan, root), sorted([str(Path("A") / "file.txt"), str(Path("B") / "b1.txt"), str(Path("B") / "b2.txt")]))
+
+    def test_penetrated_tree_still_lifts_single_file_dir(self) -> None:
+        """穿透点下面「非分叉口 + 单文件子目录」时，R4 必须仍然生效。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源A"
+            touch(root / "壳" / "内层" / "合集" / "only" / "a.txt")
+            touch(root / "壳" / "内层" / "合集" / "b.txt")
+            plan = build_plan(str(root), "single")
+
+            # R1 停在「合集」（它自身有文件），内容提到资源根；随后 R4 把 only 提上来。
+            # 旧基线是 合集\b.txt + 合集\only\a.txt——穿透后规则没跑。
+            self.assertEqual(rel_targets(plan, root), ["a.txt", "b.txt"])
+
+
+class R5CollisionFallbackTests(unittest.TestCase):
+    """0.5.1 回归：祖先链相同（同目录截断撞名）时 R5 必须能收敛。"""
+
+    def test_r5_truncation_collision_stays_unique(self) -> None:
+        left = "a" * 100 + "X" + "b" * 100 + ".txt"
+        right = "a" * 100 + "Y" + "b" * 100 + ".txt"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源A"
+            touch(root / left)
+            touch(root / right)
+            plan = build_plan(str(root), "single")
+
+            names = [Path(m.planned_target_path).name for m in plan.mappings]
+            self.assertEqual(len(names), 2)
+            self.assertNotEqual(names[0].casefold(), names[1].casefold(), "截断撞名后仍未区分")
+            for name in names:
+                self.assertLessEqual(len(name), 180, "唯一化后仍然超过单分量上限")
+
+    def test_r5_prefixed_name_respects_component_limit(self) -> None:
+        """前缀再长也不能把文件名推过 180——否则 Windows 执行期直接失败。"""
+        from nesttidy.rules import prefixed_name
+
+        deep = Path("C:/根") / ("g" * 80) / ("a" * 80) / "cover.jpg"
+        name = prefixed_name(deep, "n" * 170 + ".jpg", 2)
+        self.assertLessEqual(len(name), 180)
+        self.assertTrue(name.endswith(".jpg"))
 
 
 class StableKeyTests(unittest.TestCase):

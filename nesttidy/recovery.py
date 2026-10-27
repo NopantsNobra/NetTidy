@@ -19,29 +19,42 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
     path = Path(transaction_log).resolve()
     if not path.exists():
         raise FileNotFoundError(f"事务日志不存在: {path}")
-    rows = []
+    # started 行必须参与撤销：move 已完成但 done 日志写失败（磁盘满、进程被杀）时，
+    # 文件已经在新位置，只认 done 会把这条操作从可恢复集合里彻底丢掉。
+    collected: dict[tuple, dict] = {}
+    order: list[tuple] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         item = json.loads(line)
-        if item.get("status") == "done":
-            rows.append(item)
+        if item.get("status") not in {"started", "done"}:
+            continue
+        key = (item.get("action"), item.get("source"), item.get("target"))
+        if key not in collected:
+            collected[key] = item
+            order.append(key)
+        elif item.get("status") == "done":
+            collected[key] = item
     results: list[UndoResult] = []
-    for item in reversed(rows):
+    for key in reversed(order):
+        item = collected[key]
         if item.get("action") != "move":
-            results.append(UndoResult(item.get("action", ""), item.get("source", ""), item.get("target", ""), "skipped", "仅 move 操作可自动撤销"))
+            results.append(UndoResult(item.get("action", ""), item.get("source", ""), item.get("target") or "", "skipped", "仅 move 操作可自动撤销"))
             continue
         source = Path(item["source"])
         target = Path(item["target"])
-        if not target.exists():
-            results.append(UndoResult("move", str(source), str(target), "skipped", "目标已不存在"))
+        source_exists = source.exists()
+        target_exists = target.exists()
+        if source_exists and target_exists:
+            results.append(UndoResult("move", str(source), str(target), "failed", "原路径与目标同时存在，需人工确认"))
             continue
-        if source.exists():
-            results.append(UndoResult("move", str(source), str(target), "failed", "原路径已存在，禁止覆盖"))
+        if not target_exists:
+            results.append(UndoResult("move", str(source), str(target), "skipped", "现场未见搬移结果，跳过"))
             continue
         source.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target), str(source))
-        results.append(UndoResult("move", str(source), str(target), "ok", "已移动回原路径"))
+        message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
+        results.append(UndoResult("move", str(source), str(target), "ok", message))
     return results
 
 

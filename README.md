@@ -29,18 +29,20 @@ python -m nesttidy.app plan "D:\下载\资源包\电影A" --mode single --report
 python -m unittest discover -s tests
 ```
 
-42 个用例，Windows 上必须全绿。POSIX 通过不算通过——历史上两个只在 Windows 暴露的缺陷就是这么漏掉的。
+53 个用例，Windows 上必须全绿。POSIX 通过不算通过——历史上两个只在 Windows 暴露的缺陷就是这么漏掉的。
+
+用例全绿只说明「已写断言成立」，不说明产品正确：先有真实目录复现，再补断言，顺序不能反。
 
 ## 项目结构
 
 ```
-nesttidy/         源码 16 模块，1,660 行
+nesttidy/         源码 16 模块，1,826 行
   rules.py        结构变换纯逻辑（虚拟树，不写磁盘）
   planner.py      扫描 + 生成冻结的 OperationPlan（只读）
   executor.py     唯一执行磁盘结构变更的地方
   model.py        数据类
   web.py app.py   本地 UI 与 CLI 入口
-tests/            27 个用例（3 个文件）
+tests/            53 个用例（6 个文件）
 docs/
   理巢_产品开发手册_v1.0.md   产品范围与规则定义
   规则对照表.md               规则↔代码↔测试 三方对照
@@ -124,6 +126,7 @@ python -m nesttidy.app manual
 | `v0.4.1` | 建立规范与规模预算、规则对照表、路线图；测试 14→27 全绿；修 3 个 Windows 专属缺陷 |
 | `v0.4.2` | 补齐规则接缝用例（P0×R1 三例、R2 多层链、`stable_key` 确定性），测试 27→35；实测暴露「剥壳不删壳」与「R5 前缀重复」两处缺陷，记录于 `ROADMAP.md` M1.5 |
 | `v0.5.0` | **规则版本升 `P0-R0-R5-v2`**：剥壳改为结果导向登记空目录（壳真正被删掉）、R5 多轮前缀改为替换而非叠加；测试 35→42 全绿 |
+| `v0.5.1` | **规则版本升 `P0-R0-R5-v3`**：独立复核发现 5 个 P0——R1 穿透后短路（穿透点以下 R0-R4 全不执行）、copy 丢原位文件、copy 计划可按 move 执行、执行失败不进报告、done 日志缺失即不可撤销；另修 R5 截断撞名死循环与 180 字符上限。测试 42→53 |
 
 ## 常用操作
 

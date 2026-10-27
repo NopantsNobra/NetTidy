@@ -14,6 +14,9 @@ transaction_log.jsonl
 _archive/
 _gitbuild*/
 
+# 复核/审计工作产物（不进仓库、不占文档预算）
+_review/
+
 # 工作区记忆与工具配置
 .workbuddy/
 

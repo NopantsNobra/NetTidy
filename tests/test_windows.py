@@ -61,6 +61,13 @@ class WindowsNameCleaningTests(unittest.TestCase):
         self.assertEqual(cleaned, raw)
         self.assertEqual(traces, [])
 
+    def test_long_suffix_never_exceeds_component_limit(self) -> None:
+        """0.5.1 回归：扩展名超长时旧实现会「越截越长」（202 → 206），上限形同虚设。"""
+        raw = "a." + "x" * 200
+        cleaned, traces = clean_name(raw)
+        self.assertLessEqual(len(cleaned), 180)
+        self.assertIn("过长文件名保留扩展名截断", traces)
+
     def test_cleaning_is_idempotent(self) -> None:
         for raw in ["CON.txt", 'a<b>.txt', "报告 . ", "中" * 200 + ".mp4"]:
             with self.subTest(raw=raw[:20]):

@@ -16,7 +16,6 @@ from .rules import (
     final_files,
     process_node,
     prune_empty_dirs,
-    resolve_names,
 )
 
 
@@ -127,19 +126,28 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
             issues.append(issue(str(raw["path"]), "scan", code, str(raw["message"])))
         local_removed: list[Path] = []
         prune_empty_dirs(tree, local_removed)
-        if apply_root_chain_penetration(tree):
-            resolve_names(tree)
-        else:
-            process_node(tree, local_removed)
-        removed_dirs.update(path.resolve() for path in local_removed if path.resolve() != root)
+        # R1 是前置步骤，不是终态：穿透只把内容提到资源根，穿透点以下仍需
+        # R0-R4 继续整理。曾经写成 if/else 二选一，导致「下载→解压→合集」
+        # 这类最常见形态整棵子树一条规则都不跑（0.5.1 修复）。
+        apply_root_chain_penetration(tree)
+        process_node(tree, local_removed)
+        # copy 模式不修改源目录：任何 rmdir 都不该进计划。
+        # 旧实现只在「扫描残留空目录」那一段做了 output_root 判断，
+        # R0-R4 登记的目录仍然生成 rmdir 操作，混进计划与报告里。
+        if not output_root:
+            removed_dirs.update(path.resolve() for path in local_removed if path.resolve() != root)
         local_targets: list[Path] = []
         for file_item, target in final_files(tree, root):
             local_targets.append(target)
             estimated_space += file_item.size
-            if file_item.original_path.resolve() == target.resolve() and not file_item.name_cleaning_trace:
+            if output_root:
+                # copy 模式必须交出完整副本：原位文件也要写进输出目录。
+                # 曾经沿用「无需移动 → keep」的判定，执行器跳过后输出缺文件却报 0 失败。
+                op_type = "copy"
+            elif file_item.original_path.resolve() == target.resolve() and not file_item.name_cleaning_trace:
                 op_type = "keep"
             else:
-                op_type = "copy" if output_root else "move"
+                op_type = "move"
             actual_target = target
             if output_root:
                 actual_target = Path(output_root).resolve() / root.name / target.relative_to(root)

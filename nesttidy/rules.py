@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -7,6 +8,11 @@ from pathlib import Path
 
 RESERVED_RE = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.I)
 ILLEGAL_CHARS = '<>:"/\\|?*'
+# 单个文件名分量的硬上限。Windows 是 255 字符，留余量给 R5 前缀与输出根拼接，
+# 超过 180 的名字在 Windows 上叠加前缀后极易越过 255，直接导致执行期 ENAMETOOLONG。
+MAX_NAME_LEN = 180
+# 扩展名超过这一长度时不再当作扩展名保留，按普通字符一起截断。
+MAX_SUFFIX_LEN = 24
 
 
 @dataclass
@@ -41,6 +47,30 @@ def stable_key(path: Path, entry_type: str) -> tuple[str, str, int]:
     return (os.path.normcase(text).casefold(), text, order)
 
 
+def truncate_middle(text: str, limit: int) -> str:
+    """保留首尾、折叠中段，保证长度不超过 limit。"""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    room = limit - 3
+    left = room // 2
+    right = room - left
+    return f"{text[:left]}...{text[-right:]}"
+
+
+def fit_component(name: str, limit: int = MAX_NAME_LEN) -> str:
+    """把单个文件名分量压到 limit 以内，尽量保留扩展名。"""
+    if len(name) <= limit:
+        return name
+    stem, suffix = os.path.splitext(name)
+    if len(suffix) > MAX_SUFFIX_LEN:
+        suffix = suffix[:MAX_SUFFIX_LEN]
+    return truncate_middle(stem, max(1, limit - len(suffix))) + suffix
+
+
 def clean_name(name: str) -> tuple[str, list[str]]:
     traces: list[str] = []
     cleaned_chars = []
@@ -62,12 +92,8 @@ def clean_name(name: str) -> tuple[str, list[str]]:
     if RESERVED_RE.match(cleaned):
         cleaned = f"_{cleaned}"
         traces.append("Windows 保留名添加前缀")
-    if len(cleaned) > 180:
-        stem, suffix = os.path.splitext(cleaned)
-        keep = max(16, 180 - len(suffix) - 3)
-        left = keep // 2
-        right = keep - left
-        cleaned = f"{stem[:left]}...{stem[-right:]}{suffix}"
+    if len(cleaned) > MAX_NAME_LEN:
+        cleaned = fit_component(cleaned)
         traces.append("过长文件名保留扩展名截断")
     return cleaned, traces
 
@@ -215,16 +241,41 @@ def resolve_names(node: VDir) -> None:
         conflicts = [group for group in buckets.values() if len(group) > 1]
         if not conflicts:
             return
-        for group in conflicts:
-            for entry in group:
-                entry.name = prefixed_name(entry.original_path, base_names[id(entry)], rounds + 1)
-                if isinstance(entry, VFile):
-                    entry.conflict_trace.append(f"R5 撞名重命名: {entry.name}")
-                    entry.traces.append("R5 撞名重命名")
-                else:
-                    entry.traces.append(f"R5 撞名重命名: {entry.name}")
         rounds += 1
+        for group in conflicts:
+            before = {id(entry): entry.name.casefold() for entry in group}
+            for entry in group:
+                entry.name = prefixed_name(entry.original_path, base_names[id(entry)], rounds)
+            # 同组仍重名是中间轮次的正常现象（祖先链要往上走到分叉层才区分开）。
+            # 只有「这一轮改名后名字与上一轮完全相同」才说明前缀已到顶、
+            # 再循环也分不开——同目录截断撞名就是这种情形。
+            if all(entry.name.casefold() == before[id(entry)] for entry in group):
+                for entry in group:
+                    entry.name = hashed_name(base_names[id(entry)], entry.original_path)
+                _trace_conflict(group, "R5 撞名重命名（路径短码兜底）")
+            else:
+                _trace_conflict(group, "R5 撞名重命名")
     raise ValueError(f"无法解决命名冲突: {node.original_path}")
+
+
+def _trace_conflict(group: list[VFile | VDir], label: str) -> None:
+    for entry in group:
+        if isinstance(entry, VFile):
+            entry.conflict_trace.append(f"{label}: {entry.name}")
+            entry.traces.append(label)
+        else:
+            entry.traces.append(f"{label}: {entry.name}")
+
+
+def hashed_name(base_name: str, original_path: Path) -> str:
+    """前缀无法区分时的确定性唯一化：在原路径哈希短码前保留基础名。"""
+    digest = hashlib.sha1(str(original_path).encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    stem, suffix = os.path.splitext(base_name)
+    if len(suffix) > MAX_SUFFIX_LEN:
+        suffix = suffix[:MAX_SUFFIX_LEN]
+    tag = f"-{digest}"
+    keep = max(1, MAX_NAME_LEN - len(suffix) - len(tag))
+    return truncate_middle(stem, keep) + tag + suffix
 
 
 def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
@@ -237,7 +288,8 @@ def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
     parents = [part for part in original_path.parent.parts if part]
     selected = list(reversed(parents))[:depth]
     prefix = "-".join(reversed(selected))
-    return f"{prefix}-{base_name}" if prefix else base_name
+    name = f"{prefix}-{base_name}" if prefix else base_name
+    return fit_component(name)
 
 
 def final_files(node: VDir, base: Path) -> list[tuple[VFile, Path]]:

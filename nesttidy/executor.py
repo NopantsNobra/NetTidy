@@ -24,6 +24,10 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
         raise ValueError("OperationPlan 未冻结，禁止执行")
     if mode not in {"copy", "move"}:
         raise ValueError("执行模式必须是 copy 或 move")
+    # 计划类型与执行模式必须一致。含 output_root 的计划是 copy 专用：
+    # 它的 target 指向输出目录，按 move 执行会把文件搬出资源根，直接突破 P0 边界。
+    if plan.output_root and mode != "copy":
+        raise ValueError("该计划包含输出目录（copy 专用），禁止按 move 执行")
     if mode == "copy":
         if not plan.output_root:
             raise ValueError("copy 模式必须提供 output_root")
@@ -35,6 +39,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     completed = 0
     skipped = 0
     failed = 0
+    statuses: dict[str, str] = {}
     tx_path: Path | None = Path(transaction_log).resolve() if transaction_log else None
     if mode == "move" and tx_path is None:
         tx_path = Path.cwd() / "transaction_log.jsonl"
@@ -42,36 +47,64 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
         tx_path.parent.mkdir(parents=True, exist_ok=True)
 
     for op in deterministic_ops(plan.operations):
+        status = "failed"
         try:
             precheck(op)
             if op.op_type == "keep":
-                skipped += 1
-                continue
-            if mode == "copy":
+                status = "skipped"
+            elif mode == "copy":
                 if op.op_type in {"copy", "move"}:
                     do_copy(op)
-                    completed += 1
+                    status = "completed"
                 else:
-                    skipped += 1
-                continue
-            if mode == "move":
+                    status = "skipped"
+            else:  # move
                 if op.op_type in {"move", "copy"}:
                     do_move(op, tx_path)
-                    completed += 1
+                    status = "completed"
                 elif op.op_type == "rmdir":
                     if do_rmdir(op, tx_path):
-                        completed += 1
+                        status = "completed"
                     else:
-                        skipped += 1
+                        status = "skipped"
                         issues.append(
                             issue(str(op.source_path), "execute", "RMDIR_SKIPPED_NON_EMPTY", "目录非空，未删除")
                         )
                 else:
-                    skipped += 1
+                    status = "skipped"
         except Exception as exc:
-            failed += 1
+            status = "failed"
             issues.append(issue(op.source_path or op.target_path or "", "execute", classify_exception(exc), str(exc)))
+        statuses[op.op_id] = status
+        if status == "completed":
+            completed += 1
+        elif status == "skipped":
+            skipped += 1
+        else:
+            failed += 1
+    apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None)
+
+
+def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: list[ExecutionIssue]) -> None:
+    """把执行事实回写进计划：操作状态、映射状态、执行期问题。
+
+    不回写的话，报告里的 issues.csv 只含计划期问题、状态永远停在 planned，
+    执行失败在唯一的回溯凭证上完全消失。
+    """
+    for op in plan.operations:
+        op.status = statuses.get(op.op_id, "not_run")
+        if op.status == "failed":
+            op.result = {"status": "failed"}
+    for mapping in plan.mappings:
+        mapping.status = statuses.get(mapping.entry_id, mapping.status)
+    seen = {(row.path, row.code, row.message) for row in plan.issues}
+    for row in issues:
+        key = (row.path, row.code, row.message)
+        if key in seen:
+            continue
+        plan.issues.append(row)
+        seen.add(key)
 
 
 def deterministic_ops(ops: list[Operation]) -> list[Operation]:

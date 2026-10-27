@@ -61,8 +61,10 @@ def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None,
 
 def markdown_summary(plan: OperationPlan) -> str:
     op_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
     for op in plan.operations:
         op_counts[op.op_type] = op_counts.get(op.op_type, 0) + 1
+        status_counts[op.status] = status_counts.get(op.status, 0) + 1
     lines = [
         "# 理巢任务报告",
         "",
@@ -81,5 +83,11 @@ def markdown_summary(plan: OperationPlan) -> str:
     ]
     for name in sorted(op_counts):
         lines.append(f"- {name}: {op_counts[name]}")
+    lines.extend(["", "## 执行状态", ""])
+    for name in sorted(status_counts):
+        lines.append(f"- {name}: {status_counts[name]}")
+    if status_counts.get("planned", 0) == len(plan.operations) and plan.operations:
+        lines.append("")
+        lines.append("- 说明：本报告在计划阶段生成，尚未执行；执行后需重新导出以反映实际结果。")
     lines.extend(["", "## 安全边界", "", "- 计划已冻结。", "- 文件最高只提升到资源根目录内。", "- copy 模式不修改源目录。", "- move 模式需要显式确认并写入事务日志。", ""])
     return "\n".join(lines)
