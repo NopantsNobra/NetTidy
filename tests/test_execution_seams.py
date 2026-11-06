@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -149,6 +150,52 @@ class UndoCoverageTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].status, "skipped")
             self.assertTrue(source.exists())
+
+
+class CopyOutputBoundaryTests(unittest.TestCase):
+    """copy 输出根在计划期只 resolve 一次；执行期若子目录被换成 junction，
+    写入会落到用户选择边界之外且仍报成功。必须逐文件复查。
+    """
+
+    @staticmethod
+    def _junction(link: Path, target: Path) -> bool:
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+        )
+        return result.returncode == 0
+
+    def test_normal_output_root_is_not_rejected(self) -> None:
+        """防 junction 不能把正常路径误拒。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            touch(base / "src" / "R" / "a.txt", "payload")
+            out = base / "out"
+            plan = build_plan(str(base / "src"), "batch", str(out))
+            result = execute_plan(plan, "copy")
+            self.assertEqual((result.completed, result.failed), (1, 0))
+            self.assertTrue((out / "R" / "a.txt").exists())
+
+    def test_junction_escape_is_refused_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            touch(base / "src" / "R" / "a.txt", "payload")
+            out = base / "out"
+            escape = base / "escape"
+            escape.mkdir()
+            plan = build_plan(str(base / "src"), "batch", str(out))
+            target = next(Path(op.target_path) for op in plan.operations if op.op_type == "copy")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.parent.rmdir()
+            if not self._junction(target.parent, escape):
+                self.skipTest("本机无法创建 junction，跳过此 Windows 专有场景")
+
+            result = execute_plan(plan, "copy")
+
+            self.assertEqual(result.completed, 0)
+            self.assertGreater(result.failed, 0)
+            self.assertEqual([p for p in escape.rglob("*") if p.is_file()], [])
+            self.assertIn("OUTPUT_BOUNDARY_ESCAPED", [row.code for row in result.issues])
 
 
 if __name__ == "__main__":

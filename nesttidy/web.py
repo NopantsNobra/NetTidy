@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -8,12 +9,54 @@ from .duplicate import detect_duplicates
 from .executor import execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
+from .model import OperationPlan
 from .planner import build_plan
 from .repair import repair_permissions, rows_as_dicts
 from .reports import write_plan_report
 from .storage import list_history
 
-LAST_PLAN = None
+
+class PlanRegistry:
+    """按 plan_id 索引冻结计划，替代模块级单值 LAST_PLAN。
+
+    LAST_PLAN 是单值 + ThreadingHTTPServer 多线程：任何一次预览都会覆盖上一次，
+    B 标签页生成计划后，A 标签页点「执行安全复制」执行的就是 B 的计划。
+    按 id 索引后每个标签页只持有自己的 id；服务端仍只执行自己保存的冻结计划，
+    不信任前端回传的计划对象（不变量 6：正式执行前必须有冻结计划）。
+    """
+
+    def __init__(self, max_plans: int = 16) -> None:
+        self._plans: dict[str, OperationPlan] = {}
+        self._lock = threading.Lock()
+        self._max = max_plans
+
+    def put(self, plan: OperationPlan) -> str:
+        with self._lock:
+            self._plans[plan.plan_id] = plan
+            while len(self._plans) > self._max:
+                self._plans.pop(next(iter(self._plans)))
+        return plan.plan_id
+
+    def get(self, plan_id: str) -> OperationPlan:
+        with self._lock:
+            plan = self._plans.get(plan_id)
+        if plan is None:
+            raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
+        return plan
+
+    def clear(self) -> None:
+        with self._lock:
+            self._plans.clear()
+
+
+PLANS = PlanRegistry()
+
+
+def _plan_id(body: dict) -> str:
+    plan_id = body.get("plan_id")
+    if not isinstance(plan_id, str) or not plan_id:
+        raise ValueError("缺少 plan_id，请重新生成试运行计划")
+    return plan_id
 
 
 INDEX_HTML = """<!doctype html>
@@ -77,6 +120,7 @@ INDEX_HTML = """<!doctype html>
     <section><h2>健康检查</h2><div id="health"></div></section>
   </main>
 <script>
+let currentPlanId = null;
 async function api(path, body) {
   const res = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {})});
   const data = await res.json();
@@ -88,13 +132,15 @@ async function makePlan() {
   document.getElementById('msg').textContent = '正在扫描并生成冻结计划...';
   try {
     const data = await api('/api/plan', {selected_root: root.value, mode: mode.value, output_root: output.value || null});
+    currentPlanId = data.plan_id;
     render(data);
     document.getElementById('msg').textContent = '计划已生成。默认未修改磁盘。';
   } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
 }
 async function exportReport() {
+  if (!currentPlanId) { document.getElementById('msg').innerHTML = '<span class="error">请先生成计划。</span>'; return; }
   try {
-    const data = await api('/api/report', {});
+    const data = await api('/api/report', {plan_id: currentPlanId});
     document.getElementById('msg').textContent = '报告已导出：' + data.report_dir;
   } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
 }
@@ -116,8 +162,9 @@ async function runRepair() {
 }
 async function executeCopy() {
   if (!output.value) { document.getElementById('msg').innerHTML = '<span class="error">安全复制需要填写输出目录。</span>'; return; }
+  if (!currentPlanId) { document.getElementById('msg').innerHTML = '<span class="error">请先生成计划。</span>'; return; }
   try {
-    const data = await api('/api/execute-copy', {});
+    const data = await api('/api/execute-copy', {plan_id: currentPlanId});
     diagnostics.innerHTML = table(data.issues || [], ['path','stage','code','message','final_status']);
     document.getElementById('msg').textContent = `copy 完成：完成 ${data.completed}，跳过 ${data.skipped}，失败 ${data.failed}`;
   } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
@@ -174,16 +221,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
-        global LAST_PLAN
         try:
             body = self.read_json()
             if self.path == "/api/plan":
-                LAST_PLAN = build_plan(body.get("selected_root", ""), body.get("mode", "batch"), body.get("output_root") or None)
-                self.send_json(LAST_PLAN.to_dict())
+                plan = build_plan(body.get("selected_root", ""), body.get("mode", "batch"), body.get("output_root") or None)
+                PLANS.put(plan)
+                self.send_json(plan.to_dict())
             elif self.path == "/api/report":
-                if LAST_PLAN is None:
-                    raise ValueError("尚未生成计划")
-                report_dir = write_plan_report(LAST_PLAN)
+                report_dir = write_plan_report(PLANS.get(_plan_id(body)))
                 self.send_json({"report_dir": str(report_dir)})
             elif self.path == "/api/duplicates":
                 rows = detect_duplicates(body.get("selected_root", ""), body.get("level", "standard"))
@@ -197,9 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.send_json({"rows": rows_as_dicts(rows)})
             elif self.path == "/api/execute-copy":
-                if LAST_PLAN is None:
-                    raise ValueError("尚未生成计划")
-                result = execute_plan(LAST_PLAN, "copy")
+                result = execute_plan(PLANS.get(_plan_id(body)), "copy")
                 self.send_json({"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
             elif self.path == "/api/manual":
                 self.send_json({"manual_pdf": str(write_manual_pdf("理巢_NestTidy_简要操作手册.pdf"))})

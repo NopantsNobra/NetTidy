@@ -19,6 +19,30 @@ class ExecutionResult:
     transaction_log: str | None
 
 
+class OutputBoundaryError(ValueError):
+    """copy 写入前复查发现目标越过用户选择的输出根边界。"""
+
+
+def ensure_target_within_output(target: Path, output_root: Path) -> None:
+    """copy 写入前复查目标是否仍在用户选择的输出根内。
+
+    计划期 `validate_copy_output()` 只 resolve 一次。若输出根或其子目录在计划生成后
+    被替换成 junction / symlink，`shutil.copy2` 会把文件写到边界之外，执行仍报成功
+    （实测：目标父目录换成 junction 后，文件落到 escape/a.txt，completed=1 failed=0）。
+
+    复查两条：① 输出根自身未被重解析点重定向；② 目标父目录解析后仍落在根内。
+
+    局限：检查与 copy2 之间仍有 TOCTOU 窗口，此处只缩小窗口，**不消除竞态**。
+    完全消除需要目录句柄 + 相对路径打开，标准库在 Windows 上做不到。
+    """
+    root_abs = Path(os.path.abspath(output_root))
+    if output_root.resolve() != root_abs:
+        raise OutputBoundaryError(f"copy 输出根已被重定向: {output_root}")
+    resolved_parent = target.parent.resolve()
+    if not resolved_parent.is_relative_to(root_abs):
+        raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
+
+
 def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None) -> ExecutionResult:
     if not plan.frozen:
         raise ValueError("OperationPlan 未冻结，禁止执行")
@@ -40,6 +64,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     skipped = 0
     failed = 0
     statuses: dict[str, str] = {}
+    output_root_path: Path | None = Path(plan.output_root) if (mode == "copy" and plan.output_root) else None
     tx_path: Path | None = Path(transaction_log).resolve() if transaction_log else None
     if mode == "move" and tx_path is None:
         tx_path = Path.cwd() / "transaction_log.jsonl"
@@ -54,7 +79,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
                 status = "skipped"
             elif mode == "copy":
                 if op.op_type in {"copy", "move"}:
-                    do_copy(op)
+                    do_copy(op, output_root_path)
                     status = "completed"
                 else:
                     status = "skipped"
@@ -137,13 +162,15 @@ def precheck(op: Operation) -> None:
         raise FileExistsError(f"目标已存在，禁止覆盖: {target}")
 
 
-def do_copy(op: Operation) -> None:
+def do_copy(op: Operation, output_root: Path | None = None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
+    if output_root is not None:
+        ensure_target_within_output(target, output_root)
     shutil.copy2(source, target)
     if target.stat().st_size != source.stat().st_size:
         raise RuntimeError(f"复制后大小校验失败: {target}")
@@ -183,6 +210,8 @@ def write_tx(tx_path: Path | None, row: dict) -> None:
 
 
 def classify_exception(exc: Exception) -> str:
+    if isinstance(exc, OutputBoundaryError):
+        return "OUTPUT_BOUNDARY_ESCAPED"
     if isinstance(exc, PermissionError):
         return "PERMISSION_DENIED"
     if isinstance(exc, FileNotFoundError):
