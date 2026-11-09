@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import nesttidy.executor as executor
 from nesttidy.executor import execute_plan
@@ -196,6 +198,122 @@ class CopyOutputBoundaryTests(unittest.TestCase):
             self.assertGreater(result.failed, 0)
             self.assertEqual([p for p in escape.rglob("*") if p.is_file()], [])
             self.assertIn("OUTPUT_BOUNDARY_ESCAPED", [row.code for row in result.issues])
+
+
+class FrozenPlanTests(unittest.TestCase):
+    """不变量 6：未冻结计划必须在任何磁盘写入之前被拒绝，且零副作用。"""
+
+    @staticmethod
+    def _relative_files(root: Path) -> list[str]:
+        """源目录下所有文件的相对路径快照（大小写无关、已排序），供前后比对。"""
+        return sorted(
+            p.relative_to(root).as_posix().casefold()
+            for p in root.rglob("*")
+            if p.is_file()
+        )
+
+    def test_unfrozen_plan_is_rejected_without_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "资源包" / "课程A"
+            touch(root / "外壳" / "正文" / "电影.mkv", "x")
+            plan = build_plan(str(root), "single")
+            before = self._relative_files(root)
+            self.assertGreater(len(plan.operations), 0, "夹具未生成任何操作，用例会假绿")
+
+            plan.frozen = False
+            with self.assertRaisesRegex(ValueError, "未冻结"):
+                execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertEqual(self._relative_files(root), before, "拒绝执行后源目录文件发生变化")
+            self.assertFalse((base / "tx.jsonl").exists(), "未冻结计划仍创建了事务日志")
+            self.assertEqual({op.status for op in plan.operations}, {"planned"}, "计划状态被提前回写")
+
+
+class PrecheckTests(unittest.TestCase):
+    """不变量 7：执行前必须复核源状态。计划生成后源文件被改动，不得按过期计划执行。
+
+    只断言操作状态与问题文本，不锁定 issue.code —— 当前 size/mtime 变化被
+    classify_exception 归为 EXECUTION_FAILED 而非 SOURCE_CHANGED，此口径待后续裁决。
+    """
+
+    def test_size_change_rejects_stale_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "资源包" / "课程A"
+            source = root / "外壳" / "正文" / "电影.mkv"
+            touch(source, "x")
+            plan = build_plan(str(root), "single")
+            self.assertGreater(len(plan.operations), 0, "夹具未生成任何操作，用例会假绿")
+            move_op = next(op for op in plan.operations if op.op_type == "move")
+
+            expected_mtime = move_op.precheck["mtime_ns"]
+            source.write_text("x" * 20, encoding="utf-8")
+            os.utime(source, ns=(source.stat().st_atime_ns, expected_mtime))
+            self.assertNotEqual(source.stat().st_size, move_op.precheck["size"], "夹具没有改变文件大小")
+            self.assertEqual(
+                source.stat().st_mtime_ns, expected_mtime, "夹具必须保持 mtime 不变，否则测到的是 mtime 分支"
+            )
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertGreaterEqual(result.failed, 1)
+            self.assertEqual(move_op.status, "failed", "过期计划的操作状态未回写")
+            self.assertIn("源文件大小已变化", " ".join(row.message for row in result.issues))
+            self.assertTrue(source.exists(), "源文件被按过期计划搬走")
+            self.assertEqual(source.read_text(encoding="utf-8"), "x" * 20, "源文件内容被改动")
+            self.assertFalse((root / "电影.mkv").exists(), "拒绝执行后仍产生了目标文件")
+
+    def test_mtime_change_rejects_stale_plan_with_same_size(self) -> None:
+        # Windows NTFS 的 st_mtime_ns 是 100ns 粒度：加 1ns 不生效（实测 8/8 假绿风险），
+        # 故用 +1 秒。先断言 size 未变，避免误测到 size 分支。
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "资源包" / "课程A"
+            source = root / "外壳" / "正文" / "电影.mkv"
+            touch(source, "x")
+            plan = build_plan(str(root), "single")
+            self.assertGreater(len(plan.operations), 0, "夹具未生成任何操作，用例会假绿")
+            move_op = next(op for op in plan.operations if op.op_type == "move")
+
+            stat = source.stat()
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+            self.assertEqual(source.stat().st_size, move_op.precheck["size"], "本用例必须保持 size 不变")
+            self.assertNotEqual(
+                source.stat().st_mtime_ns, move_op.precheck["mtime_ns"], "NTFS 未反映 mtime 变化，用例会假绿"
+            )
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertGreaterEqual(result.failed, 1)
+            self.assertEqual(move_op.status, "failed", "过期计划的操作状态未回写")
+            self.assertIn("源文件修改时间已变化", " ".join(row.message for row in result.issues))
+            self.assertTrue(source.exists(), "源文件被按过期计划搬走")
+            self.assertFalse((root / "电影.mkv").exists(), "拒绝执行后仍产生了目标文件")
+
+
+class ExecutorFailureTests(unittest.TestCase):
+    """executor 失败路径：权限拒绝必须分类留痕，且不得留下半完成的搬移。"""
+
+    def test_permission_denied_is_classified_and_source_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "资源包" / "课程A"
+            source = root / "外壳" / "正文" / "电影.mkv"
+            touch(source, "payload")
+            plan = build_plan(str(root), "single")
+            self.assertGreater(len(plan.operations), 0, "夹具未生成任何操作，用例会假绿")
+            move_op = next(op for op in plan.operations if op.op_type == "move")
+
+            with mock.patch("nesttidy.executor.shutil.move", side_effect=PermissionError("拒绝访问")):
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertGreaterEqual(result.failed, 1)
+            self.assertEqual(move_op.status, "failed", "权限失败的操作状态未回写")
+            self.assertIn("PERMISSION_DENIED", [row.code for row in result.issues])
+            self.assertTrue(source.exists(), "权限失败后源文件仍被搬走")
+            self.assertEqual(source.read_text(encoding="utf-8"), "payload", "源文件内容被改动")
+            self.assertFalse((root / "电影.mkv").exists(), "权限失败后仍产生了目标文件")
 
 
 if __name__ == "__main__":

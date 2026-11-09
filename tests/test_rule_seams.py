@@ -91,7 +91,7 @@ class ShellChainTests(unittest.TestCase):
         """A/B/C/file.txt：B、C 折叠掉，只保留 A，且 A 的名字不得被改成 C 或 file 所在层。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             touch(root / "合集" / "A" / "B" / "C" / "file.txt")
             touch(root / "合集" / "其他" / "x.txt")
             touch(root / "合集" / "其他" / "y.txt")
@@ -101,7 +101,7 @@ class ShellChainTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 sorted([
-                    "marker.txt",
+                    "说明.txt",
                     str(Path("合集") / "A" / "file.txt"),
                     str(Path("合集") / "其他" / "x.txt"),
                     str(Path("合集") / "其他" / "y.txt"),
@@ -158,7 +158,7 @@ class ShellRemovalTests(unittest.TestCase):
         """R2 保留最外层壳名（合集/A），只折叠 A 以内的 B、C，且折叠掉的壳必须登记删除。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             touch(root / "合集" / "A" / "B" / "C" / "file.txt")
             touch(root / "合集" / "其他" / "x.txt")
             touch(root / "合集" / "其他" / "y.txt")
@@ -239,7 +239,7 @@ class MultiRoundConflictTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             touch(root / "合集" / "Group1" / "A" / "cover.jpg")
             touch(root / "合集" / "Group2" / "A" / "cover.jpg")
             plan = build_plan(str(root), "single")
@@ -248,7 +248,7 @@ class MultiRoundConflictTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 sorted([
-                    "marker.txt",
+                    "说明.txt",
                     str(Path("合集") / "Group1-A-cover.jpg"),
                     str(Path("合集") / "Group2-A-cover.jpg"),
                 ]),
@@ -258,7 +258,7 @@ class MultiRoundConflictTests(unittest.TestCase):
         """三轮以上冲突时前缀不得重复累积，长度必须与祖先深度线性相关。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             for group in ("G1", "G2"):
                 touch(root / "合集" / group / "A" / "B" / "cover.jpg")
             plan = build_plan(str(root), "single")
@@ -295,8 +295,10 @@ class R1TailRuleTests(unittest.TestCase):
 
     历史缺陷：planner 把 R1 与 process_node 写成 if/else 二选一，
     只要穿透成立，穿透点以下 R2/R3/R4 一条都不跑。
-    既有案例为何没抓到——R2/R3/R4 的夹具大多在资源根塞了 marker.txt，
+    既有案例为何没抓到——R2/R3/R4 的夹具大多在资源根塞了占位文件（旧名 marker.txt），
     根上有文件就不会触发 R1，测试从没在「真实形态」下跑过。
+    本类两例用「无根文件」的真实形态做哨兵；其余用例的资源根散落文件是
+    刻意隔离（保持单一规则考察范围），不是让缺陷绕开测试，见 test_rules.py 文件头说明。
     """
 
     def test_penetrated_tree_still_runs_subtree_rules(self) -> None:
@@ -377,7 +379,7 @@ class StableKeyTests(unittest.TestCase):
         """同一棵树重复规划，映射序列（含顺序）必须逐条一致，而不是仅集合相等。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             touch(root / "合集" / "A" / "cover.jpg")
             touch(root / "合集" / "b" / "cover.jpg")
             touch(root / "其他" / "z.txt")

@@ -8,6 +8,12 @@ from nesttidy.planner import build_plan
 from nesttidy.rules import VDir, VFile, clean_name, resolve_names
 
 
+# 资源根上的「说明.txt」是真实数据形态（BT/PT 资源包常在根上散落说明文件）。
+# 它使 R1 单链穿透不成立，让下面各用例专注考察 R2–R5 的单一规则；R1 穿透后的
+# 真实形态由 test_rule_seams.R1TailRuleTests 两例覆盖。实测：裸删根文件会让
+# 10 例中 7 例的断言路径层级整体改变，因此这里是刻意隔离，不是无意挡枪。
+
+
 def touch(path: Path, text: str = "x") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -47,7 +53,7 @@ class RuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
             touch(root / "外层" / "内层" / "file.txt")
-            touch(root / "side.txt")
+            touch(root / "说明.txt")
             plan = build_plan(str(root), "single")
             self.assertIn("file.txt", rel_targets(plan, root))
             self.assertTrue(any("R2" in " ".join(m.rule_trace) for m in plan.mappings))
@@ -57,7 +63,7 @@ class RuleTests(unittest.TestCase):
             root = Path(tmp) / "资源A"
             touch(root / "合集" / "A" / "a.txt")
             touch(root / "合集" / "B" / "b.txt")
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             plan = build_plan(str(root), "single")
             self.assertIn(str(Path("合集") / "a.txt"), rel_targets(plan, root))
             self.assertIn(str(Path("合集") / "b.txt"), rel_targets(plan, root))
@@ -68,7 +74,7 @@ class RuleTests(unittest.TestCase):
             touch(root / "合集" / "A" / "外壳" / "正文" / "file.txt")
             touch(root / "合集" / "B" / "b1.txt")
             touch(root / "合集" / "B" / "b2.txt")
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             plan = build_plan(str(root), "single")
             targets = rel_targets(plan, root)
             self.assertIn(str(Path("合集") / "A" / "file.txt"), targets)
@@ -79,7 +85,7 @@ class RuleTests(unittest.TestCase):
             root = Path(tmp) / "资源A"
             touch(root / "合集" / "A" / "cover.jpg")
             touch(root / "合集" / "B" / "cover.jpg")
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             plan = build_plan(str(root), "single")
             targets = rel_targets(plan, root)
             self.assertIn(str(Path("合集") / "A-cover.jpg"), targets)
@@ -125,7 +131,7 @@ class RuleTests(unittest.TestCase):
     def test_r4_lifts_single_file_dir_within_resource_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "资源A"
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             touch(root / "正片" / "movie.mkv")
             plan = build_plan(str(root), "single")
             self.assertIn("movie.mkv", rel_targets(plan, root))
@@ -137,7 +143,7 @@ class RuleTests(unittest.TestCase):
             root = Path(tmp) / "资源A"
             touch(root / "合集" / "A" / "Cover.JPG")
             touch(root / "合集" / "B" / "cover.jpg")
-            touch(root / "marker.txt")
+            touch(root / "说明.txt")
             plan = build_plan(str(root), "single")
             names = [Path(m.planned_target_path).name for m in plan.mappings]
             self.assertEqual(len(names), len({n.casefold() for n in names}), f"大小写撞名未处理: {names}")
