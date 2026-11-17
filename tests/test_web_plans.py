@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -70,6 +72,56 @@ class PlanRegistryTests(unittest.TestCase):
                 registry.get(ids[0])
             self.assertIsNotNone(registry.get(ids[1]))
             self.assertIsNotNone(registry.get(ids[2]))
+
+
+class PortBindingTests(unittest.TestCase):
+    def test_occupied_port_is_classified_with_port_number(self) -> None:
+        """真实占用一个临时端口，再让服务绑定它：必须得到可判定的占用错误。"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen(1)
+            port = int(blocker.getsockname()[1])
+            with self.assertRaises(web.PortInUseError) as ctx:
+                web.create_server("127.0.0.1", port)
+        self.assertEqual(ctx.exception.port, port)
+        self.assertIn(str(port), str(ctx.exception))
+        self.assertIsInstance(ctx.exception.cause, OSError)
+
+    def test_reuse_occupied_port_is_classified_without_silent_coexistence(self) -> None:
+        """占用方也设 SO_REUSEADDR：服务必须报错，不得静默绑到同一端口。"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen(1)
+            port = int(blocker.getsockname()[1])
+            with self.assertRaises(web.PortInUseError) as ctx:
+                web.create_server("127.0.0.1", port)
+        self.assertEqual(ctx.exception.port, port)
+        self.assertIn(str(port), str(ctx.exception))
+
+    def test_unroutable_bind_error_is_not_classified_as_port_in_use(self) -> None:
+        """203.0.113.1 本机实测 winerror=10049，属非占用 bind 错误，必须原样抛。"""
+        with self.assertRaises(OSError) as ctx:
+            web.create_server("203.0.113.1", 0)
+        self.assertNotIsInstance(ctx.exception, web.PortInUseError)
+        self.assertNotIn(getattr(ctx.exception, "winerror", None), (10048, 10013))
+
+    def test_unrelated_oserror_is_not_classified_as_port_in_use(self) -> None:
+        """getaddrinfo 失败是真实的 OSError，但不属于占用，必须原样抛。"""
+        with self.assertRaises(OSError) as ctx:
+            web.create_server("999.999.999.999", 0)
+        self.assertNotIsInstance(ctx.exception, web.PortInUseError)
+        self.assertNotIn(ctx.exception.errno, (errno.EADDRINUSE, 10048, 10013))
+
+    def test_launcher_distinguishes_port_in_use_from_other_failures(self) -> None:
+        """bat 必须对退出码 23 单独提示端口占用，并保留原 Python 安装提示。"""
+        from nesttidy.app import EXIT_PORT_IN_USE
+
+        bat = (Path(__file__).resolve().parents[1] / "start_nesttidy.bat").read_text(encoding="utf-8")
+        self.assertEqual(EXIT_PORT_IN_USE, 23)
+        self.assertIn(f'"{EXIT_PORT_IN_USE}"', bat)
+        self.assertIn("已被占用", bat)
+        self.assertIn("Python 3.11", bat)
 
 
 class WebEndpointTests(unittest.TestCase):

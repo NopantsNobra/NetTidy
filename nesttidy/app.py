@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .config import DEFAULT_HOST, DEFAULT_PORT
@@ -16,7 +17,9 @@ from .recovery import rows_as_dicts as undo_rows_as_dicts
 from .recovery import undo_transaction
 from .reports import new_report_dir, write_plan_report
 from .storage import list_history
-from .web import serve
+from .web import PortInUseError, serve
+
+EXIT_PORT_IN_USE = 23
 
 
 def main() -> None:
@@ -123,7 +126,11 @@ def main() -> None:
         write_plan_report(plan, report_dir)
         print(json.dumps({"report_dir": str(report_dir), **result.__dict__}, ensure_ascii=False, indent=2, default=str))
         return
-    serve(args.host, args.port)
+    try:
+        serve(args.host, args.port)
+    except PortInUseError as exc:
+        print(f"理巢启动失败：{exc}", file=sys.stderr)
+        raise SystemExit(EXIT_PORT_IN_USE) from exc
 
 
 if __name__ == "__main__":

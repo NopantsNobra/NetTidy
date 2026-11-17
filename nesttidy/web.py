@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import json
+import socket
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +14,7 @@ from .manual_pdf import write_manual_pdf
 from .model import OperationPlan
 from .planner import build_plan
 from .repair import repair_permissions, rows_as_dicts
-from .reports import write_plan_report
+from .reports import plan_display_stats, write_plan_report
 from .storage import list_history
 
 
@@ -114,6 +116,9 @@ INDEX_HTML = """<!doctype html>
       <p id="msg" class="muted"></p>
     </section>
     <section class="grid" id="stats"></section>
+    <section id="ruleStats"></section>
+    <section id="r5Samples"></section>
+    <section id="boundaryNote"></section>
     <section><h2>预览映射</h2><div id="preview"></div></section>
     <section><h2>异常项</h2><div id="issues"></div></section>
     <section><h2>诊断 / 历史</h2><div id="diagnostics"></div></section>
@@ -182,14 +187,21 @@ async function makeManual() {
   } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
 }
 function render(plan) {
-  const counts = {};
-  for (const op of plan.operations) counts[op.op_type] = (counts[op.op_type] || 0) + 1;
   stats.innerHTML = [
     ['资源根', plan.resource_roots.length],
     ['映射', plan.mappings.length],
     ['操作', plan.operations.length],
     ['异常', plan.issues.length]
   ].map(x => `<div class="stat"><b>${x[0]}</b><br>${x[1]}</div>`).join('');
+  const d = plan.display;
+  ruleStats.innerHTML = '<h2>规则分类计数</h2><p class="muted">口径：R0=operations 中 rmdir 条数；R1–R5=mappings[].rule_trace 行首命中条目数（同一条目可命中多条）。来源：冻结计划，未新增字段。P0 是边界不变量、无逐条痕迹，结果见下方边界检查。</p>' +
+    table(d.rule_rows, ['rule','name','count']);
+  r5Samples.innerHTML = '<h2>R5 撞名前缀样例</h2><p class="muted">口径：conflict_resolution_trace 含 R5 的前 5 条；原名/结果名取路径末段，证据为轨迹原文。</p>' +
+    table(d.r5_samples, ['original_name','final_name','trace']);
+  const b = d.boundary;
+  boundaryNote.innerHTML = '<h2>边界检查</h2><p>已校验 <b>' + b.checked + '</b> 条文件操作，目标越界 <b>' + b.out_of_bound + '</b> 条。</p>' +
+    '<p class="muted">口径：边界取 ' + esc(b.label) + '，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘；rmdir 无目标不计）。数字由当前计划实时计算，非固定值。</p>' +
+    '<p class="muted">盲区：计划期词法归一化、不读磁盘，不解析 junction / 符号链接，此类场景以执行层复查为准（执行层真实路径解析，实测可拦截越界）；本检查只验证目标落在资源根并集内，跨资源根由 planner 结构保证、展示层不做逐条跨根核对（P0 不变量 2 口径更强）；分母仅含 op_type ∈ {move,copy,keep} 且 target_path 非空者，rmdir 无目标不计。</p>';
   preview.innerHTML = table(plan.mappings.slice(0, 500), ['original_path','planned_target_path','operation_type','rule_trace','risk_level']);
   issues.innerHTML = table(plan.issues, ['path','stage','code','message','final_status']);
 }
@@ -226,7 +238,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/plan":
                 plan = build_plan(body.get("selected_root", ""), body.get("mode", "batch"), body.get("output_root") or None)
                 PLANS.put(plan)
-                self.send_json(plan.to_dict())
+                data = plan.to_dict()
+                data["display"] = plan_display_stats(plan)
+                self.send_json(data)
             elif self.path == "/api/report":
                 report_dir = write_plan_report(PLANS.get(_plan_id(body)))
                 self.send_json({"report_dir": str(report_dir)})
@@ -275,9 +289,51 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+class PortInUseError(RuntimeError):
+    """绑定阶段判定为端口占用时的明确错误类型。"""
+
+    def __init__(self, port: int, cause: OSError) -> None:
+        self.port = port
+        self.cause = cause
+        super().__init__(f"端口 {port} 已被占用，请关闭占用该端口的程序后重试")
+
+
+_PORT_IN_USE_CODES: frozenset[int] = frozenset({errno.EADDRINUSE, 10048})
+_WINDOWS_ACCESS_DENIED = 10013  # WSAEACCES：占用方未设 SO_REUSEADDR 时 Windows 的实际报错
+
+
+def _is_port_in_use(exc: OSError, host: str, port: int) -> bool:
+    """只把真实占用归类；其他 OSError 一律返回 False 由调用方原样抛。"""
+    winerror = getattr(exc, "winerror", None)
+    if exc.errno in _PORT_IN_USE_CODES or winerror in _PORT_IN_USE_CODES:
+        return True
+    if winerror == _WINDOWS_ACCESS_DENIED:
+        # 用真实连接确认该端口确有监听者，避免把权限问题误报成端口占用。
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            return probe.connect_ex((host, port)) == 0
+    return False
+
+
+class NestTidyHTTPServer(ThreadingHTTPServer):
+    """关闭 SO_REUSEADDR：否则 Windows 上与同为 reuse 的占用方会静默共存。"""
+
+    allow_reuse_address = False
+
+
+def create_server(host: str, port: int) -> NestTidyHTTPServer:
+    """创建并绑定 HTTP 服务；仅转译绑定阶段的端口占用错误。"""
+    try:
+        return NestTidyHTTPServer((host, port), Handler)
+    except OSError as exc:
+        if _is_port_in_use(exc, host, port):
+            raise PortInUseError(port, exc) from exc
+        raise
+
+
 def serve(host: str, port: int) -> None:
     if host != "127.0.0.1":
         raise ValueError("理巢默认只允许绑定 127.0.0.1")
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = create_server(host, port)
     print(f"理巢 NestTidy 已启动：http://{host}:{port}")
     httpd.serve_forever()

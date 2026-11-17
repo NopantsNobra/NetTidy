@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,68 @@ def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None,
     return out
 
 
+_RULE_NAMES = {
+    "R0": "空目录清理（含 R1–R4 产生的空壳）",
+    "R1": "资源根内直链穿透",
+    "R2": "壳吸收",
+    "R3": "分叉口/父级保护",
+    "R4": "单文件提级",
+    "R5": "撞名重命名",
+}
+_RULE_CODES = tuple(_RULE_NAMES)
+_R5_SAMPLE_LIMIT = 5
+
+
+def _norm_path(value: str) -> str:
+    """纯词法归一化：消 .. 并统一大小写/分隔符，不读磁盘、不跟随链接。"""
+    return os.path.normcase(os.path.abspath(value))
+
+
+def _inside(path: str, roots: list[str]) -> bool:
+    """判断 path 是否落在 roots 任一目录内（含目录自身），按路径分量比较。"""
+    candidate = _norm_path(path)
+    for root in roots:
+        base = _norm_path(root)
+        if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
+def plan_display_stats(plan: OperationPlan) -> dict:
+    """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。
+
+    口径：R0 = rmdir 操作数；R1–R5 = mappings[].rule_trace 行首命中条目（按条目去重）；
+    R5 样例取 conflict_resolution_trace 含 R5 的前 5 条（name_cleaning_trace 不含改名后名字）；
+    边界按 copy→output_root / 其余→resource_roots 逐条校验目标，P0 是无痕迹的不变量。
+    """
+    counts: dict[str, int] = {code: 0 for code in _RULE_CODES}
+    counts["R0"] = sum(1 for op in plan.operations if op.op_type == "rmdir")
+    for mapping in plan.mappings:
+        for code in {c for c in _RULE_CODES for t in mapping.rule_trace if t.startswith(c)}:
+            counts[code] += 1
+
+    samples: list[dict[str, str]] = []
+    for mapping in plan.mappings:
+        traces = [t for t in mapping.conflict_resolution_trace if t.startswith("R5")]
+        if not traces:
+            continue
+        samples.append({"original_name": Path(mapping.original_path).name,
+                        "final_name": Path(mapping.planned_target_path).name, "trace": traces[-1]})
+        if len(samples) == _R5_SAMPLE_LIMIT:
+            break
+
+    roots = [plan.output_root] if plan.output_root else plan.resource_roots
+    label = "output_root（copy 模式）" if plan.output_root else "resource_roots（资源根内）"
+    file_ops = [op for op in plan.operations if op.op_type in {"move", "copy", "keep"} and op.target_path]
+    escaped = [op for op in file_ops if not _inside(op.target_path, roots)]
+    return {
+        "rule_counts": counts,
+        "rule_rows": [{"rule": c, "name": _RULE_NAMES[c], "count": counts[c]} for c in _RULE_CODES],
+        "r5_samples": samples,
+        "boundary": {"checked": len(file_ops), "out_of_bound": len(escaped), "label": label},
+    }
+
+
 def markdown_summary(plan: OperationPlan) -> str:
     op_counts: dict[str, int] = {}
     status_counts: dict[str, int] = {}
@@ -83,6 +146,32 @@ def markdown_summary(plan: OperationPlan) -> str:
     ]
     for name in sorted(op_counts):
         lines.append(f"- {name}: {op_counts[name]}")
+    stats = plan_display_stats(plan)
+    lines.extend([
+        "", "## 规则分类计数", "",
+        "- 口径：R0 = operations 中 op_type=rmdir 的条数；R1–R5 = mappings[].rule_trace 行首命中该规则的条目数（同一条目可命中多条，各数之和可大于文件总数），按条目去重。来源：冻结计划，未新增字段。",
+        "- P0 是资源根边界不变量，不产生逐条规则痕迹；真实检查结果见「边界检查」，不写固定值。",
+    ])
+    for row in stats["rule_rows"]:
+        lines.append(f"- {row['rule']} {row['name']}: {row['count']}")
+    lines.extend([
+        "", "## R5 撞名前缀样例", "",
+        "- 口径：取 mappings[].conflict_resolution_trace 含 R5 的前 5 条；原名/结果名分别为 original_path / planned_target_path 的末段，证据为轨迹原文。",
+    ])
+    if stats["r5_samples"]:
+        for row in stats["r5_samples"]:
+            lines.append(f"- {row['original_name']} → {row['final_name']}（证据：{row['trace']}）")
+    else:
+        lines.append("- 无 R5 撞名样例。")
+    boundary = stats["boundary"]
+    lines.extend([
+        "", "## 边界检查", "",
+        f"- 目标越界：{boundary['out_of_bound']} 条 / 已校验 {boundary['checked']} 条文件操作。",
+        f"- 口径：边界取 {boundary['label']}，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘；rmdir 无目标不计）。数字由当前计划实时计算，非固定值。",
+        "- 盲区：本检查为计划期词法归一化，不读磁盘、不解析 junction / 符号链接；此类场景以执行层复查为准（执行层用真实路径解析，实测可拦截越界）。",
+        "- 盲区：本检查只验证目标是否落在资源根并集内；跨资源根由 planner 结构保证，展示层不做逐条跨根核对（P0 不变量 2 的口径强于本检查）。",
+        "- 分母：仅含 op_type ∈ {move,copy,keep} 且 target_path 非空者，rmdir 无目标不计。",
+    ])
     lines.extend(["", "## 执行状态", ""])
     for name in sorted(status_counts):
         lines.append(f"- {name}: {status_counts[name]}")

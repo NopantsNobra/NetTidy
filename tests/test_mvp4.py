@@ -9,10 +9,11 @@ from pathlib import Path
 
 from nesttidy.duplicate import detect_duplicates
 from nesttidy.manual_pdf import write_manual_pdf
+from nesttidy.model import MappingEntry, Operation, OperationPlan
 from nesttidy.planner import build_plan
 from nesttidy.repair import repair_permissions
 from nesttidy.recovery import undo_transaction
-from nesttidy.reports import new_report_dir, write_plan_report
+from nesttidy.reports import markdown_summary, new_report_dir, plan_display_stats, write_plan_report
 from nesttidy.storage import list_history
 
 
@@ -92,6 +93,60 @@ class MVP4Tests(unittest.TestCase):
             self.assertEqual(rows[0].status, "ok")
             self.assertTrue(source.exists())
             self.assertFalse(target.exists())
+
+
+class ReportDisplayTests(unittest.TestCase):
+    @staticmethod
+    def _plan() -> OperationPlan:
+        return OperationPlan(
+            plan_id="p", app_version="t", rule_version="r", mode="move",
+            selected_root="/src", output_root=None, config_snapshot={},
+            source_snapshot_digest="d", resource_roots=["/src/R"],
+            operations=[
+                Operation("o1", "rid", "move", "/src/R/a/old.txt", "/src/R/A-old.txt", ["R1 直链穿透", "R5 撞名重命名"]),
+                Operation("o2", "directory", "rmdir", "/src/R/a", None, ["R0/R1/R2/R3/R4 产生的空目录清理"]),
+                Operation("o3", "rid", "keep", "/src/R/keep.txt", "/src/R/keep.txt", ["保留原位"]),
+                Operation("o4", "rid", "move", "/src/R/x.txt", "/elsewhere/x.txt", ["R3 分叉口全提"]),
+            ],
+            issues=[],
+            mappings=[
+                MappingEntry("o1", "rid", "file", "/src/R/a/old.txt", "/src/R/a/old.txt", "/src/R/A-old.txt", "move", ["R1 直链穿透", "R5 撞名重命名"], "medium", "planned", 1, 1, conflict_resolution_trace=["R5 撞名重命名: A-old.txt"]),
+                MappingEntry("o4", "rid", "file", "/src/R/x.txt", "/src/R/x.txt", "/elsewhere/x.txt", "move", ["R3 分叉口全提"], "medium", "planned", 1, 1),
+            ],
+            created_at="t",
+        )
+
+    def test_rule_counts_are_derived_from_traces(self) -> None:
+        counts = plan_display_stats(self._plan())["rule_counts"]
+        self.assertEqual((counts["R0"], counts["R1"], counts["R3"], counts["R5"]), (1, 1, 1, 1))
+        self.assertEqual(counts["R2"], 0)
+
+    def test_r5_samples_show_real_name_pair(self) -> None:
+        plan = self._plan()
+        before = json.dumps(plan.to_dict(), ensure_ascii=False, sort_keys=True)
+        samples = plan_display_stats(plan)["r5_samples"]
+        self.assertEqual(len(samples), 1)
+        self.assertEqual((samples[0]["original_name"], samples[0]["final_name"]), ("old.txt", "A-old.txt"))
+        self.assertIn("R5", samples[0]["trace"])
+        text = markdown_summary(plan)
+        self.assertIn("## 规则分类计数", text)
+        self.assertIn("## 边界检查", text)
+        self.assertIn("old.txt → A-old.txt", text)
+        self.assertEqual(json.dumps(plan.to_dict(), ensure_ascii=False, sort_keys=True), before)
+
+    def test_boundary_is_computed_not_hardcoded(self) -> None:
+        boundary = plan_display_stats(self._plan())["boundary"]
+        self.assertEqual((boundary["checked"], boundary["out_of_bound"]), (3, 1))
+
+    def test_drive_root_does_not_report_false_escape(self) -> None:
+        root = os.path.abspath(os.sep)  # 盘根 / POSIX 根，平台安全
+        plan = self._plan()
+        plan.resource_roots = [root]
+        for op in plan.operations:
+            if op.target_path:
+                op.target_path = os.path.join(root, "nested", "file.txt")
+        self.assertEqual(plan_display_stats(plan)["boundary"]["out_of_bound"], 0)
+
 
 
 if __name__ == "__main__":
