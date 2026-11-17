@@ -108,6 +108,45 @@ def collect_dir_paths(tree: VDir) -> list[Path]:
     return paths
 
 
+def collect_parent_paths(targets: list[Path]) -> set[Path]:
+    """一次性收集所有目标路径的祖先目录。
+
+    与原先逐个目标构造 ``target.parents`` 的写法等价，但只遍历一次目标列表。
+    这里刻意不调用 ``resolve()``：调用方拿到的 ``resolved`` 是已解析路径，
+    ``Path`` 的哈希/相等语义与原 ``resolved in target.parents`` 完全一致，
+    额外 resolve 反而可能改变大小写口径、导致判定结果漂移。
+    """
+    parents: set[Path] = set()
+    for target in targets:
+        parents.update(target.parents)
+    return parents
+
+
+def scan_residual_dirs(
+    scanned_dirs: list[Path],
+    local_targets: list[Path],
+    root: Path,
+    removed_dirs: set[Path],
+) -> None:
+    """登记「执行后不再有文件落入」的扫描目录（原地修改 removed_dirs）。
+
+    原实现是 O(目录数 x 文件数) 的嵌套循环，每个目录都对所有目标构造一次
+    ``target.parents``。改为先把所有目标的父目录收进集合，再对每个目录做一次
+    集合成员判断，整体降为 O(目录数 + 文件数 x 路径深度)。
+
+    判定口径、跳过条件与写入时机均保持不变：资源根跳过、已在 removed_dirs 中
+    的跳过；写入仍在本轮扫描循环内逐步进行，因此 removed_dirs 的内容、顺序与
+    生成时机与原实现逐条一致。
+    """
+    occupied = collect_parent_paths(local_targets)
+    for scanned in scanned_dirs:
+        resolved = scanned.resolve()
+        if resolved == root or resolved in removed_dirs:
+            continue
+        if resolved not in occupied:
+            removed_dirs.add(resolved)
+
+
 def build_plan(selected_root: str, mode: str = "batch", output_root: str | None = None) -> OperationPlan:
     selected = Path(selected_root).resolve()
     roots, root_issues = resource_roots(selected, mode)
@@ -185,12 +224,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
         # 统一按「执行后是否还有文件落在该目录里」判定：没有就必然变空，必须登记删除。
         # 这条同时覆盖穿透点下方被重新挂载的子目录——它们的旧路径同样会变空。
         if not output_root:
-            for scanned in scanned_dirs:
-                resolved = scanned.resolve()
-                if resolved == root or resolved in removed_dirs:
-                    continue
-                if not any(resolved in target.parents for target in local_targets):
-                    removed_dirs.add(resolved)
+            scan_residual_dirs(scanned_dirs, local_targets, root, removed_dirs)
 
     for dir_path in sorted(removed_dirs, key=lambda p: str(p).casefold(), reverse=True):
         operations.append(

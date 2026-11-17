@@ -11,12 +11,15 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
+from nesttidy import planner
 from nesttidy.model import OperationPlan
-from nesttidy.planner import build_plan, snapshot_digest
+from nesttidy.planner import build_plan, scan_residual_dirs, snapshot_digest
 
 
 def touch(path: Path, text: str = "x") -> None:
@@ -102,6 +105,103 @@ class ThreadConsistencyTests(unittest.TestCase):
                 len({op.op_id for plan in plans for op in plan.operations}), 8 * len(baseline)
             )
             self.assertEqual(source_state(root), before, "并发规划期间源目录被改动")
+
+
+class PlannerResidualDirEquivalenceTests(unittest.TestCase):
+    """目录归属判定优化的行为一致性回归。
+
+    build_plan 末尾的残留目录判定由 O(目录数 x 文件数) 改为父路径集合查表。
+    这里把优化前的循环原样内联为对照实现，通过临时替换 planner 模块里的
+    新函数，跑同一份真实深嵌套夹具生成两份完整计划，逐条比对全部字段。
+    """
+
+    @staticmethod
+    def legacy_scan(scanned_dirs: list[Path], local_targets: list[Path], root: Path,
+                    removed_dirs: set[Path]) -> None:
+        """优化前的实现，仅用于行为对照，不要在生产代码中复活。"""
+        for scanned in scanned_dirs:
+            resolved = scanned.resolve()
+            if resolved == root or resolved in removed_dirs:
+                continue
+            if not any(resolved in target.parents for target in local_targets):
+                removed_dirs.add(resolved)
+
+    @staticmethod
+    def normalized(plan: OperationPlan) -> dict:
+        """抹掉每次生成都不同的 id/时间戳，其余字段全量参与比对。"""
+        data = plan.to_dict()
+        data["plan_id"] = data["created_at"] = "<volatile>"
+        for key, field in (("operations", "op_id"), ("mappings", "entry_id"), ("issues", "issue_id")):
+            for row in data[key]:
+                row[field] = "<volatile>"
+                if "created_at" in row:
+                    row["created_at"] = "<volatile>"
+        return data
+
+    def test_deep_nested_plan_matches_legacy_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "资源库" / "专题A"
+            # 真实深嵌套 + 中文目录名：单链壳、空壳、R3 全提、R3 父级保护同时出现。
+            files = (
+                "总览.txt",
+                "电影/下载源/解压目录/第一季/第01集.mkv", "电影/下载源/解压目录/第一季/第02集.mkv",
+                "电影/下载源/解压目录/海报/封面.jpg",
+                "合集/甲辑/a.txt", "合集/乙辑/b.txt",
+                "保留分区/正文/保留1.txt", "保留分区/正文/保留2.txt", "保留分区/附录/保留3.txt",
+            )
+            for item in files:
+                touch(root / Path(item), item)
+            (root / "电影" / "下载源" / "空缓存").mkdir(parents=True, exist_ok=True)
+
+            with mock.patch.object(planner, "scan_residual_dirs", self.legacy_scan):
+                legacy_plan = build_plan(str(root), "single")
+            current_plan = build_plan(str(root), "single")
+
+            self.assertEqual(self.normalized(current_plan), self.normalized(legacy_plan),
+                             "优化改变了 mappings / operations / issues 的任一字段")
+
+            rmdirs = {
+                Path(op.source_path).resolve()
+                for op in current_plan.operations if op.op_type == "rmdir"
+            }
+            # 无文件落入的目录必须删除；R2 在资源根处把整条壳链提到「电影」下，原中间路径全变空。
+            for relative in ("电影/下载源/空缓存", "电影/下载源", "电影/下载源/解压目录",
+                             "电影/下载源/解压目录/第一季", "电影/下载源/解压目录/海报",
+                             "合集/甲辑", "合集/乙辑"):
+                self.assertIn((root / Path(relative)).resolve(), rmdirs, f"{relative} 应进入 rmdir")
+            # 仍有文件落入的目录（含 R3 父级保护、R2 提升后的落点）不得删除。
+            for relative in ("保留分区", "保留分区/正文", "保留分区/附录",
+                             "电影", "电影/第一季", "电影/海报"):
+                self.assertNotIn((root / Path(relative)).resolve(), rmdirs, f"{relative} 不应进入 rmdir")
+            self.assertNotIn(root.resolve(), rmdirs, "资源根本身不得进入 rmdir")
+
+    def test_residual_scan_scale_comparison(self) -> None:
+        """同规模对照两种实现的耗时；只打印数字，不做机器相关的阈值断言。
+        默认规模保持单测速度；NESTTIDY_BENCH_FULL=1 可跑 2000 目录 x 5000 文件完整量级。
+        """
+        full = bool(os.environ.get("NESTTIDY_BENCH_FULL"))
+        dir_count, file_count = (2000, 5000) if full else (200, 600)
+        base = Path("D:/基准/资源库")  # 纯路径运算，不访问文件系统
+        scanned = [base / f"分支{i // 20:03d}" / f"层级{i % 20:02d}" for i in range(dir_count)]
+        targets = [
+            base / f"分支{i // 200:03d}" / f"层级{i % 20:02d}" / f"第{i:05d}集.mkv"
+            for i in range(file_count)
+        ]
+
+        legacy_removed: set[Path] = set()
+        started = time.perf_counter()
+        self.legacy_scan(scanned, targets, base, legacy_removed)
+        legacy_elapsed = time.perf_counter() - started
+
+        current_removed: set[Path] = set()
+        started = time.perf_counter()
+        scan_residual_dirs(scanned, targets, base, current_removed)
+        current_elapsed = time.perf_counter() - started
+
+        self.assertEqual(current_removed, legacy_removed, "优化在规模场景下改变了删除目录集合")
+        print(f"\n[耗时对照 {dir_count} 目录 x {file_count} 文件] "
+              f"原实现 {legacy_elapsed:.3f}s / 优化后 {current_elapsed:.3f}s "
+              f"/ 加速 {legacy_elapsed / max(current_elapsed, 1e-9):.1f}x")
 
 
 class TransactionLogTests(unittest.TestCase):
