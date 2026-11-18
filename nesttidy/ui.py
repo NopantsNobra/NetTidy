@@ -12,41 +12,26 @@ INDEX_HTML = """<!doctype html>
 <title>理巢 NestTidy</title>
 <style>
 :root{color-scheme:light;font-family:"Segoe UI","Microsoft YaHei",sans-serif;--line:#d8ddda;--ink:#242424;--mute:#687370;--ok:#196f5f;--bad:#9b1c1c;--warn:#8a5a00}
-*{box-sizing:border-box}
-body{margin:0;background:#f7f7f5;color:var(--ink);font-size:14px;line-height:1.55}
-header{padding:18px 26px;background:#174b4f;color:#fff}
-header h1{margin:0;font-size:20px}
-header p{margin:4px 0 0;opacity:.85;font-size:13px}
+*{box-sizing:border-box} body{margin:0;background:#f7f7f5;color:var(--ink);font-size:14px;line-height:1.55}
+header{padding:18px 26px;background:#174b4f;color:#fff} header h1{margin:0;font-size:20px} header p{margin:4px 0 0;opacity:.85;font-size:13px}
 main{max-width:1240px;margin:0 auto;padding:18px 22px 60px}
-section{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
-h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #eef1ef}
-h3{font-size:14px;margin:14px 0 6px}
-label{display:block;font-weight:600;margin:10px 0 5px;font-size:13px}
-input[type=text],select{width:100%;padding:9px 11px;border:1px solid #b8bfbd;border-radius:6px;background:#fff;font-size:13px}
-button{padding:9px 13px;border:0;border-radius:6px;background:var(--ok);color:#fff;cursor:pointer;font-size:13px;margin:4px 6px 4px 0}
+section{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0} h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #eef1ef} h3{font-size:14px;margin:14px 0 6px}
+label{display:block;font-weight:600;margin:10px 0 5px;font-size:13px} input[type=text],select{width:100%;padding:9px 11px;border:1px solid #b8bfbd;border-radius:6px;background:#fff;font-size:13px}
+button{padding:9px 13px;border:0;border-radius:6px;background:var(--ok);color:#fff;cursor:pointer;font-size:13px;margin:4px 6px 4px 0} button:disabled{background:#c3cbc8;cursor:not-allowed}
 button.secondary{background:#495057} button.danger{background:#a4161a} button.ghost{background:#e9efec;color:#174b4f}
-button:disabled{background:#c3cbc8;cursor:not-allowed}
-table{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px}
-th,td{padding:7px 8px;border-bottom:1px solid #eef1ef;text-align:left;vertical-align:top}
-th{background:#f2f6f4;font-weight:600;white-space:nowrap}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px} th,td{padding:7px 8px;border-bottom:1px solid #eef1ef;text-align:left;vertical-align:top} th{background:#f2f6f4;font-weight:600;white-space:nowrap}
 code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:break-all}
 .row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1 1 240px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px}
-.card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fbfcfb}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px} .card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fbfcfb}
 .card b{display:block;font-size:20px;line-height:1.2} .card span{color:var(--mute);font-size:12px}
-.muted{color:var(--mute)} .error{color:var(--bad)} .ok{color:var(--ok)}
+.muted{color:var(--mute)} .error{color:var(--bad)} .ok{color:var(--ok)} .depth{color:var(--mute);font-size:11px}
 .headline{background:#eef7f3;border-left:4px solid var(--ok);padding:10px 12px;border-radius:6px;font-size:14px}
 .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid;margin-right:6px}
-.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1} .badge.warn{color:#7a5200;border-color:#e2c98a;background:#fdf6e3}
-.badge.bad{color:#9b1c1c;border-color:#e3a8a8;background:#fdeeee}
-.chips{margin:8px 0}
-.chip{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:14px;margin:0 6px 6px 0;cursor:pointer;font-size:12px;background:#fff}
-.chip.active{background:var(--ok);color:#fff;border-color:var(--ok)}
-.depth{color:var(--mute);font-size:11px}
-.group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px}
-.group h4{margin:0 0 6px;font-size:13px}
-details summary{cursor:pointer;font-weight:600;padding:4px 0}
+.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1} .badge.warn{color:#7a5200;border-color:#e2c98a;background:#fdf6e3} .badge.bad{color:#9b1c1c;border-color:#e3a8a8;background:#fdeeee}
+.chips{margin:8px 0} .chip{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:14px;margin:0 6px 6px 0;cursor:pointer;font-size:12px;background:#fff} .chip.active{background:var(--ok);color:#fff;border-color:var(--ok)}
+.group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px} .group h4{margin:0 0 6px;font-size:13px} details summary{cursor:pointer;font-weight:600;padding:4px 0}
 .filtered{display:none} .hidden{display:none}
+.pbar{height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;margin:8px 0} .pfill{height:100%;width:0;background:var(--ok);transition:width .2s}
 pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;margin:6px 0}
 </style>
 </head>
@@ -74,7 +59,8 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
 <section id="foldersSection" class="hidden"><h2>会被清掉的空文件夹</h2>
   <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
 <section id="execSection" class="hidden"><h2>第 3 步 · 真正执行</h2>
-  <p class="muted" id="execHint"></p><p><button id="execBtn" onclick="executePlan()">确认执行</button></p><div id="execResult"></div></section>
+  <p class="muted" id="execHint"></p><p><button id="execBtn" onclick="executePlan()">确认执行</button></p>
+  <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult"></div></section>
 <section id="dupSection"><h2>第 4 步 · 重复文件诊断（两阶段自动复核）</h2>
   <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。</p>
   <div class="row">
@@ -84,6 +70,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <p><button onclick="runDuplicate()">诊断重复文件</button></p><div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
 <section><details><summary>权限修复（可选）</summary>
   <p><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label> <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label> <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label> <button class="secondary" onclick="runRepair()">执行所选权限修复</button></p>
+  <div class="pbar"><div class="pfill" id="repairFill"></div></div><p class="muted" id="repairProg">尚未开始。</p>
   <div id="diagnostics"></div></details></section>
 <section><details><summary>异常项、规则口径、历史与健康检查</summary>
   <h3>异常项（这些文件不会被动）</h3><div id="issues"></div>
@@ -118,6 +105,15 @@ async function api(path, body){
   return data;
 }
 function say(text, isError){const el=document.getElementById('msg');el.className=isError?'error':'muted';el.textContent=text;}
+function trackProgress(fillId, textId){
+  const key = 'p' + Math.random().toString(36).slice(2), fill = document.getElementById(fillId), text = document.getElementById(textId);
+  const tick = () => fetch('/api/progress?key=' + key).then(r => r.json()).then(d => {
+    const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
+    fill.style.width = (d.total ? pct : 5) + '%';
+    text.textContent = (d.total ? d.done + ' / ' + d.total + ' · ' + pct + '%' : '正在准备') + (d.label ? ' · ' + d.label : '');
+  }).catch(() => {});
+  const timer = setInterval(tick, 300); tick(); return {key: key, stop: () => { clearInterval(timer); fill.style.width = '100%'; }};
+}
 async function makePlan(){
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
   try{
@@ -286,12 +282,18 @@ async function doDelete(entries){
   }catch(e){say(e.message,true);}
 }
 async function runRepair(){
+  const prog = trackProgress('repairFill', 'repairProg');
   say('正在执行权限修复...');
   try{
-    const data = await api('/api/repair',{selected_root:root.value.trim(),clear_readonly:fixReadonly.checked,clear_hidden:fixHidden.checked,clear_zone_identifier:fixZone.checked});
-    document.getElementById('diagnostics').innerHTML = table(data.rows.slice(0,500),['path','action','status','message'],['文件','动作','状态','说明']);
-    say('权限修复完成。');
+    const data = await api('/api/repair',{selected_root:root.value.trim(),clear_readonly:fixReadonly.checked,clear_hidden:fixHidden.checked,clear_zone_identifier:fixZone.checked,progress_key:prog.key});
+    const bad = data.rows || [];
+    document.getElementById('diagnostics').innerHTML = bad.length
+      ? '<div class="headline">检查 '+data.checked+' 项，异常 '+bad.length+' 项（正常项略）。</div>'
+        + table(bad,['path','action','status','message'],['文件','动作','状态','说明'])
+      : '<p class="muted">检查 '+data.checked+' 项，全部正常，没有需要列出的异常。</p>';
+    say('权限修复完成：检查 '+data.checked+' 项，异常 '+bad.length+' 项。');
   }catch(e){say(e.message,true);}
+  finally{prog.stop();}
 }
 async function executePlan(){
   if(!currentPlanId){say('请先生成试运行计划。',true);return;}
@@ -299,25 +301,29 @@ async function executePlan(){
 }
 async function executeCopy(){
   if(!output.value.trim()){say('复制方式要先填输出目录。',true);return;}
+  const prog = trackProgress('execFill', 'execProg');
   try{
     say('正在复制...');
-    const data = await api('/api/execute-copy',{plan_id:currentPlanId});
+    const data = await api('/api/execute-copy',{plan_id:currentPlanId,progress_key:prog.key});
     document.getElementById('execResult').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态']);
     say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。');
   }catch(e){say(e.message,true);}
+  finally{prog.stop();}
 }
 async function executeMove(){
   const c = ((lastPlan && lastPlan.display && lastPlan.display.readable) || {}).counts || {};
   const ok = confirm('确认原地整理？\\n\\n会换位置的文件：'+(c.moved||0)+' 个\\n会清掉的空文件夹：'+(c.folders||0)+' 个\\n\\n源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原。');
   if(!ok) return;
+  const prog = trackProgress('execFill', 'execProg');
   try{
     say('正在原地整理...');
-    const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true});
+    const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true,progress_key:prog.key});
     document.getElementById('execResult').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'])
       + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>' : '');
     document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
     say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
   }catch(e){say(e.message,true);}
+  finally{prog.stop();}
 }
 async function undoRun(logPath){
   try{

@@ -8,6 +8,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from .config import REPORT_DIR_NAME
 from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize
@@ -24,13 +25,7 @@ from .ui import INDEX_HTML
 
 
 class PlanRegistry:
-    """按 plan_id 索引冻结计划，替代模块级单值 LAST_PLAN。
-
-    LAST_PLAN 是单值 + ThreadingHTTPServer 多线程：任何一次预览都会覆盖上一次，
-    B 标签页生成计划后，A 标签页点「确认执行」执行的就是 B 的计划。
-    按 id 索引后每个标签页只持有自己的 id；服务端仍只执行自己保存的冻结计划，
-    不信任前端回传的计划对象（不变量 6：正式执行前必须有冻结计划）。
-    """
+    """按 plan_id 索引冻结计划：多标签页各持自己的 id，服务端不信任前端回传的计划对象（不变量 6）。"""
 
     def __init__(self, max_plans: int = 16) -> None:
         self._plans: dict[str, OperationPlan] = {}
@@ -57,6 +52,23 @@ class PlanRegistry:
 
 
 PLANS = PlanRegistry()
+
+PROGRESS: dict[str, dict] = {}
+
+
+def _track(body: dict):
+    """progress_key → 旁路进度槽；执行接口本身仍是同步的。"""
+    key = str(body.get("progress_key") or "")
+    if not key:
+        return "", None
+    while len(PROGRESS) > 64:
+        PROGRESS.pop(next(iter(PROGRESS)))
+
+    def report(done: int, total: int, label: str = "") -> None:
+        PROGRESS[key] = {"done": done, "total": total, "label": label}
+
+    PROGRESS[key] = {"done": 0, "total": 0, "label": "正在准备"}
+    return key, report
 
 
 def _plan_id(body: dict) -> str:
@@ -103,6 +115,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(rows)
         elif self.path == "/api/history":
             self.send_json(list_history())
+        elif self.path.startswith("/api/progress"):
+            key = (parse_qs(urlparse(self.path).query).get("key") or [""])[0]
+            self.send_json(PROGRESS.get(key) or {"done": 0, "total": 0, "label": ""})
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -134,21 +149,26 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("缺少 transaction_log（删除日志路径）")
                 self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
             elif self.path == "/api/repair":
+                _, progress = _track(body)
                 rows = repair_permissions(
                     body.get("selected_root", ""),
                     clear_readonly=bool(body.get("clear_readonly")),
                     clear_hidden=bool(body.get("clear_hidden")),
                     clear_zone_identifier=bool(body.get("clear_zone_identifier")),
+                    progress=progress,
                 )
-                self.send_json({"rows": rows_as_dicts(rows)})
+                bad = [row for row in rows if row.status != "ok"]
+                self.send_json({"rows": rows_as_dicts(bad), "checked": len(rows), "passed": len(rows) - len(bad)})
             elif self.path == "/api/execute-copy":
-                result = execute_plan(PLANS.get(_plan_id(body)), "copy")
+                _, progress = _track(body)
+                result = execute_plan(PLANS.get(_plan_id(body)), "copy", progress=progress)
                 self.send_json({"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
             elif self.path == "/api/execute-move":
                 plan = PLANS.get(_plan_id(body))
                 if body.get("confirm") is not True:
                     raise ValueError("原地整理会修改源目录；请先看预览，再点确认执行")
-                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)))
+                _, progress = _track(body)
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)), progress=progress)
                 self.send_json({
                     "completed": result.completed,
                     "skipped": result.skipped,

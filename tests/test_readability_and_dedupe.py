@@ -291,5 +291,96 @@ class ScriptHygieneTests(unittest.TestCase):
         self.assertIn("button[data-tx]", script)
 
 
+class ProgressAndRepairTests(unittest.TestCase):
+    """1.2.0：执行与权限修复都要有进度反馈；权限修复只列异常项。"""
+
+    def _serve(self):
+        from http.server import ThreadingHTTPServer
+        import threading
+
+        from nesttidy import web
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return port
+
+    @staticmethod
+    def _post(port: int, path: str, body: dict) -> dict:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    @staticmethod
+    def _get(port: int, path: str) -> dict:
+        import urllib.request
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def test_executor_calls_progress_for_every_operation(self) -> None:
+        from nesttidy.executor import execute_plan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "素材"
+            touch(root / "包A" / "壳" / "a.mp4", "aaa")
+            touch(root / "包A" / "壳" / "b.mp4", "bbb")
+            plan = build_plan(str(root), mode="batch")
+            seen: list[tuple[int, int]] = []
+
+            execute_plan(plan, "move", confirm_move=True, transaction_log=str(Path(tmp) / "tx.jsonl"),
+                         progress=lambda done, total, label="": seen.append((done, total)))
+
+            self.assertTrue(seen)
+            self.assertEqual(seen[-1][0], seen[-1][1])
+            self.assertEqual([done for done, _ in seen], sorted(done for done, _ in seen))
+
+    def test_progress_placeholder_is_returned_before_any_work(self) -> None:
+        port = self._serve()
+
+        slot = self._get(port, "/api/progress?key=never-started")
+
+        self.assertEqual(slot, {"done": 0, "total": 0, "label": ""})
+
+    def test_repair_lists_only_anomalies_and_reports_counts(self) -> None:
+        from unittest import mock
+
+        from nesttidy.repair import RepairResult
+
+        port = self._serve()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "素材"
+            touch(root / "a.txt", "a")
+            touch(root / "b.txt", "b")
+            bad = str(root / "b.txt")
+
+            def fake(path):
+                if str(path) == bad:
+                    return RepairResult(str(path), "clear_readonly", "failed", "模拟失败")
+                return RepairResult(str(path), "clear_readonly", "ok", "已确保当前用户可写位")
+
+            with mock.patch("nesttidy.repair.clear_readonly_attr", side_effect=fake):
+                data = self._post(port, "/api/repair", {"selected_root": str(root), "clear_readonly": True, "progress_key": "p-repair"})
+
+            self.assertEqual(data["checked"], 3)  # 素材 + a.txt + b.txt
+            self.assertEqual(data["passed"], 2)
+            self.assertEqual([row["status"] for row in data["rows"]], ["failed"])
+            self.assertEqual(data["rows"][0]["path"], bad)
+
+    def test_page_has_progress_bars_for_execute_and_repair(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        for marker in ('id="execFill"', 'id="repairFill"', "trackProgress(", "/api/progress?key=", "正常项略"):
+            self.assertIn(marker, INDEX_HTML)
+
+
 if __name__ == "__main__":
     unittest.main()

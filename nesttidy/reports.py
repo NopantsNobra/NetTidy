@@ -168,12 +168,7 @@ def _root_for(path: str, roots: list[str]) -> str:
 
 
 def readable_plan_view(plan: OperationPlan) -> dict:
-    """把冻结计划翻译成人能读的「整理前 → 整理后」清单。
-
-    纯派生视图：不读盘、不改计划字段、不参与执行判断；只是把
-    original_path / planned_target_path / rule_trace 这套机器口径换成
-    相对路径 + 中文动作 + 一句话原因，让页面能回答「哪些文件会被搬走」。
-    """
+    """把冻结计划翻译成人能读的「整理前 → 整理后」清单：纯派生视图，不读盘、不改计划字段。"""
     roots = list(plan.resource_roots)
     after_base = plan.output_root or ""
     groups: dict[str, dict] = {}

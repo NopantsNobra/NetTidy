@@ -24,10 +24,14 @@ def repair_permissions(
     clear_zone_identifier: bool = False,
     grant_current_user: bool = False,
     fix_inheritance: bool = False,
+    progress=None,
 ) -> list[RepairResult]:
     base = Path(root).resolve()
     rows: list[RepairResult] = []
-    for path in sorted(iter_paths(base), key=lambda p: (str(p).casefold(), str(p))):
+    paths = sorted(iter_paths(base), key=lambda p: (str(p).casefold(), str(p)))
+    for index, path in enumerate(paths, 1):
+        if progress:
+            progress(index, len(paths), path.name)
         skip = should_skip_path(path)
         if skip and skip.startswith("SKIPPED_SYSTEM"):
             rows.append(RepairResult(str(path), "skip", "skipped", skip))

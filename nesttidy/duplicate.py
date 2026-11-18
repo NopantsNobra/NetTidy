@@ -239,11 +239,7 @@ def _hash_map(paths: list[Path], level: str, workers: int) -> list[tuple[Path, s
 
 
 def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
-    """把行聚成组：可删集合 = 组内没有被复核否决、且不是保留项的文件。
-
-    复核剔除的成员（conflict_note 非空）永远拿不到可删资格；--no-verify 时组内
-    没有 verified 标记，但仍给出可删集合，因为 executor 删除前会再校验一次全文哈希。
-    """
+    """把行聚成组：可删集合 = 组内没被复核否决、且不是保留项的文件（删除时 executor 仍会重算全文哈希）。"""
     buckets: dict[str, list[DuplicateRow]] = {}
     for row in rows:
         buckets.setdefault(row.duplicate_group_id, []).append(row)

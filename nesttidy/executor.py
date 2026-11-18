@@ -83,7 +83,7 @@ def ensure_target_within_output(target: Path, output_root: Path) -> None:
         raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
 
 
-def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None) -> ExecutionResult:
+def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None) -> ExecutionResult:
     if not plan.frozen:
         raise ValueError("OperationPlan 未冻结，禁止执行")
     if mode not in {"copy", "move"}:
@@ -111,7 +111,10 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     if tx_path:
         tx_path.parent.mkdir(parents=True, exist_ok=True)
 
-    for op in deterministic_ops(plan.operations):
+    ops = deterministic_ops(plan.operations)
+    for index, op in enumerate(ops, 1):
+        if progress:
+            progress(index, len(ops), op.op_type)
         status = "failed"
         try:
             precheck(op)
@@ -152,11 +155,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
 
 
 def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: list[ExecutionIssue]) -> None:
-    """把执行事实回写进计划：操作状态、映射状态、执行期问题。
-
-    不回写的话，报告里的 issues.csv 只含计划期问题、状态永远停在 planned，
-    执行失败在唯一的回溯凭证上完全消失。
-    """
+    """把执行事实回写进计划：否则 issues.csv 只含计划期问题、状态永远停在 planned。"""
     for op in plan.operations:
         op.status = statuses.get(op.op_id, "not_run")
         if op.status == "failed":
