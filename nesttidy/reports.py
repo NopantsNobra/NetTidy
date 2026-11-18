@@ -167,7 +167,7 @@ def markdown_summary(plan: OperationPlan) -> str:
     lines.extend([
         "", "## 边界检查", "",
         f"- 目标越界：{boundary['out_of_bound']} 条 / 已校验 {boundary['checked']} 条文件操作。",
-        f"- 口径：边界取 {boundary['label']}，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘；rmdir 无目标不计）。数字由当前计划实时计算，非固定值。",
+        f"- 口径：边界取 {boundary['label']}，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘）。数字由当前计划实时计算，非固定值。",
         "- 盲区：本检查为计划期词法归一化，不读磁盘、不解析 junction / 符号链接；此类场景以执行层复查为准（执行层用真实路径解析，实测可拦截越界）。",
         "- 盲区：本检查只验证目标是否落在资源根并集内；跨资源根由 planner 结构保证，展示层不做逐条跨根核对（P0 不变量 2 的口径强于本检查）。",
         "- 分母：仅含 op_type ∈ {move,copy,keep} 且 target_path 非空者，rmdir 无目标不计。",
