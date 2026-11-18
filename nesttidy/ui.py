@@ -47,7 +47,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理：文件在资源包内换位置，空壳文件夹随之清掉（源目录会变）</option><option value="copy">复制到输出目录：源目录一动不动，另存一份整理好的副本（占双份空间）</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
     <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult"></div>
-    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。</p><div id="preview" class="scrollbox"></div></section>
+    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox"></div></section>
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
 </section></div>
 <div class="panel hidden" id="panel-dup"><section><h2>重复文件</h2>
