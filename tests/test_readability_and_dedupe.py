@@ -381,6 +381,27 @@ class ProgressAndRepairTests(unittest.TestCase):
         for marker in ('id="execFill"', 'id="repairFill"', "trackProgress(", "/api/progress?key=", "正常项略"):
             self.assertIn(marker, INDEX_HTML)
 
+    def test_each_block_puts_its_controls_above_its_results(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        pairs = [
+            ('id="filters"', 'id="preview"'),
+            ('id="execMode"', 'id="preview"'),
+            ('id="execBtn"', 'id="preview"'),
+            ('id="dupLevel"', 'id="dupResult"'),
+            ('id="dupTools"', 'id="dupResult"'),
+            ('id="fixReadonly"', 'id="repairResult"'),
+        ]
+        for control, result in pairs:
+            self.assertLess(INDEX_HTML.index(control), INDEX_HTML.index(result), f"{control} 必须在 {result} 之前")
+
+    def test_toolbars_are_sticky(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        self.assertIn(".bar{position:sticky", INDEX_HTML)
+        self.assertEqual(INDEX_HTML.count('class="bar"'), 4)  # 对照表 / 重复诊断 / 权限修复 / 诊断折叠区
+        self.assertNotIn('id="execSection"', INDEX_HTML)  # 执行按钮已并入对照表顶部工具栏
+
 
 if __name__ == "__main__":
     unittest.main()
