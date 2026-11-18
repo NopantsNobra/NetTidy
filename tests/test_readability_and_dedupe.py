@@ -399,7 +399,7 @@ class ProgressAndRepairTests(unittest.TestCase):
         from nesttidy.ui import INDEX_HTML
 
         self.assertIn(".bar{position:sticky", INDEX_HTML)
-        self.assertEqual(INDEX_HTML.count('class="bar"'), 4)  # 对照表 / 重复诊断 / 权限修复 / 诊断折叠区
+        self.assertEqual(INDEX_HTML.count('class="bar"'), 5)  # 预览工具 / 筛选+执行 / 重复诊断 / 权限修复 / 诊断信息
         self.assertNotIn('id="execSection"', INDEX_HTML)  # 执行按钮已并入对照表顶部工具栏
 
     def test_four_blocks_are_tabs_and_long_tables_scroll_in_place(self) -> None:
@@ -420,6 +420,28 @@ class ProgressAndRepairTests(unittest.TestCase):
         self.assertIn("setTab('preview')", INDEX_HTML)
         # 页面高度不得随表格行数线性增长：三张长表都不在 <main> 直接子级铺开
         self.assertLess(INDEX_HTML.index('id="tabs"'), INDEX_HTML.index('id="panel-preview"'))
+        # 页签在最上面（header 之后、目录条之前）
+        self.assertLess(INDEX_HTML.index('id="tabs"'), INDEX_HTML.index('id="root"'))
+
+    def test_each_tab_carries_its_own_actions(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        def panel(name: str) -> str:
+            start = INDEX_HTML.index(f'id="panel-{name}"')
+            later = [INDEX_HTML.index(f'id="panel-{other}"') for other in ("preview", "dup", "repair", "diag")
+                     if INDEX_HTML.index(f'id="panel-{other}"') > start]
+            return INDEX_HTML[start:min(later) if later else len(INDEX_HTML)]
+
+        need = {
+            "preview": ("makePlan(", "确认执行", "executePlan("),
+            "dup": ("runDuplicate(", "诊断重复文件", "dupTools"),
+            "repair": ("runRepair(", "执行所选权限修复"),
+            "diag": ("loadHistory(", "makePlan(true)", "刷新历史"),
+        }
+        for name, markers in need.items():
+            body = panel(name)
+            for marker in markers:
+                self.assertIn(marker, body, f"{name} 页签缺少自己的动作入口 {marker}")
 
 
 if __name__ == "__main__":
