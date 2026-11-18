@@ -1,1 +1,26 @@
-ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucw0KDQpBUFBfTkFNRSA9ICLnkIblt6IgTmVzdFRpZHkiDQojIDEuMy4w77ya5Y676YeN5pS56LWwIFdpbmRvd3Mg5Zue5pS256uZ77yb6K+K5pat5LiO5Yig6Zmk5bim6L+b5bqm5p2h77yb6LWE5rqQ566h55CG5Zmo5a6a5L2N44CCCiMgMS4wLjDvvJrpppbkuKrlj6/nlKjniYjmnKzjgIIwLjUueCDnmoTliaXlo7Ppl63njq8gKyAxLjAuMCDnmoTlj6/or7vorqHliJLop4blm77jgIHkuKTpmLbmrrXljrvph43jgIHngrnpgInlvI/pmpTnprvliKDpmaTlkIjmtYHjgIINCkFQUF9WRVJTSU9OID0gIjEuMy4wIg0KIyB2M++8mlIxIOS4jeWGjeaYr+e7iOaAge+8iOepv+mAj+WQjuW/hemhu+e7p+e7rSBSMC1SNO+8ie+8m1I1IOWinuWKoOOAjOWJjee8gOaXoOazleWMuuWIhuaXtueahOi3r+W+hOefreeggeWFnOW6leOAje+8mw0KIyDljZXmlofku7blkI3liIbph4/noazkuIrpmZAgMTgwIOiQveWunuWIsCBSNSDkuI4gY2xlYW5fbmFtZSDkuKTlpITjgIINClJVTEVfVkVSU0lPTiA9ICJQMC1SMC1SNS12MyINCg0KREVGQVVMVF9IT1NUID0gIjEyNy4wLjAuMSINCkRFRkFVTFRfUE9SVCA9IDg3NjYNCg0KSU5DT01QTEVURV9TVUZGSVhFUyA9IHsNCiAgICAiLmNyZG93bmxvYWQiLA0KICAgICIucGFydCIsDQogICAgIi4hcWIiLA0KICAgICIuYXJpYTIiLA0KICAgICIudG1wIiwNCiAgICAiLmRvd25sb2FkaW5nIiwNCn0NCg0KUkVQT1JUX0RJUl9OQU1FID0gIueQhuW3ouaKpeWRiiINCk9VVFBVVF9ESVJfUFJFRklYID0gIueQhuW3oui+k+WHul8iDQojIOWOhuWPsumalOemu+WMuuWJjee8gO+8mnYxLjMuMCDotbfph43lpI3lia/mnKzmlLnotbAgV2luZG93cyDlm57mlLbnq5nvvIzml6fpmpTnprvnm67lvZXku43lj4LkuI7miavmj4/ot7Pov4fvvIzpgb/lhY3ooqvlvZPmiJDotYTmupDljIXjgIINClFVQVJBTlRJTkVfRElSX1BSRUZJWCA9ICLnkIblt6LpmpTnprtfIg0K
+from __future__ import annotations
+
+APP_NAME = "理巢 NestTidy"
+# 1.3.0：去重改走 Windows 回收站；诊断与删除带进度条；资源管理器定位。
+# 1.0.0：首个可用版本。0.5.x 的剥壳闭环 + 1.0.0 的可读计划视图、两阶段去重、点选式隔离删除合流。
+APP_VERSION = "1.3.0"
+# v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
+# 单文件名分量硬上限 180 落实到 R5 与 clean_name 两处。
+RULE_VERSION = "P0-R0-R5-v3"
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8766
+
+INCOMPLETE_SUFFIXES = {
+    ".crdownload",
+    ".part",
+    ".!qb",
+    ".aria2",
+    ".tmp",
+    ".downloading",
+}
+
+REPORT_DIR_NAME = "理巢报告"
+OUTPUT_DIR_PREFIX = "理巢输出_"
+# 历史隔离区前缀：v1.3.0 起重复副本改走 Windows 回收站，旧隔离目录仍参与扫描跳过，避免被当成资源包。
+QUARANTINE_DIR_PREFIX = "理巢隔离_"
