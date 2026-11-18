@@ -402,6 +402,25 @@ class ProgressAndRepairTests(unittest.TestCase):
         self.assertEqual(INDEX_HTML.count('class="bar"'), 4)  # 对照表 / 重复诊断 / 权限修复 / 诊断折叠区
         self.assertNotIn('id="execSection"', INDEX_HTML)  # 执行按钮已并入对照表顶部工具栏
 
+    def test_four_blocks_are_tabs_and_long_tables_scroll_in_place(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        self.assertIn('<div class="tabs" id="tabs">', INDEX_HTML)
+        for tab in ("preview", "dup", "repair", "diag"):
+            self.assertIn(f'data-tab="{tab}"', INDEX_HTML)
+            self.assertIn(f'id="panel-{tab}"', INDEX_HTML)
+        self.assertIn('<div class="panel" id="panel-preview">', INDEX_HTML)  # 预览默认可见
+        self.assertEqual(INDEX_HTML.count('class="panel hidden"'), 3)  # 另外三块默认收起
+        # 长表格必须关在自身滚动容器里，否则会把后面的板块推到几屏之外
+        for box in ('id="preview" class="scrollbox"', 'id="dupResult" class="scrollbox"', 'id="issues" class="scrollbox"'):
+            self.assertIn(box, INDEX_HTML)
+        self.assertIn(".scrollbox{max-height:58vh", INDEX_HTML)
+        self.assertIn(".scrollbox th{position:sticky", INDEX_HTML)
+        self.assertIn("function setTab(", INDEX_HTML)
+        self.assertIn("setTab('preview')", INDEX_HTML)
+        # 页面高度不得随表格行数线性增长：三张长表都不在 <main> 直接子级铺开
+        self.assertLess(INDEX_HTML.index('id="tabs"'), INDEX_HTML.index('id="panel-preview"'))
+
 
 if __name__ == "__main__":
     unittest.main()

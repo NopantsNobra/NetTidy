@@ -33,6 +33,8 @@ code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:brea
 .filtered{display:none} .hidden{display:none}
 .pbar{height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;margin:8px 0} .pfill{height:100%;width:0;background:var(--ok);transition:width .2s}
 .bar{position:sticky;top:0;z-index:6;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fff;padding:8px 0;margin:-4px 0 6px;border-bottom:1px solid #eef1ef} .bar .sp{flex:1 1 40px} .bar label{margin:0;display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px} .bar select{width:auto;max-width:460px} .bar button{margin:0}
+.tabs{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap} .tab{padding:5px 12px;border:1px solid var(--line);border-radius:999px;cursor:pointer;font-size:13px;color:var(--mute);background:#fff} .tab.active{background:var(--ok);color:#fff;border-color:var(--ok)} .scrollbox{max-height:58vh;overflow:auto;border:1px solid #eef1ef;border-radius:8px;padding:2px 6px}
+.scrollbox th{position:sticky;top:0;z-index:2}
 pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;margin:6px 0}
 </style>
 </head>
@@ -50,29 +52,30 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <p><button onclick="makePlan()">试运行：看看会变成什么样</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button></p>
   <p id="msg" class="muted">还没有生成计划。</p>
 </section>
-<section id="summarySection" class="hidden"><h2>第 2 步 · 会发生什么（大白话版）</h2>
+<div class="tabs" id="tabs"><span class="tab active" data-tab="preview">整理预览</span><span class="tab" data-tab="dup">重复文件</span><span class="tab" data-tab="repair">权限修复</span><span class="tab" data-tab="diag">诊断信息</span></div>
+<div class="panel" id="panel-preview"><section id="summarySection" class="hidden"><h2>第 2 步 · 会发生什么（大白话版）</h2>
   <div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
 <section id="previewSection" class="hidden"><h2>第 3 步 · 逐个文件对照，在这里确认执行</h2>
   <div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理：文件在资源包内换位置，空壳文件夹随之清掉（源目录会变）</option><option value="copy">复制到输出目录：源目录一动不动，另存一份整理好的副本（占双份空间）</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
   <p class="muted" id="execHint" style="margin:0 0 4px"></p>
   <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult"></div>
-  <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。上方筛选条可以只看会变的文件。</p><div id="preview"></div></section>
+  <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。上方筛选条可以只看会变的文件。</p><div id="preview" class="scrollbox"></div></section>
 <section id="foldersSection" class="hidden"><h2>会被清掉的空文件夹</h2>
   <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
-<section id="dupSection"><h2>重复文件诊断（两阶段自动复核，随时可做）</h2>
+<div class="panel hidden" id="panel-dup"><section id="dupSection"><h2>重复文件诊断（两阶段自动复核，随时可做）</h2>
   <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></label><label>删除方式<select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
   <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。工具栏固定在上方，勾到哪一组都够得着。</p>
-  <div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
-<section><details><summary>权限修复（可选）</summary>
+  <div id="dupResult" class="scrollbox"><p class="muted">尚未诊断。</p></div></section></div>
+<div class="panel hidden" id="panel-repair"><section id="repairSection"><h2>权限修复</h2>
   <div class="bar"><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label><label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label><label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label><button class="secondary" onclick="runRepair()">执行所选权限修复</button></div>
   <div class="pbar"><div class="pfill" id="repairFill"></div></div><p class="muted" id="repairProg">尚未开始。</p>
-  <div id="repairResult"></div></details></section>
-<section><details><summary>异常项、规则口径、历史与健康检查</summary>
+  <div id="repairResult"></div></section></div>
+<div class="panel hidden" id="panel-diag"><section id="diagSection"><h2>异常项、规则口径、历史与健康检查</h2>
   <div class="bar"><button class="secondary" onclick="loadHistory()">刷新历史</button><span class="sp"></span><span class="muted">这块是诊断信息，整理前不用看；异常项来自最近一次试运行。</span></div>
-  <h3>异常项（这些文件不会被动）</h3><div id="issues"></div>
+  <h3>异常项（这些文件不会被动）</h3><div id="issues" class="scrollbox"></div>
   <h3>规则分类计数与边界检查</h3><div id="ruleStats"></div><div id="boundaryNote"></div>
   <h3>历史</h3><div id="history"></div>
-  <h3>健康检查</h3><div id="health"></div></details></section>
+  <h3>健康检查</h3><div id="health"></div></section></div>
 </main>
 <script>
 let currentPlanId = null, lastPlan = null, lastDup = null, filterMode = 'all';
@@ -115,7 +118,7 @@ async function makePlan(){
   try{
     const isCopy = execMode.value === 'copy';
     const data = await api('/api/plan',{selected_root:root.value.trim(),mode:mode.value,output_root:isCopy?(output.value.trim()||null):null});
-    currentPlanId = data.plan_id; lastPlan = data; renderPlan(data);
+    currentPlanId = data.plan_id; lastPlan = data; renderPlan(data); setTab('preview');
     say('计划已生成：共 '+data.operations.length+' 个操作，'+data.issues.length+' 个异常。磁盘上还没有任何改动。');
   }catch(e){say(e.message,true);}
 }
@@ -347,6 +350,8 @@ function table(rows, cols, heads){
 document.addEventListener('change', e=>{ if(e.target && e.target.classList.contains('delbox')) updateSelNote(); });
 execMode.addEventListener('change', ()=>{ if(lastPlan && lastPlan.display) updateExecPanel(lastPlan.display.readable); });
 fetch('/api/health').then(r=>r.json()).then(rows=>{ document.getElementById('health').innerHTML = table(rows,['name','ok','detail'],['检查项','结果','详情']); });
+function setTab(name){document.querySelectorAll('#tabs .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!=='panel-'+name));}
+document.querySelectorAll('#tabs .tab').forEach(t=>t.addEventListener('click',()=>setTab(t.dataset.tab)));
 </script>
 </body>
 </html>"""
