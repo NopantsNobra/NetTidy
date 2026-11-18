@@ -200,7 +200,7 @@ function render(plan) {
     table(d.r5_samples, ['original_name','final_name','trace']);
   const b = d.boundary;
   boundaryNote.innerHTML = '<h2>边界检查</h2><p>已校验 <b>' + b.checked + '</b> 条文件操作，目标越界 <b>' + b.out_of_bound + '</b> 条。</p>' +
-    '<p class="muted">口径：边界取 ' + esc(b.label) + '，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘；rmdir 无目标不计）。数字由当前计划实时计算，非固定值。</p>' +
+    '<p class="muted">口径：边界取 ' + esc(b.label) + '，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘）。数字由当前计划实时计算，非固定值。</p>' +
     '<p class="muted">盲区：计划期词法归一化、不读磁盘，不解析 junction / 符号链接，此类场景以执行层复查为准（执行层真实路径解析，实测可拦截越界）；本检查只验证目标落在资源根并集内，跨资源根由 planner 结构保证、展示层不做逐条跨根核对（P0 不变量 2 口径更强）；分母仅含 op_type ∈ {move,copy,keep} 且 target_path 非空者，rmdir 无目标不计。</p>';
   preview.innerHTML = table(plan.mappings.slice(0, 500), ['original_path','planned_target_path','operation_type','rule_trace','risk_level']);
   issues.innerHTML = table(plan.issues, ['path','stage','code','message','final_status']);

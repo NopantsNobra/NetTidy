@@ -182,6 +182,25 @@ class WebEndpointTests(unittest.TestCase):
         self.assertEqual(summary["plan_id"], plan_a["plan_id"])
         self.assertEqual(summary["selected_root"], str(self.base / "srcA"))
 
+    def test_plan_response_carries_display_stats(self) -> None:
+        """预览页的规则计数/R5 样例/边界检查三块内容完全依赖 /api/plan 的 display 载荷，接缝丢失时页面直接失效。"""
+        resource = self.base / "srcC" / "R"
+        for rel in ("分叉一/cover.jpg", "分叉二/cover.jpg", "合集/外壳/内层/deep.txt", "说明.txt"):
+            target = resource / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x", encoding="utf-8")
+        status, body = _post(self.port, "/api/plan", {"selected_root": str(self.base / "srcC"), "mode": "batch"})
+        self.assertEqual(status, 200)
+        display = body["display"]
+        self.assertEqual([row["rule"] for row in display["rule_rows"]], ["R0", "R1", "R2", "R3", "R4", "R5"])
+        counts = {row["rule"]: row["count"] for row in display["rule_rows"]}
+        self.assertEqual((counts["R0"], counts["R2"], counts["R4"], counts["R5"]), (5, 1, 3, 2))
+        samples = display["r5_samples"]
+        self.assertEqual({sample["original_name"] for sample in samples}, {"cover.jpg"})
+        self.assertEqual({sample["final_name"] for sample in samples}, {"分叉一-cover.jpg", "分叉二-cover.jpg"})
+        boundary = display["boundary"]
+        self.assertEqual((boundary["checked"], boundary["out_of_bound"]), (4, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

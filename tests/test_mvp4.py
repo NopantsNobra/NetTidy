@@ -147,6 +147,37 @@ class ReportDisplayTests(unittest.TestCase):
                 op.target_path = os.path.join(root, "nested", "file.txt")
         self.assertEqual(plan_display_stats(plan)["boundary"]["out_of_bound"], 0)
 
+    def test_r5_samples_are_capped_at_five(self) -> None:
+        plan = self._plan()
+        for idx in range(2, 9):  # 连同 o1 共 8 条 R5 映射，超出「前 5 条」展示上限
+            plan.mappings.append(
+                MappingEntry(
+                    f"e{idx}", "rid", "file", f"/src/R/d{idx}/f.txt", f"/src/R/d{idx}/f.txt",
+                    f"/src/R/d{idx}-f.txt", "move", ["R5 撞名重命名"], "medium", "planned", 1, 1,
+                    conflict_resolution_trace=[f"R5 撞名重命名: d{idx}-f.txt"],
+                )
+            )
+        self.assertEqual(len(plan_display_stats(plan)["r5_samples"]), 5)
+
+    def test_report_file_carries_computed_readability_sections(self) -> None:
+        """真实调用路径：build_plan → write_plan_report → summary.md 的三段统计由计划实时计算。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "src" / "R"
+            for rel in ("分叉一/cover.jpg", "分叉二/cover.jpg", "合集/外壳/内层/deep.txt", "说明.txt"):
+                touch(root / rel)
+            plan = build_plan(str(base / "src"), "batch")
+            out = write_plan_report(plan, report_dir=base / "report")
+            text = (out / "summary.md").read_text(encoding="utf-8")
+            data = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(data["operations"]), 9)
+            self.assertIn("## 规则分类计数", text)
+            self.assertIn("R0 空目录清理（含 R1–R4 产生的空壳）: 5", text)
+            self.assertIn("R4 单文件提级: 3", text)
+            self.assertIn("R5 撞名重命名: 2", text)
+            self.assertIn("cover.jpg → 分叉一-cover.jpg", text)
+            self.assertIn("目标越界：0 条 / 已校验 4 条文件操作。", text)
+
 
 
 if __name__ == "__main__":
