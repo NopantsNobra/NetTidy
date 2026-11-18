@@ -26,7 +26,11 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        item = json.loads(line)
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            # 末行截断（写一半崩溃）恰是 undo 最需要的场景：跳过该行，其余完整行照常回收；只捕获解析错误，不吞其他异常。
+            continue
         if item.get("status") not in {"started", "done"}:
             continue
         key = (item.get("action"), item.get("source"), item.get("target"))

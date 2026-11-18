@@ -1,0 +1,3 @@
+#!/bin/sh
+# 层 3 防护：提交前跑全套测试，任何用例失败即拒绝 commit（新克隆需 git config core.hooksPath .githooks 启用）。
+python -m unittest discover -s tests || exit 1

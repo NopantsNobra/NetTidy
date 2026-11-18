@@ -26,6 +26,22 @@ class WindowsNameCleaningTests(unittest.TestCase):
                 self.assertEqual(cleaned, raw)
                 self.assertEqual(traces, [])
 
+    def test_superscript_reserved_names_get_prefix(self) -> None:
+        """上标变体 ¹²³ 与数字同待遇：COM¹.mp4 在 NTFS 上实测创建失败（Windows 拒绝）。"""
+        for raw in ["COM¹.mp4", "COM².mp4", "COM³.mp4", "LPT¹.txt"]:
+            with self.subTest(raw=raw):
+                cleaned, traces = clean_name(raw)
+                self.assertTrue(cleaned.startswith("_"), f"{raw} 未被清洗为 {cleaned}")
+                self.assertIn("Windows 保留名添加前缀", traces)
+
+    def test_com_zero_and_double_digits_must_not_be_cleaned(self) -> None:
+        """反向锁：COM0 / COM10+ / LPT10+ 不是 Win32 保留名（Microsoft Learn + NTFS 实测），不得清洗。"""
+        for raw in ["COM0.txt", "COM10.txt", "LPT0.txt", "LPT10.txt", "CON0.txt"]:
+            with self.subTest(raw=raw):
+                cleaned, traces = clean_name(raw)
+                self.assertEqual(cleaned, raw)
+                self.assertEqual(traces, [])
+
     def test_illegal_characters_replaced(self) -> None:
         cleaned, traces = clean_name('a<b>c:d"e|f?g*h.txt')
         self.assertEqual(cleaned, "a_b_c_d_e_f_g_h.txt")

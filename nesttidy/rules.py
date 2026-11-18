@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-RESERVED_RE = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.I)
+# 上标变体 ¹²³ 与数字同待遇（NTFS 实测 COM¹ 创建失败）；COM0/COM10+/LPT10+ 非保留名，不清洗是正确行为（Microsoft Learn 2026-11-18 + 反向锁见 test_windows.py）。
+RESERVED_RE = re.compile(r"^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$", re.I)
 ILLEGAL_CHARS = '<>:"/\\|?*'
 # 单个文件名分量的硬上限。Windows 是 255 字符，留余量给 R5 前缀与输出根拼接，
 # 超过 180 的名字在 Windows 上叠加前缀后极易越过 255，直接导致执行期 ENAMETOOLONG。

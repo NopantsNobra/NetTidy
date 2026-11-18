@@ -1,6 +1,6 @@
 # ROADMAP — 理巢 NestTidy
 
-**制定日期**：2026-10-26 ｜ **基线版本**：0.5.2（规则 `P0-R0-R5-v3`），2026-11-09 更新（M2 闭环）
+**制定日期**：2026-10-26 ｜ **基线版本**：0.5.3（规则 `P0-R0-R5-v3`），2026-11-18 更新（hardening 闭环）
 **依据**：21 个历史版本的复盘（`docs/history/项目脉络分析_2026-10-23.md`）+ 规则覆盖实测（`docs/规则对照表.md`）
 
 ---
@@ -88,16 +88,18 @@ M0–M1.6 已完成（2026-10-26 ~ 10-27）：可信基线、规则接缝、剥�
 | 风险 | 影响 | 处置 |
 |---|---|---|
 | 中文路径长路径 | 用户真实数据全中文，深路径可能触 260 限制 | ✅ 风险已消除：M3 长路径项用中文目录名实测（不带前缀 root 353 / file 372 字符、带 `\\?\` 前缀 357 / 378 字符，均 >260），两种形态均跑通规划与落盘；单项收口，不代表 M3 整体闭环；`LongPathsEnabled=1` 经 PowerShell 查证 |
-| 无 CI，测试靠手跑 | 回归靠自觉 | 可接受（单人单机），但每次改动必须跑全套 |
+| 无 CI，测试靠手跑 | 回归靠自觉 | 2026-11-18 降级：新增本地 pre-commit 钩子（`.githooks/pre-commit` 提交前跑全套测试，失败用例直接拒绝 commit），「测试靠手跑」机器化为层 3 防护；新克隆需 `git config core.hooksPath .githooks` 启用 |
 | `executor` 默认事务日志路径是 cwd | 若调用方不传 `transaction_log`，undo 依据落到不确定位置 | ✅ `app.py` 显式传参 + `TransactionLogTests` 防回归断言（M2） |
-| 保留名正则只覆盖 `COM1–9` | `COM0`/`COM10+` 不清洗 | ⚠️ M3 纯函数实测确认现象属实（COM0/COM10+/LPT10+ 均不清洗），清洗能力仍待办；实机实测 ≠ unittest，AGENTS.md 4.4「ADS / 长路径各至少 1 例」本轮未新增用例，覆盖门槛仍待补，补测试须另立授权 |
+| 保留名清洗覆盖 | 误判为缺口 | ✅ 2026-11-18 口径修正：COM0/LPT0/COM10+/LPT10+ 经 Microsoft Learn《Naming Files, Paths, and Namespaces》（2026-11-18 抓取）+ 本机 NTFS 实测确认为**非保留名**，不清洗是正确行为（此前按 OneDrive/SharePoint 策略名单误判为缺口）；真实缺口为上标变体 ¹²³，已于 2026-11-18 补齐（正则 + 正反锁测试）。`test_windows.py` 既有 `test_non_reserved_similar_names_untouched` 持续锁定正确行为 |
 | 执行层复制实现若改用 `shutil.copyfile` / sendfile | 静默丢失 NTFS ADS，且 `do_copy` 现有 `st_size` 校验检测不到 | M3 实测确认 `copy2`（走 `CopyFile2`）保 ADS；**不得**替换实现，若必须替换须连同 ADS 断言一起落地并另立裁决 |
 | undo 不重建被删空目录 | rmdir 已真实执行（v0.5.0 起），undo 后目录结构不完整 | ✅ M2 已裁决「显式声明不支持」，不改实现 |
 | 占用方也设 SO_REUSEADDR 时静默共存 | 服务不抛 OSError，端口占用提示不触发，两个进程同端口 | ✅ 2026-11-16 本轮修复：`web.py` 自定义 `NestTidyHTTPServer.allow_reuse_address = False`，占用产生可分类 OSError → `PortInUseError` → 退出码 23；两类占用方与非占用 10049 均有真实回归 |
 | 展示层边界检查不解析 junction / 符号链接 | 展示口径可能把真实越界误判为 0（假阴性） | ✅ 仅展示口径限制，非安全 bug：`executor.ensure_target_within_output` 用 resolve + is_relative_to 真实解析，junction 场景实测拦截、无数据外泄；报告与网页均已披露盲区 |
 | 展示层跨根检查弱于 P0 不变量 2 | 只验证目标落在资源根并集，不逐条核对「对应根」 | 跨根由 planner 结构保证，当前无可达路径；不变量 2 有测试持续覆盖，展示层不承诺强于该口径 |
 | R0 计数含 R1–R4 产生的空壳 | 纯 R0 语义计数可能偏大 | planner 给所有 rmdir 打「R0/R1/R2/R3/R4」合并标签，规则零改动下无法拆分；标签已改为「空目录清理（含 R1–R4 产生的空壳）」明示口径 |
-| 逐文件 double-resolve 的 I/O 开销 | 深嵌套目录规划约 10s 花在 `original_path.resolve() == target.resolve()`（iFinD 实测 15831 文件 ≈10.2s） | 已登记不修：改纯字符串比较在本数据集结果相同，但 8.3 短名 / 大小写 / `..` / junction 下 lexical ≠ resolved 会改变 keep/move 口径，收益不足以换正确性风险；O(目录×文件) 主瓶颈已于 2026-11-17 修复（iFinD 378s→30s，行为逐条一致有变异测试证明） |
+| 逐文件 double-resolve 的 I/O 开销 | 深嵌套目录规划约 10s 花在 `original_path.resolve() == target.resolve()`（iFinD 实测 15831 文件 ≈10.2s） | 已登记不修：改纯字符串比较在本数据集结果相同，但 8.3 短名 / 大小写 / `..` / junction 下 lexical ≠ resolved 会改变 keep/move 口径，收益不足以换正确性风险；O(目录×文件) 主瓶颈已于 2026-11-17 修复（iFinD 378s→30s，行为逐条一致有变异测试证明）。前提声明（2026-11-18）：`planner.py` 的 `original_path.resolve() == target.resolve()` 假定 lexical 与 resolved 口径一致；当出现 8.3 短名、大小写别名、`..` 分量或 junction 引入的 divergence 时，keep/move 判定需重新裁决，禁止在未裁决前改为纯字符串比较 |
+| 提权路径未经真实管理员验证 | `elevation.py` 的 is_admin/relaunch_as_admin 及 app.py move 提权重启链路从未在真实管理员权限下验证 | 提权路径豁免声明（2026-11-18）：豁免理由——UAC 交互与提权进程上下文无法在自动化测试中形式化（标准库无模拟手段，CI 无管理员令牌）。已验证范围：非提权下 is_admin() 返回 False。未验证范围：ShellExecuteW(runas) 拉起的提权子进程完成 move 全流程、UAC 拒绝后的降级提示。触发验证条件：任何涉及 elevation.py 或 app.py move 入口链路的改动；或首次真实管理员场景交付前。验证步骤：管理员批准下以普通权限启动 move --confirm，同意 UAC，核对新进程 completed 计数与 transaction_log 落点 |
+| 已安装软件目录（如 D:\Program）产生破坏性 move 计划 | 146748 文件 / 17251 目录实测（2026-11-17 dry run）：157740 条操作中 move 66853（42%）、keep 79891、rmdir 10996——近半文件会被搬移，执行将破坏程序布局 | 场景错配套案（2026-11-18）：规则按 P0-R0-R5-v3 正确运行、边界 0 越界，属场景错配而非缺陷（理巢定位 BT/PT 资源包剥壳）。所有形式化拦截方案（按名称/内容统计判断「疑似程序目录」）均违反硬禁止「目录名语义判断」或扩功能面，裁决维持现状：README 限定场景 + CLI move 的 `--confirm` 硬闸（缺确认直接 raise，已属层 3 防护） |
 
 ---
 
