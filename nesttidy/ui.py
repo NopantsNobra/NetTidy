@@ -1,4 +1,4 @@
-"""页面外壳：只放静态 HTML/CSS/JS，所有数据来自 /api/*。
+﻿"""页面外壳：只放静态 HTML/CSS/JS，所有数据来自 /api/*。
 
 单独成模块的原因：可读化改版后 HTML 内联体积会顶破 web.py 的 400 行上限；
 web.py 保留路由与序列化，页面改动不再触碰服务端逻辑。
@@ -32,6 +32,7 @@ code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:brea
 .group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px} .group h4{margin:0 0 6px;font-size:13px} details summary{cursor:pointer;font-weight:600;padding:4px 0}
 .filtered{display:none} .hidden{display:none}
 .pbar{height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;margin:8px 0} .pfill{height:100%;width:0;background:var(--ok);transition:width .2s}
+.bar{position:sticky;top:0;z-index:6;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fff;padding:8px 0;margin:-4px 0 6px;border-bottom:1px solid #eef1ef} .bar .sp{flex:1 1 40px} .bar label{margin:0;display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px} .bar select{width:auto;max-width:460px} .bar button{margin:0}
 pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;margin:6px 0}
 </style>
 </head>
@@ -46,36 +47,31 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   </div>
   <label>输出目录（只有「复制到输出目录」需要；原地整理留空）</label>
   <input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118">
-  <label>执行方式</label>
-  <select id="execMode"><option value="move">原地整理：文件在资源包内换位置，空壳文件夹随之清掉（源目录会变）</option><option value="copy">复制到输出目录：源目录一动不动，另存一份整理好的副本（占双份空间）</option></select>
   <p><button onclick="makePlan()">试运行：看看会变成什么样</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button></p>
   <p id="msg" class="muted">还没有生成计划。</p>
 </section>
 <section id="summarySection" class="hidden"><h2>第 2 步 · 会发生什么（大白话版）</h2>
   <div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
-<section id="previewSection" class="hidden"><h2>整理前 → 整理后：逐个文件对照</h2>
-  <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。点下面的筛选条可以只看会变的文件。</p>
-  <div class="chips" id="filters"></div><div id="preview"></div></section>
+<section id="previewSection" class="hidden"><h2>第 3 步 · 逐个文件对照，在这里确认执行</h2>
+  <div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理：文件在资源包内换位置，空壳文件夹随之清掉（源目录会变）</option><option value="copy">复制到输出目录：源目录一动不动，另存一份整理好的副本（占双份空间）</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
+  <p class="muted" id="execHint" style="margin:0 0 4px"></p>
+  <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult"></div>
+  <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。上方筛选条可以只看会变的文件。</p><div id="preview"></div></section>
 <section id="foldersSection" class="hidden"><h2>会被清掉的空文件夹</h2>
   <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
-<section id="execSection" class="hidden"><h2>第 3 步 · 真正执行</h2>
-  <p class="muted" id="execHint"></p><p><button id="execBtn" onclick="executePlan()">确认执行</button></p>
-  <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult"></div></section>
 <section id="dupSection"><h2>第 4 步 · 重复文件诊断（两阶段自动复核）</h2>
-  <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。</p>
-  <div class="row">
-    <div><label>第一遍初筛口径</label><select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></div>
-    <div><label>删除方式</label><select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></div>
-  </div>
-  <p><button onclick="runDuplicate()">诊断重复文件</button></p><div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
+  <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></label><label>删除方式<select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
+  <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。工具栏固定在上方，勾到哪一组都够得着。</p>
+  <div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
 <section><details><summary>权限修复（可选）</summary>
-  <p><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label> <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label> <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label> <button class="secondary" onclick="runRepair()">执行所选权限修复</button></p>
+  <div class="bar"><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label><label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label><label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label><button class="secondary" onclick="runRepair()">执行所选权限修复</button></div>
   <div class="pbar"><div class="pfill" id="repairFill"></div></div><p class="muted" id="repairProg">尚未开始。</p>
-  <div id="diagnostics"></div></details></section>
+  <div id="repairResult"></div></details></section>
 <section><details><summary>异常项、规则口径、历史与健康检查</summary>
+  <div class="bar"><button class="secondary" onclick="loadHistory()">刷新历史</button><span class="sp"></span><span class="muted">这块是诊断信息，整理前不用看；异常项来自最近一次试运行。</span></div>
   <h3>异常项（这些文件不会被动）</h3><div id="issues"></div>
   <h3>规则分类计数与边界检查</h3><div id="ruleStats"></div><div id="boundaryNote"></div>
-  <h3>历史</h3><p><button class="secondary" onclick="loadHistory()">查看历史</button></p>
+  <h3>历史</h3><div id="history"></div>
   <h3>健康检查</h3><div id="health"></div></details></section>
 </main>
 <script>
@@ -181,7 +177,6 @@ function renderPlan(plan){
   updateExecPanel(v);
 }
 function updateExecPanel(v){
-  document.getElementById('execSection').classList.remove('hidden');
   const isCopy = (execMode.value === 'copy') || !!(v.output_root);
   const c = v.counts || {};
   document.getElementById('execHint').textContent = isCopy
@@ -221,9 +216,7 @@ function renderDup(data){
   const s = data.stats;
   let html = '<div class="headline">第一遍「'+esc(data.phase1_label)+'」找到 '+s.groups+' 组；自动跑第二遍全量哈希复核，剔除 '+s.recheck_rejected_groups
     + ' 组误判；可删副本 '+s.deletable_files+' 个，可回收 '+fmtBytes(s.reclaimable_bytes)+'。</div>';
-  html += '<p><button class="ghost" onclick="checkAll(true)">全选可删副本</button><button class="ghost" onclick="checkAll(false)">取消全选</button>'
-    + '<button class="danger" onclick="deleteSelected()">删除所选副本</button>'
-    + '<span class="muted" id="dupSelNote"></span></p>';
+  document.getElementById('dupTools').innerHTML = '<button class="ghost" onclick="checkAll(true)">全选可删副本</button><button class="ghost" onclick="checkAll(false)">取消全选</button><button class="danger" onclick="deleteSelected()">删除所选副本</button>';
   const groups = data.groups || [];
   if(!groups.length) html += '<p class="muted">没有发现重复文件。</p>';
   groups.forEach(g=>{
@@ -277,6 +270,7 @@ async function doDelete(entries){
     html += '<table><thead><tr><th>文件</th><th>结果</th><th>说明</th></tr></thead><tbody>'
       + data.rows.map(r=>'<tr><td>'+pathCell(r.path)+'</td><td>'+esc(r.status)+'</td><td>'+esc(issueText(r.code,r.message))+'</td></tr>').join('')+'</tbody></table>';
     if(data.transaction_log) html += '<p class="muted">删除日志：<code>'+esc(data.transaction_log)+'</code></p>';
+    document.getElementById('dupTools').innerHTML = '';
     document.getElementById('dupResult').innerHTML = html;
     say('删除完成：成功 '+ok+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
   }catch(e){say(e.message,true);}
@@ -287,7 +281,7 @@ async function runRepair(){
   try{
     const data = await api('/api/repair',{selected_root:root.value.trim(),clear_readonly:fixReadonly.checked,clear_hidden:fixHidden.checked,clear_zone_identifier:fixZone.checked,progress_key:prog.key});
     const bad = data.rows || [];
-    document.getElementById('diagnostics').innerHTML = bad.length
+    document.getElementById('repairResult').innerHTML = bad.length
       ? '<div class="headline">检查 '+data.checked+' 项，异常 '+bad.length+' 项（正常项略）。</div>'
         + table(bad,['path','action','status','message'],['文件','动作','状态','说明'])
       : '<p class="muted">检查 '+data.checked+' 项，全部正常，没有需要列出的异常。</p>';
@@ -339,7 +333,7 @@ async function exportReport(){
 }
 async function loadHistory(){
   try{ const data = await fetch('/api/history').then(r=>r.json());
-    document.getElementById('diagnostics').innerHTML = table(data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
+    document.getElementById('history').innerHTML = table(data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
   }catch(e){say(e.message,true);}
 }
 async function makeManual(){

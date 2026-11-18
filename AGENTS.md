@@ -17,7 +17,7 @@
 | 代码规模 | 用 `wc -l nesttidy/*.py tests/*.py` 与 `python -m unittest discover -s tests` 复算，不写死快照 |
 | 技术栈 | Python 3.11+，**零第三方依赖**（纯标准库） |
 | 形态 | 本地 Web UI（绑 127.0.0.1）+ CLI，SQLite 存历史 |
-| 版本 | `1.2.0`，规则版本 `P0-R0-R5-v3` |
+| 版本 | `1.2.1`，规则版本 `P0-R0-R5-v3` |
 | 唯一交付平台 | Windows |
 
 ### 开工必读（三份，不要多读）
