@@ -1,30 +1,17 @@
-# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
+.venv/
+venv/
 
-# 运行产物（报告、历史库、事务日志）
+# 运行时产物（报告、隔离区、输出、删除日志）不进仓库
 理巢报告/
+理巢隔离_*/
 理巢输出_*/
-transaction_log.jsonl
+理巢删除日志.jsonl
+delete_log.jsonl
+*.sqlite
+*.sqlite-journal
 
-# 本地原始存档与构建脚本
-_archive/
-_gitbuild*/
-
-# 复核/审计工作产物（不进仓库、不占文档预算）
-_review/
-
-# 工作区记忆与工具配置
-.workbuddy/
-
-# 系统
-Thumbs.db
-desktop.ini
-.DS_Store
-
-# 编辑器
-.vscode/
-.idea/
+# 本地测试夹与临时目录
+.LocalSandbox/
+tmp/

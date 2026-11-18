@@ -119,6 +119,166 @@ def plan_display_stats(plan: OperationPlan) -> dict:
         "rule_rows": [{"rule": c, "name": _RULE_NAMES[c], "count": counts[c]} for c in _RULE_CODES],
         "r5_samples": samples,
         "boundary": {"checked": len(file_ops), "out_of_bound": len(escaped), "label": label},
+        "readable": readable_plan_view(plan),
+    }
+
+
+_RULE_WHY = {
+    "R1": "中间几层只是单线套壳（每层只有一个子目录），文件直接提到资源包根部",
+    "R2": "上层目录只包着一个子目录，合并掉这一层",
+    "R3": "这里有多个分支，父目录保留下来当分组，文件各自提到分叉口",
+    "R4": "目录里只剩这一个文件，把它提到上一层",
+    "R5": "目标位置已有同名文件，用来源目录名做前缀区分（不会生成 (1) 这种后缀）",
+}
+_OP_PLAIN = {"move": "移动到", "copy": "复制到", "keep": "原地保留"}
+_ACTION_PLAIN = {"moved": "挪了位置", "renamed": "原地改名", "same": "原地不动"}
+
+
+def human_bytes(value: int | None) -> str:
+    if not value:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{value} B"
+
+
+def _rel(path: str, base: str) -> str:
+    """相对路径用于阅读；跨根时退回绝对路径，绝不谎报层级。"""
+    try:
+        rel = os.path.relpath(path, base)
+    except ValueError:
+        return path
+    return path if rel.startswith("..") else rel
+
+
+def _depth(path: str, base: str) -> int:
+    rel = _rel(path, base)
+    return 0 if rel == path else len([part for part in rel.split(os.sep) if part]) - 1
+
+
+def _root_for(path: str, roots: list[str]) -> str:
+    """取包含该路径的最长资源根；都不包含时返回空串。"""
+    norm = _norm_path(path)
+    hits = [root for root in roots if norm == _norm_path(root) or norm.startswith(_norm_path(root).rstrip(os.sep) + os.sep)]
+    return max(hits, key=len) if hits else ""
+
+
+def readable_plan_view(plan: OperationPlan) -> dict:
+    """把冻结计划翻译成人能读的「整理前 → 整理后」清单。
+
+    纯派生视图：不读盘、不改计划字段、不参与执行判断；只是把
+    original_path / planned_target_path / rule_trace 这套机器口径换成
+    相对路径 + 中文动作 + 一句话原因，让页面能回答「哪些文件会被搬走」。
+    """
+    roots = list(plan.resource_roots)
+    after_base = plan.output_root or ""
+    groups: dict[str, dict] = {}
+    renamed = in_place = 0
+    total_bytes = 0
+    for mapping in plan.mappings:
+        root = _root_for(mapping.original_path, roots)
+        bucket = groups.setdefault(
+            root,
+            {"root_path": root, "root_name": Path(root).name if root else "（资源根之外）", "rows": [], "moved": 0, "renamed": 0},
+        )
+        before = _rel(mapping.original_path, root) if root else mapping.original_path
+        # 阅读口径要「同构」：before 相对资源包根，after 也必须相对「输出目录里的同名资源包」，
+        # 否则输出前缀会被算成位置变化，所有文件都显示成「换位置」。
+        base_after = root
+        if plan.output_root and root:
+            base_after = str(Path(after_base) / Path(root).name)
+        after = _rel(mapping.planned_target_path, base_after) if base_after else mapping.planned_target_path
+        # 用户关心的是「结构变没变」：copy 模式下目标整体落在输出目录里，绝对路径必然不同，
+        # 但相对资源包的层级可能一模一样。按相对路径比对，才不会把「原样带过去」说成「搬动」。
+        rel_changed = _norm_path(before) != _norm_path(after)
+        is_renamed = Path(mapping.original_path).name != Path(mapping.planned_target_path).name
+        hits = [code for code in _RULE_CODES for trace in mapping.rule_trace if trace.startswith(code)]
+        why = "；".join(dict.fromkeys(_RULE_WHY[code] for code in hits if code in _RULE_WHY))
+        if mapping.name_cleaning_trace:
+            why = (why + "；" if why else "") + "文件名里的非法字符被替换成安全字符"
+        if not why:
+            why = "位置和名字都不变，只是跟着复制过去" if not rel_changed and not is_renamed else "按规则提到资源包根部"
+        if not rel_changed and not is_renamed:
+            action = _ACTION_PLAIN["same"]
+            action_code = "same"
+        elif not rel_changed:
+            action = _ACTION_PLAIN["renamed"]
+            action_code = "renamed"
+        else:
+            action = _OP_PLAIN.get(mapping.operation_type, mapping.operation_type)
+            action_code = mapping.operation_type
+        bucket["rows"].append(
+            {
+                "before": before,
+                "after": after,
+                "depth": _depth(mapping.original_path, root) if root else 0,
+                "action": action,
+                "action_code": action_code,
+                "rules": [_RULE_NAMES[code] for code in hits if code in _RULE_NAMES],
+                "why": why,
+                "renamed": is_renamed,
+                "changed": rel_changed or is_renamed,
+                "size": human_bytes(mapping.source_size),
+                "size_bytes": mapping.source_size or 0,
+                "status": mapping.status,
+            }
+        )
+        if rel_changed:
+            bucket["moved"] += 1
+            total_bytes += mapping.source_size or 0
+        else:
+            in_place += 1
+        if is_renamed:
+            renamed += 1
+            bucket["renamed"] += 1
+
+    folders = []
+    for op in plan.operations:
+        if op.op_type != "rmdir" or not op.source_path:
+            continue
+        root = _root_for(op.source_path, roots)
+        folders.append(
+            {
+                "root_name": Path(root).name if root else "（资源根之外）",
+                "path": _rel(op.source_path, root) if root else op.source_path,
+                "depth": _depth(op.source_path, root) if root else 0,
+            }
+        )
+    moved = sum(bucket["moved"] for bucket in groups.values())
+    folders_hint = "只在文件被提走后变空才清"
+    if plan.output_root:
+        folders_hint = "当前是复制到输出目录，源目录里的空壳原样保留"
+    cards = [
+        {"label": "资源包", "value": len(roots), "hint": "每个子文件夹算一个独立资源包"},
+        {"label": "会换位置的文件", "value": moved, "hint": "从深层子文件夹提到资源包根部"},
+        {"label": "会改名的文件", "value": renamed, "hint": "撞名时加来源目录前缀，绝不覆盖"},
+        {"label": "会清掉的空文件夹", "value": len(folders), "hint": folders_hint},
+        {"label": "换位置的体积", "value": human_bytes(total_bytes), "hint": "这些文件加起来有多大"},
+        {"label": "原地不动", "value": in_place, "hint": "位置和名字都不用改"},
+        {"label": "异常项", "value": len(plan.issues), "hint": "下载未完成、符号链接、无权限等"},
+    ]
+    if plan.output_root:
+        headline = (
+            f"把 {len(roots)} 个资源包复制到输出目录：其中 {moved} 个文件会换位置（{human_bytes(total_bytes)}），"
+            f"{renamed} 个文件原地改名，{in_place} 个原样带过去；源目录保持不动，{len(plan.issues)} 个异常。"
+        )
+    else:
+        headline = (
+            f"整理 {len(roots)} 个资源包（原地移动）：{moved} 个文件换位置（{human_bytes(total_bytes)}），"
+            f"{renamed} 个文件改名，{in_place} 个原地不动，清掉 {len(folders)} 个空文件夹，{len(plan.issues)} 个异常。"
+        )
+    return {
+        "headline": headline,
+        "cards": cards,
+        "mode": plan.mode,
+        "output_root": plan.output_root,
+        "groups": [groups[key] for key in sorted(groups, key=lambda k: (k.casefold(), k))],
+        "folders": folders,
+        "counts": {"moved": moved, "renamed": renamed, "folders": len(folders), "in_place": in_place},
     }
 
 
@@ -146,6 +306,21 @@ def markdown_summary(plan: OperationPlan) -> str:
     ]
     for name in sorted(op_counts):
         lines.append(f"- {name}: {op_counts[name]}")
+    view = readable_plan_view(plan)
+    lines.extend(["", "## 会怎么变（整理前 → 整理后）", "", f"- {view['headline']}", ""])
+    for group in view["groups"]:
+        lines.append(f"### {group['root_name']}")
+        lines.append("")
+        for row in group["rows"][:50]:
+            lines.append(f"- `{row['before']}` → `{row['after']}`（{row['action']}，{row['size']}）；原因：{row['why']}")
+        if len(group["rows"]) > 50:
+            lines.append(f"- …… 本资源包其余 {len(group['rows']) - 50} 条见 mappings.csv")
+        lines.append("")
+    if view["folders"]:
+        lines.extend(["## 会被清掉的空文件夹", ""])
+        for item in view["folders"][:50]:
+            lines.append(f"- [{item['root_name']}] {item['path']}")
+        lines.append("")
     stats = plan_display_stats(plan)
     lines.extend([
         "", "## 规则分类计数", "",

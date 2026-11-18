@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
-from .config import INCOMPLETE_SUFFIXES, OUTPUT_DIR_PREFIX, REPORT_DIR_NAME, RULE_VERSION
+from .config import INCOMPLETE_SUFFIXES, OUTPUT_DIR_PREFIX, QUARANTINE_DIR_PREFIX, REPORT_DIR_NAME, RULE_VERSION
 from .model import ExecutionIssue, MappingEntry, Operation, OperationPlan
 from .rules import (
     VDir,
@@ -39,7 +39,9 @@ def should_skip_path(path: Path) -> str | None:
         if path.is_symlink():
             return "SKIPPED_SYMLINK"
         lower = path.name.lower()
-        if lower in {REPORT_DIR_NAME.lower()} or lower.startswith(OUTPUT_DIR_PREFIX.lower()):
+        if lower in {REPORT_DIR_NAME.lower()} or lower.startswith(OUTPUT_DIR_PREFIX.lower()) or lower.startswith(
+            QUARANTINE_DIR_PREFIX.lower()
+        ):
             return "SKIPPED_NESTTIDY_OUTPUT"
         if path.suffix.lower() in INCOMPLETE_SUFFIXES or lower.endswith(".!qb"):
             return "DOWNLOAD_IN_PROGRESS"

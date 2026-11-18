@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 from .config import DEFAULT_HOST, DEFAULT_PORT
-from .duplicate import detect_duplicates, write_duplicate_report
-from .elevation import is_admin, relaunch_as_admin
-from .executor import execute_plan
+from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize, write_duplicate_report
+from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
 from .planner import build_plan
@@ -20,6 +22,25 @@ from .storage import list_history
 from .web import PortInUseError, serve
 
 EXIT_PORT_IN_USE = 23
+
+
+def is_admin() -> bool:
+    """是否已具备管理员权限（提权只为绕过部分受保护目录的移动限制）。"""
+    if os.name != "nt":
+        return os.geteuid() == 0  # type: ignore[attr-defined]
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def relaunch_as_admin(argv: list[str] | None = None) -> bool:
+    args = argv if argv is not None else sys.argv
+    params = subprocess.list2cmdline(args[1:])
+    try:
+        return ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1) > 32
+    except Exception:
+        return False
 
 
 def main() -> None:
@@ -46,17 +67,28 @@ def main() -> None:
     move_cmd.add_argument("--confirm", action="store_true")
     move_cmd.add_argument("--no-elevate", action="store_true", help="Windows 下不自动请求管理员权限")
     move_cmd.add_argument("--report-dir")
-    undo_cmd = sub.add_parser("undo", help="根据 transaction_log.jsonl 尽力撤销 move 操作")
+    undo_cmd = sub.add_parser("undo", help="根据事务日志尽力撤销 move / quarantine 操作（彻底删除无法撤销）")
     undo_cmd.add_argument("transaction_log")
 
     sub.add_parser("health", help="运行启动健康检查")
     sub.add_parser("history", help="查看最近任务历史")
 
-    dup_cmd = sub.add_parser("duplicates", help="重复文件诊断，只报告不删除")
+    dup_cmd = sub.add_parser("duplicates", help="重复文件诊断（第一遍初筛 + 自动第二遍全量哈希复核），默认不删除")
     dup_cmd.add_argument("selected_root")
     dup_cmd.add_argument("--level", choices=["fast", "standard", "deep"], default="standard")
     dup_cmd.add_argument("--workers", type=int, default=4)
+    dup_cmd.add_argument("--no-verify", action="store_true", help="关闭第二遍全量哈希复核（默认开启）")
     dup_cmd.add_argument("--report-dir")
+
+    dedupe_cmd = sub.add_parser("dedupe", help="删除重复副本：默认移入隔离区（可撤销），--mode purge 才彻底删除")
+    dedupe_cmd.add_argument("selected_root")
+    dedupe_cmd.add_argument("--level", choices=["fast", "standard", "deep"], default="standard")
+    dedupe_cmd.add_argument("--groups", help="只处理这些组，逗号分隔，例如 dup-1,dup-3；留空表示全部已复核组")
+    dedupe_cmd.add_argument("--mode", choices=["quarantine", "purge"], default="quarantine")
+    dedupe_cmd.add_argument("--trash-dir")
+    dedupe_cmd.add_argument("--workers", type=int, default=4)
+    dedupe_cmd.add_argument("--report-dir", help="删除日志落到这里（默认 理巢报告/ 下的新目录）")
+    dedupe_cmd.add_argument("--confirm", action="store_true", help="确认执行删除（必须显式给出）")
 
     repair_cmd = sub.add_parser("repair", help="主动权限修复，默认不执行任何修复项")
     repair_cmd.add_argument("selected_root")
@@ -79,9 +111,55 @@ def main() -> None:
         return
     if args.command == "duplicates":
         report_dir = Path(args.report_dir).resolve() if args.report_dir else new_report_dir()
-        rows = detect_duplicates(args.selected_root, args.level, args.workers)
+        rows = detect_duplicates(args.selected_root, args.level, args.workers, verify=not args.no_verify)
         csv_path = write_duplicate_report(rows, report_dir / "duplicate_report.csv")
-        print(json.dumps({"duplicate_rows": len(rows), "duplicate_report": str(csv_path)}, ensure_ascii=False, indent=2))
+        groups = group_rows(rows)
+        print(
+            json.dumps(
+                {
+                    "phase1": PHASE1_METHOD[args.level],
+                    "verify": not args.no_verify and args.level != "deep",
+                    "stats": summarize(rows),
+                    "groups": [
+                        {
+                            "group": group.duplicate_group_id,
+                            "verified": group.verified,
+                            "keep": group.keep_path,
+                            "deletable": len(group.deletable_paths),
+                            "reclaimable": group.reclaimable_bytes,
+                        }
+                        for group in groups
+                    ],
+                    "duplicate_report": str(csv_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if args.command == "dedupe":
+        if not args.confirm:
+            raise SystemExit("dedupe 会删除文件；请先跑 duplicates 看清结果，再加 --confirm 执行")
+        rows = detect_duplicates(args.selected_root, args.level, workers=args.workers)
+        groups = group_rows(rows)
+        wanted = {item.strip() for item in args.groups.split(",") if item.strip()} if args.groups else None
+        entries: list[DeleteEntry] = []
+        for group in groups:
+            if wanted is not None and group.duplicate_group_id not in wanted:
+                continue
+            for path in group.deletable_paths:
+                entries.append(DeleteEntry(path=path, keep_path=group.keep_path, expected_sha256=group.verified_hash))
+        if not entries:
+            raise SystemExit("没有已复核通过、可删除的重复副本")
+        result = delete_duplicates(
+            args.selected_root,
+            entries,
+            mode=args.mode,
+            confirm=args.confirm,
+            trash_dir=args.trash_dir,
+            transaction_log=str(Path(args.report_dir or new_report_dir()).resolve() / "delete_log.jsonl"),
+        )
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         return
     if args.command == "repair":
         rows = repair_permissions(

@@ -6,16 +6,19 @@ import socket
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-from .duplicate import detect_duplicates
-from .executor import execute_plan
+from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize
+from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
 from .model import OperationPlan
 from .planner import build_plan
-from .repair import repair_permissions, rows_as_dicts
+from .recovery import rows_as_dicts, undo_transaction
+from .repair import repair_permissions
 from .reports import plan_display_stats, write_plan_report
 from .storage import list_history
+from .ui import INDEX_HTML
 
 
 class PlanRegistry:
@@ -61,160 +64,22 @@ def _plan_id(body: dict) -> str:
     return plan_id
 
 
-INDEX_HTML = """<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>理巢 NestTidy</title>
-  <style>
-    :root { color-scheme: light; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
-    body { margin: 0; background: #f7f7f5; color: #242424; }
-    header { padding: 20px 28px; background: #174b4f; color: white; }
-    main { max-width: 1180px; margin: 0 auto; padding: 22px; }
-    section { margin: 18px 0; }
-    label { display: block; font-weight: 600; margin: 12px 0 6px; }
-    input, select { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #b8bfbd; border-radius: 6px; background: white; }
-    button { padding: 10px 14px; border: 0; border-radius: 6px; background: #196f5f; color: white; cursor: pointer; margin-right: 8px; }
-    button.secondary { background: #495057; }
-    table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #d8ddda; }
-    th, td { padding: 8px; border-bottom: 1px solid #e6e8e7; text-align: left; font-size: 13px; vertical-align: top; }
-    th { background: #edf2f0; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .stat { background: white; border: 1px solid #d8ddda; border-radius: 8px; padding: 12px; }
-    .muted { color: #687370; }
-    .error { color: #9b1c1c; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
-  </style>
-</head>
-<body>
-  <header><h1>理巢 NestTidy</h1><div>本地离线资源目录剥壳整理工具</div></header>
-  <main>
-    <section>
-      <label>源目录</label>
-      <input id="root" placeholder="例如 D:\\下载\\资源包">
-      <label>整理模式</label>
-      <select id="mode"><option value="batch">批量整理：整理所选目录下的每个子文件夹</option><option value="single">单个资源整理：整理所选目录本身</option></select>
-      <label>copy 输出目录（只在安全复制时需要）</label>
-      <input id="output" placeholder="例如 D:\\下载\\理巢输出_20260514_2130">
-      <label>重复文件检测级别</label>
-      <select id="dupLevel"><option value="standard">标准检查：大小 + 首尾哈希</option><option value="fast">快速检查：大小 + 文件名</option><option value="deep">深度检查：完整哈希</option></select>
-      <p>
-        <button onclick="makePlan()">生成试运行计划</button>
-        <button onclick="runDuplicate()">重复文件诊断</button>
-        <button onclick="executeCopy()">执行安全复制</button>
-        <button class="secondary" onclick="exportReport()">导出报告</button>
-        <button class="secondary" onclick="loadHistory()">查看历史</button>
-        <button class="secondary" onclick="makeManual()">生成 PDF 手册</button>
-      </p>
-      <p>
-        <label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label>
-        <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label>
-        <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier</label>
-        <button class="secondary" onclick="runRepair()">执行所选权限修复</button>
-      </p>
-      <p id="msg" class="muted"></p>
-    </section>
-    <section class="grid" id="stats"></section>
-    <section id="ruleStats"></section>
-    <section id="r5Samples"></section>
-    <section id="boundaryNote"></section>
-    <section><h2>预览映射</h2><div id="preview"></div></section>
-    <section><h2>异常项</h2><div id="issues"></div></section>
-    <section><h2>诊断 / 历史</h2><div id="diagnostics"></div></section>
-    <section><h2>健康检查</h2><div id="health"></div></section>
-  </main>
-<script>
-let currentPlanId = null;
-async function api(path, body) {
-  const res = await fetch(path, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {})});
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
-}
-function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-async function makePlan() {
-  document.getElementById('msg').textContent = '正在扫描并生成冻结计划...';
-  try {
-    const data = await api('/api/plan', {selected_root: root.value, mode: mode.value, output_root: output.value || null});
-    currentPlanId = data.plan_id;
-    render(data);
-    document.getElementById('msg').textContent = '计划已生成。默认未修改磁盘。';
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function exportReport() {
-  if (!currentPlanId) { document.getElementById('msg').innerHTML = '<span class="error">请先生成计划。</span>'; return; }
-  try {
-    const data = await api('/api/report', {plan_id: currentPlanId});
-    document.getElementById('msg').textContent = '报告已导出：' + data.report_dir;
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function runDuplicate() {
-  document.getElementById('msg').textContent = '正在执行重复文件诊断...';
-  try {
-    const data = await api('/api/duplicates', {selected_root: root.value, level: dupLevel.value});
-    diagnostics.innerHTML = table(data.rows.slice(0, 500), ['duplicate_group_id','path','size','hash_method','suggested_keep','reason']);
-    document.getElementById('msg').textContent = '诊断完成；仅报告，不自动删除。';
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function runRepair() {
-  document.getElementById('msg').textContent = '正在执行所选权限修复...';
-  try {
-    const data = await api('/api/repair', {selected_root: root.value, clear_readonly: fixReadonly.checked, clear_hidden: fixHidden.checked, clear_zone_identifier: fixZone.checked});
-    diagnostics.innerHTML = table(data.rows.slice(0, 500), ['path','action','status','message']);
-    document.getElementById('msg').textContent = '权限修复完成。';
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function executeCopy() {
-  if (!output.value) { document.getElementById('msg').innerHTML = '<span class="error">安全复制需要填写输出目录。</span>'; return; }
-  if (!currentPlanId) { document.getElementById('msg').innerHTML = '<span class="error">请先生成计划。</span>'; return; }
-  try {
-    const data = await api('/api/execute-copy', {plan_id: currentPlanId});
-    diagnostics.innerHTML = table(data.issues || [], ['path','stage','code','message','final_status']);
-    document.getElementById('msg').textContent = `copy 完成：完成 ${data.completed}，跳过 ${data.skipped}，失败 ${data.failed}`;
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function loadHistory() {
-  try {
-    const data = await fetch('/api/history').then(r=>r.json());
-    diagnostics.innerHTML = table(data, ['created_at','mode','selected_root','operation_count','issue_count','report_dir']);
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-async function makeManual() {
-  try {
-    const data = await api('/api/manual', {});
-    document.getElementById('msg').textContent = 'PDF 手册已生成：' + data.manual_pdf;
-  } catch(e) { document.getElementById('msg').innerHTML = '<span class="error">' + esc(e.message) + '</span>'; }
-}
-function render(plan) {
-  stats.innerHTML = [
-    ['资源根', plan.resource_roots.length],
-    ['映射', plan.mappings.length],
-    ['操作', plan.operations.length],
-    ['异常', plan.issues.length]
-  ].map(x => `<div class="stat"><b>${x[0]}</b><br>${x[1]}</div>`).join('');
-  const d = plan.display;
-  ruleStats.innerHTML = '<h2>规则分类计数</h2><p class="muted">口径：R0=operations 中 rmdir 条数；R1–R5=mappings[].rule_trace 行首命中条目数（同一条目可命中多条）。来源：冻结计划，未新增字段。P0 是边界不变量、无逐条痕迹，结果见下方边界检查。</p>' +
-    table(d.rule_rows, ['rule','name','count']);
-  r5Samples.innerHTML = '<h2>R5 撞名前缀样例</h2><p class="muted">口径：conflict_resolution_trace 含 R5 的前 5 条；原名/结果名取路径末段，证据为轨迹原文。</p>' +
-    table(d.r5_samples, ['original_name','final_name','trace']);
-  const b = d.boundary;
-  boundaryNote.innerHTML = '<h2>边界检查</h2><p>已校验 <b>' + b.checked + '</b> 条文件操作，目标越界 <b>' + b.out_of_bound + '</b> 条。</p>' +
-    '<p class="muted">口径：边界取 ' + esc(b.label) + '，逐条比对 operations[].target_path 是否落在边界内（词法归一化、不读磁盘）。数字由当前计划实时计算，非固定值。</p>' +
-    '<p class="muted">盲区：计划期词法归一化、不读磁盘，不解析 junction / 符号链接，此类场景以执行层复查为准（执行层真实路径解析，实测可拦截越界）；本检查只验证目标落在资源根并集内，跨资源根由 planner 结构保证、展示层不做逐条跨根核对（P0 不变量 2 口径更强）；分母仅含 op_type ∈ {move,copy,keep} 且 target_path 非空者，rmdir 无目标不计。</p>';
-  preview.innerHTML = table(plan.mappings.slice(0, 500), ['original_path','planned_target_path','operation_type','rule_trace','risk_level']);
-  issues.innerHTML = table(plan.issues, ['path','stage','code','message','final_status']);
-}
-function table(rows, cols) {
-  if (!rows.length) return '<p class="muted">无</p>';
-  return '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
-    rows.map(r => '<tr>' + cols.map(c=>`<td>${esc(Array.isArray(r[c]) ? r[c].join(' | ') : r[c])}</td>`).join('') + '</tr>').join('') +
-    '</tbody></table>';
-}
-fetch('/api/health').then(r=>r.json()).then(rows => { health.innerHTML = table(rows, ['name','ok','detail']); });
-</script>
-</body>
-</html>"""
+def _delete_entries(body: dict) -> list[DeleteEntry]:
+    raw = body.get("entries")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("没有要删除的文件（entries 为空）")
+    entries: list[DeleteEntry] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("path") or not item.get("keep_path"):
+            raise ValueError("每条删除请求都必须带 path 与 keep_path")
+        entries.append(
+            DeleteEntry(
+                path=str(item["path"]),
+                keep_path=str(item["keep_path"]),
+                expected_sha256=str(item.get("expected_sha256") or ""),
+            )
+        )
+    return entries
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -245,8 +110,20 @@ class Handler(BaseHTTPRequestHandler):
                 report_dir = write_plan_report(PLANS.get(_plan_id(body)))
                 self.send_json({"report_dir": str(report_dir)})
             elif self.path == "/api/duplicates":
-                rows = detect_duplicates(body.get("selected_root", ""), body.get("level", "standard"))
-                self.send_json({"rows": [row.__dict__ for row in rows]})
+                self.send_json(self.detect_duplicates_payload(body))
+            elif self.path == "/api/duplicates/delete":
+                result = delete_duplicates(
+                    body.get("selected_root", ""),
+                    _delete_entries(body),
+                    mode=body.get("mode", "quarantine"),
+                    confirm=bool(body.get("confirm")),
+                )
+                self.send_json(result.to_dict())
+            elif self.path == "/api/undo-delete":
+                log_path = body.get("transaction_log")
+                if not isinstance(log_path, str) or not log_path:
+                    raise ValueError("缺少 transaction_log（删除日志路径）")
+                self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
             elif self.path == "/api/repair":
                 rows = repair_permissions(
                     body.get("selected_root", ""),
@@ -264,6 +141,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND)
         except Exception as exc:
             self.send_json({"error": str(exc)}, status=400)
+
+    def detect_duplicates_payload(self, body: dict) -> dict:
+        """两阶段诊断的统一出口：rows 供 CSV/明细，groups 供分组卡片与删除按钮。"""
+        root = body.get("selected_root", "")
+        level = body.get("level", "standard")
+        verify = body.get("verify", True) is not False
+        rows = detect_duplicates(root, level, verify=verify)
+        return {
+            "selected_root": str(Path(root).resolve()) if root else "",
+            "phase1_level": level,
+            "phase1_label": PHASE1_METHOD.get(level, level),
+            "verify": verify and level != "deep",
+            "stats": summarize(rows),
+            "groups": [group.to_dict() for group in group_rows(rows)],
+            "rows": [row.to_dict() for row in rows],
+        }
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))

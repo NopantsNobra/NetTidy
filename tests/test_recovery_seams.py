@@ -61,8 +61,23 @@ class UndoRmdirPolicyTests(unittest.TestCase):
 
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].status, "skipped")
-            self.assertIn("仅 move 操作可自动撤销", rows[0].message)
+            self.assertIn("不支持自动撤销", rows[0].message)
             self.assertFalse(removed_dir.exists(), "rmdir 行被重放，违反 M2 裁决")
+
+    def test_purge_delete_rows_are_reported_as_unrecoverable(self) -> None:
+        """0.6.0 新增 purge 删除：undo 必须明说不可撤销，不能静默 skipped 了事。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            tx = base / "tx.jsonl"
+            tx.write_text(
+                json.dumps({"action": "delete", "source": str(base / "gone.txt"), "mode": "purge", "status": "done"}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(rows[0].status, "skipped")
+            self.assertIn("彻底删除无法撤销", rows[0].message)
 
 
 if __name__ == "__main__":

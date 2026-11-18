@@ -42,23 +42,29 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
     results: list[UndoResult] = []
     for key in reversed(order):
         item = collected[key]
-        if item.get("action") != "move":
-            results.append(UndoResult(item.get("action", ""), item.get("source", ""), item.get("target") or "", "skipped", "仅 move 操作可自动撤销"))
+        action = item.get("action", "")
+        if action not in {"move", "quarantine"}:
+            # delete（彻底删除）没有现场可回收，必须显式说清，不能让它静默混在 skipped 里。
+            note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "该操作不支持自动撤销"
+            results.append(UndoResult(action, item.get("source", ""), item.get("target") or "", "skipped", note))
             continue
         source = Path(item["source"])
         target = Path(item["target"])
         source_exists = source.exists()
         target_exists = target.exists()
         if source_exists and target_exists:
-            results.append(UndoResult("move", str(source), str(target), "failed", "原路径与目标同时存在，需人工确认"))
+            results.append(UndoResult(action, str(source), str(target), "failed", "原路径与隔离副本同时存在，需人工确认"))
             continue
         if not target_exists:
-            results.append(UndoResult("move", str(source), str(target), "skipped", "现场未见搬移结果，跳过"))
+            results.append(UndoResult(action, str(source), str(target), "skipped", "现场未见隔离副本，跳过"))
             continue
         source.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target), str(source))
-        message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
-        results.append(UndoResult("move", str(source), str(target), "ok", message))
+        if action == "quarantine":
+            message = "已从隔离区放回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态放回"
+        else:
+            message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
+        results.append(UndoResult(action, str(source), str(target), "ok", message))
     return results
 
 
