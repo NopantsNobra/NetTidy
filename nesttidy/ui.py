@@ -308,13 +308,14 @@ async function executeCopy(){
 }
 async function executeMove(){
   const c = ((lastPlan && lastPlan.display && lastPlan.display.readable) || {}).counts || {};
-  const ok = confirm('确认原地整理？\n\n会换位置的文件：'+(c.moved||0)+' 个\n会清掉的空文件夹：'+(c.folders||0)+' 个\n\n源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原。');
+  const ok = confirm('确认原地整理？\\n\\n会换位置的文件：'+(c.moved||0)+' 个\\n会清掉的空文件夹：'+(c.folders||0)+' 个\\n\\n源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原。');
   if(!ok) return;
   try{
     say('正在原地整理...');
     const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true});
     document.getElementById('execResult').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'])
-      + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" onclick="undoRun(\''+esc(data.transaction_log).replace(/'/g,'&#39;')+'\')">撤销这次整理</button></p>' : '');
+      + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>' : '');
+    document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
     say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
   }catch(e){say(e.message,true);}
 }

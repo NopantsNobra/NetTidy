@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -268,6 +269,26 @@ class BlockFilterTests(unittest.TestCase):
         self.assertIn('data-renamed="', INDEX_HTML)
         self.assertIn("block.dataset[filterMode]", INDEX_HTML)
         self.assertIn("previewEmpty", INDEX_HTML)
+
+
+class ScriptHygieneTests(unittest.TestCase):
+    """页面脚本一旦有语法错误，整页按钮全失效——这两条守住这类回归。"""
+
+    def test_template_has_no_single_backslash_escapes(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "nesttidy" / "ui.py").read_text(encoding="utf-8")
+        stray = re.findall(r"(?<!\\)\\([ntr0-7uxabfv'\"])", source)
+
+        self.assertEqual(stray, [], f"ui.py 模板里出现单反斜杠转义：{stray}（在 Python 字符串里会被吃掉，JS 侧就断行了）")
+
+    def test_no_raw_newlines_inside_page_script_strings(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        script = INDEX_HTML[INDEX_HTML.index("<script>") + 8 : INDEX_HTML.index("</script>")]
+
+        self.assertNotIn("\n\n会换位置", script)
+        self.assertIn("\\n\\n会换位置", script)
+        self.assertNotIn("undoRun(''", script)
+        self.assertIn("button[data-tx]", script)
 
 
 if __name__ == "__main__":
