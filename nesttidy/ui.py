@@ -59,7 +59,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。上方筛选条可以只看会变的文件。</p><div id="preview"></div></section>
 <section id="foldersSection" class="hidden"><h2>会被清掉的空文件夹</h2>
   <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
-<section id="dupSection"><h2>第 4 步 · 重复文件诊断（两阶段自动复核）</h2>
+<section id="dupSection"><h2>重复文件诊断（两阶段自动复核，随时可做）</h2>
   <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></label><label>删除方式<select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
   <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。工具栏固定在上方，勾到哪一组都够得着。</p>
   <div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
