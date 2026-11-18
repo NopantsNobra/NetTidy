@@ -1,8 +1,4 @@
-﻿"""页面外壳：只放静态 HTML/CSS/JS，所有数据来自 /api/*。
-
-单独成模块的原因：可读化改版后 HTML 内联体积会顶破 web.py 的 400 行上限；
-web.py 保留路由与序列化，页面改动不再触碰服务端逻辑。
-"""
+"""页面外壳：只放静态 HTML/CSS/JS，所有数据来自 /api/*。"""
 
 INDEX_HTML = """<!doctype html>
 <html lang="zh-CN">
@@ -55,8 +51,9 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
 </section></div>
 <div class="panel hidden" id="panel-dup"><section><h2>重复文件</h2>
-  <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></label><label>删除方式<select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
-  <p class="muted">第一遍按你选的级别初筛，程序自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件标成「复核剔除」，永不进入可删名单。逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。</p>
+  <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></label><label>删除方式<select id="delMode"><option value="recycle">移入回收站（可在回收站里还原；清空回收站才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
+  <p class="muted">第一遍按你选的级别初筛，程序自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件标成「复核剔除」，永不进入可删名单。逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。<b>右键任意一行</b>可在资源管理器里定位到那个文件。</p>
+  <div class="pbar"><div class="pfill" id="dupFill"></div></div><p class="muted" id="dupProg">尚未诊断。</p>
   <div id="dupResult" class="scrollbox"><p class="muted">尚未诊断。</p></div></section></div>
 <div class="panel hidden" id="panel-repair"><section><h2>权限修复</h2>
   <div class="bar"><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label><label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label><label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label><button onclick="runRepair()">执行所选权限修复</button></div>
@@ -139,7 +136,8 @@ function renderPlan(plan){
     g.rows.forEach(r=>{
       const tag = r.renamed ? ' <span class="badge warn">改名</span>' : '';
       const depth = r.depth>=2 ? ' <span class="depth">藏了 '+r.depth+' 层</span>' : '';
-      html += '<tr data-row data-changed="'+(r.changed?'1':'0')+'" data-renamed="'+(r.renamed?'1':'0')+'">'
+      const open = g.root_path ? g.root_path + '\\\\' + String(r.before).split(' › ').join('\\\\') : '';
+      html += '<tr data-row data-open="'+esc(open)+'" data-changed="'+(r.changed?'1':'0')+'" data-renamed="'+(r.renamed?'1':'0')+'">'
         + '<td>'+pathCell(r.before)+depth+'</td>'
         + '<td>'+pathCell(r.after)+tag+'</td>'
         + '<td>'+esc(r.action)+'</td>'
@@ -154,7 +152,7 @@ function renderPlan(plan){
   if(v.folders.length){
     document.getElementById('foldersSection').classList.remove('hidden');
     document.getElementById('folders').innerHTML = '<table><thead><tr><th>资源包</th><th>会被清掉的文件夹</th><th>层级</th></tr></thead><tbody>'
-      + v.folders.map(f=>'<tr><td>'+esc(f.root_name)+'</td><td>'+pathCell(f.path)+'</td><td>第 '+f.depth+' 层</td></tr>').join('')+'</tbody></table>';
+      + v.folders.map(f=>'<tr data-open="'+esc(f.full_path||'')+'"><td>'+esc(f.root_name)+'</td><td>'+pathCell(f.path)+'</td><td>第 '+f.depth+' 层</td></tr>').join('')+'</tbody></table>';
   } else if (v.output_root) {
     document.getElementById('foldersSection').classList.remove('hidden');
     document.getElementById('folders').innerHTML = '<p class="muted">这次是复制到输出目录，源目录里的空壳会原样保留，所以没有要清的空文件夹。想连空壳一起清掉，就用 move 模式执行。</p>';
@@ -201,11 +199,12 @@ function applyFilter(){
 async function runDuplicate(){
   const btn = event && event.target; if(btn) btn.disabled = true;
   document.getElementById('dupResult').innerHTML = '<p class="muted">正在第一遍初筛并自动复核（大文件会比较久）...</p>';
+  const prog = trackProgress('dupFill', 'dupProg');
   try{
-    const data = await api('/api/duplicates',{selected_root:root.value.trim(),level:dupLevel.value,verify:true});
+    const data = await api('/api/duplicates',{selected_root:root.value.trim(),level:dupLevel.value,verify:true,progress_key:prog.key});
     lastDup = data; renderDup(data);
   }catch(e){document.getElementById('dupResult').innerHTML = '<p class="error">'+esc(e.message)+'</p>';}
-  finally{ if(btn) btn.disabled = false; }
+  finally{ prog.stop(); if(btn) btn.disabled = false; }
 }
 function renderDup(data){
   const s = data.stats;
@@ -229,7 +228,7 @@ function renderDup(data){
       const box = canDel
         ? '<input type="checkbox" class="delbox" data-path="'+esc(r.path)+'" data-keep="'+esc(g.keep_path)+'" data-hash="'+esc(g.verified_hash)+'" data-bytes="'+r.size+'">'
         : (isKeep ? '<span class="badge ok">保留</span>' : '<span class="muted">—</span>');
-      html += '<tr><td>'+box+'</td><td>'+pathCell(r.path)+'</td><td>'+pathCell(rel)+'</td><td>'+fmtBytes(r.size)+'</td></tr>';
+      html += '<tr data-pick="'+esc(r.path)+'"><td>'+box+'</td><td>'+pathCell(r.path)+'</td><td>'+pathCell(rel)+'</td><td>'+fmtBytes(r.size)+'</td></tr>';
     });
     html += '</tbody></table>';
     if(deletable) html += '<p><button class="danger" style="margin-top:8px" data-g="'+esc(g.duplicate_group_id)+'" onclick="deleteGroup(this.dataset.g)">删除本组其余 '+deletable+' 个副本</button></p>';
@@ -253,22 +252,24 @@ function deleteSelected(){ const entries = collect(''); if(!entries.length){aler
 async function doDelete(entries){
   const delModeValue = delMode.value;
   const bytes = entries.reduce((a,e)=>a+e.bytes,0);
-  const label = delModeValue==='purge' ? '彻底删除（不可撤销）' : '移入隔离区（可撤销）';
+  const label = delModeValue==='purge' ? '彻底删除（不可撤销）' : '移入回收站（可在回收站还原）';
   if(!confirm('将'+label+' '+entries.length+' 个重复副本，约 '+fmtBytes(bytes)+'。\\n每组都保留一份。确定继续？')) return;
   if(delModeValue==='purge' && !confirm('再确认一次：彻底删除后无法恢复，确定继续？')) return;
+  const prog = trackProgress('dupFill', 'dupProg');
   try{
-    const data = await api('/api/duplicates/delete',{selected_root:root.value.trim(),mode:delModeValue,confirm:true,entries:entries.map(e=>({path:e.path,keep_path:e.keep_path,expected_sha256:e.expected_sha256}))});
-    const ok = data.deleted + data.quarantined;
-    let html = '<div class="headline">已处理 '+ok+' 个（隔离 '+data.quarantined+' / 彻底删除 '+data.deleted+'），跳过 '+data.skipped+'，失败 '+data.failed+'。'
-      + (data.trash_dir ? '隔离区：'+esc(data.trash_dir)+'（想反悔可用删除日志撤销）' : '')
+    const data = await api('/api/duplicates/delete',{selected_root:root.value.trim(),mode:delModeValue,confirm:true,progress_key:prog.key,entries:entries.map(e=>({path:e.path,keep_path:e.keep_path,expected_sha256:e.expected_sha256}))});
+    const ok = data.deleted + data.recycled;
+    let html = '<div class="headline">已处理 '+ok+' 个（回收站 '+data.recycled+' / 彻底删除 '+data.deleted+'），跳过 '+data.skipped+'，失败 '+data.failed+'。'
+      + (data.recycled ? '想反悔就去回收站还原——清空回收站之前它们一直占着空间。' : '')
       + '</div>';
     html += '<table><thead><tr><th>文件</th><th>结果</th><th>说明</th></tr></thead><tbody>'
-      + data.rows.map(r=>'<tr><td>'+pathCell(r.path)+'</td><td>'+esc(r.status)+'</td><td>'+esc(issueText(r.code,r.message))+'</td></tr>').join('')+'</tbody></table>';
+      + data.rows.map(r=>'<tr data-pick="'+esc(r.path)+'"><td>'+pathCell(r.path)+'</td><td>'+esc(r.status)+'</td><td>'+esc(issueText(r.code,r.message))+'</td></tr>').join('')+'</tbody></table>';
     if(data.transaction_log) html += '<p class="muted">删除日志：<code>'+esc(data.transaction_log)+'</code></p>';
     document.getElementById('dupTools').innerHTML = '';
     document.getElementById('dupResult').innerHTML = html;
     say('删除完成：成功 '+ok+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
   }catch(e){say(e.message,true);}
+  finally{prog.stop();}
 }
 async function runRepair(){
   const prog = trackProgress('repairFill', 'repairProg');
@@ -340,6 +341,9 @@ function table(rows, cols, heads){
     + rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(Array.isArray(r[c])?r[c].join(' | '):r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
 }
 document.addEventListener('change', e=>{ if(e.target && e.target.classList.contains('delbox')) updateSelNote(); });
+function reveal(path, select){ api('/api/reveal',{path:path,select:!!select}).catch(e=>say(e.message,true)); }
+document.addEventListener('dblclick', e=>{ const el = e.target.closest('[data-open]'); if(el){ e.preventDefault(); reveal(el.dataset.open,false); } });
+document.addEventListener('contextmenu', e=>{ const el = e.target.closest('[data-pick]'); if(el){ e.preventDefault(); reveal(el.dataset.pick,true); } });
 execMode.addEventListener('change', ()=>{ if(lastPlan && lastPlan.display) updateExecPanel(lastPlan.display.readable); });
 fetch('/api/health').then(r=>r.json()).then(rows=>{ document.getElementById('health').innerHTML = table(rows,['name','ok','detail'],['检查项','结果','详情']); });
 function setTab(name){document.querySelectorAll('#tabs .tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!=='panel-'+name));}

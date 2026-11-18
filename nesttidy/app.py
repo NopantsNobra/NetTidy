@@ -67,7 +67,7 @@ def main() -> None:
     move_cmd.add_argument("--confirm", action="store_true")
     move_cmd.add_argument("--no-elevate", action="store_true", help="Windows 下不自动请求管理员权限")
     move_cmd.add_argument("--report-dir")
-    undo_cmd = sub.add_parser("undo", help="根据事务日志尽力撤销 move / quarantine 操作（彻底删除无法撤销）")
+    undo_cmd = sub.add_parser("undo", help="根据事务日志撤销 move（原地整理）；回收站删除请在回收站里还原")
     undo_cmd.add_argument("transaction_log")
 
     sub.add_parser("health", help="运行启动健康检查")
@@ -80,12 +80,11 @@ def main() -> None:
     dup_cmd.add_argument("--no-verify", action="store_true", help="关闭第二遍全量哈希复核（默认开启）")
     dup_cmd.add_argument("--report-dir")
 
-    dedupe_cmd = sub.add_parser("dedupe", help="删除重复副本：默认移入隔离区（可撤销），--mode purge 才彻底删除")
+    dedupe_cmd = sub.add_parser("dedupe", help="删除重复副本：默认移入回收站（可在回收站还原），--mode purge 才彻底删除")
     dedupe_cmd.add_argument("selected_root")
     dedupe_cmd.add_argument("--level", choices=["fast", "standard", "deep"], default="standard")
     dedupe_cmd.add_argument("--groups", help="只处理这些组，逗号分隔，例如 dup-1,dup-3；留空表示全部已复核组")
-    dedupe_cmd.add_argument("--mode", choices=["quarantine", "purge"], default="quarantine")
-    dedupe_cmd.add_argument("--trash-dir")
+    dedupe_cmd.add_argument("--mode", choices=["recycle", "purge"], default="recycle")
     dedupe_cmd.add_argument("--workers", type=int, default=4)
     dedupe_cmd.add_argument("--report-dir", help="删除日志落到这里（默认 理巢报告/ 下的新目录）")
     dedupe_cmd.add_argument("--confirm", action="store_true", help="确认执行删除（必须显式给出）")
@@ -156,7 +155,6 @@ def main() -> None:
             entries,
             mode=args.mode,
             confirm=args.confirm,
-            trash_dir=args.trash_dir,
             transaction_log=str(Path(args.report_dir or new_report_dir()).resolve() / "delete_log.jsonl"),
         )
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))

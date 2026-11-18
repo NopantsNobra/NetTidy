@@ -111,13 +111,7 @@ def collect_dir_paths(tree: VDir) -> list[Path]:
 
 
 def collect_parent_paths(targets: list[Path]) -> set[Path]:
-    """一次性收集所有目标路径的祖先目录。
-
-    与原先逐个目标构造 ``target.parents`` 的写法等价，但只遍历一次目标列表。
-    这里刻意不调用 ``resolve()``：调用方拿到的 ``resolved`` 是已解析路径，
-    ``Path`` 的哈希/相等语义与原 ``resolved in target.parents`` 完全一致，
-    额外 resolve 反而可能改变大小写口径、导致判定结果漂移。
-    """
+    """一次性收集所有目标路径的祖先目录。"""
     parents: set[Path] = set()
     for target in targets:
         parents.update(target.parents)
@@ -130,11 +124,7 @@ def scan_residual_dirs(
     root: Path,
     removed_dirs: set[Path],
 ) -> None:
-    """登记「执行后不再有文件落入」的扫描目录（原地修改 removed_dirs）。
-
-    先把所有目标父目录收进集合，再对每个目录做集合成员判断：O(目录数 + 文件数 x 路径深度)。
-    判定口径、跳过条件与写入时机与原实现逐条一致（资源根跳过、已登记跳过、循环内逐步写入）。
-    """
+    """登记「执行后不再有文件落入」的扫描目录（原地修改 removed_dirs）。"""
     occupied = collect_parent_paths(local_targets)
     for scanned in scanned_dirs:
         resolved = scanned.resolve()

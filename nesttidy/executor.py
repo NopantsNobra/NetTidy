@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import shutil
@@ -7,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import QUARANTINE_DIR_PREFIX, REPORT_DIR_NAME
+from .config import REPORT_DIR_NAME
 from .duplicate import full_sha256
 from .model import ExecutionIssue, Operation, OperationPlan
 from .planner import issue, validate_copy_output
@@ -34,12 +35,11 @@ class DeleteEntry:
 @dataclass
 class DeleteResult:
     deleted: int = 0
-    quarantined: int = 0
+    recycled: int = 0
     skipped: int = 0
     failed: int = 0
     freed_bytes: int = 0
-    quarantined_bytes: int = 0
-    trash_dir: str | None = None
+    recycled_bytes: int = 0
     transaction_log: str | None = None
     rows: list[dict] = field(default_factory=list)
     issues: list[ExecutionIssue] = field(default_factory=list)
@@ -47,12 +47,11 @@ class DeleteResult:
     def to_dict(self) -> dict:
         return {
             "deleted": self.deleted,
-            "quarantined": self.quarantined,
+            "recycled": self.recycled,
             "skipped": self.skipped,
             "failed": self.failed,
             "freed_bytes": self.freed_bytes,
-            "quarantined_bytes": self.quarantined_bytes,
-            "trash_dir": self.trash_dir,
+            "recycled_bytes": self.recycled_bytes,
             "transaction_log": self.transaction_log,
             "rows": self.rows,
             "issues": [row.to_dict() for row in self.issues],
@@ -64,17 +63,7 @@ class OutputBoundaryError(ValueError):
 
 
 def ensure_target_within_output(target: Path, output_root: Path) -> None:
-    """copy 写入前复查目标是否仍在用户选择的输出根内。
-
-    计划期 `validate_copy_output()` 只 resolve 一次。若输出根或其子目录在计划生成后
-    被替换成 junction / symlink，`shutil.copy2` 会把文件写到边界之外，执行仍报成功
-    （实测：目标父目录换成 junction 后，文件落到 escape/a.txt，completed=1 failed=0）。
-
-    复查两条：① 输出根自身未被重解析点重定向；② 目标父目录解析后仍落在根内。
-
-    局限：检查与 copy2 之间仍有 TOCTOU 窗口，此处只缩小窗口，**不消除竞态**。
-    完全消除需要目录句柄 + 相对路径打开，标准库在 Windows 上做不到。
-    """
+    """copy 写入前复查目标是否仍在用户选择的输出根内。"""
     root_abs = Path(os.path.abspath(output_root))
     if output_root.resolve() != root_abs:
         raise OutputBoundaryError(f"copy 输出根已被重定向: {output_root}")
@@ -262,25 +251,38 @@ def classify_exception(exc: Exception) -> str:
     return "EXECUTION_FAILED"
 
 
+def send_to_recycle_bin(path: Path) -> bool:
+    """把单个文件交给 Windows 回收站（FOF_ALLOWUNDO + 不弹窗），回收站里可自行还原。"""
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", ctypes.c_void_p),
+            ("wFunc", ctypes.c_uint),
+            ("pFrom", ctypes.c_wchar_p),
+            ("pTo", ctypes.c_wchar_p),
+            ("fFlags", ctypes.c_ushort),
+            ("fAnyOperationsAborted", ctypes.c_bool),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", ctypes.c_wchar_p),
+        ]
+
+    flags = 0x0004 | 0x0010 | 0x0040 | 0x0400  # SILENT | NOCONFIRMATION | ALLOWUNDO | NOERRORUI
+    op = SHFILEOPSTRUCTW(None, 3, str(path) + "\0", None, flags, False, None, None)
+    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    return code == 0 and not op.fAnyOperationsAborted and not path.exists()
+
+
 def delete_duplicates(
     root: str,
     entries: list[DeleteEntry],
-    mode: str = "quarantine",
+    mode: str = "recycle",
     confirm: bool = False,
-    trash_dir: str | None = None,
     transaction_log: str | None = None,
+    progress=None,
 ) -> DeleteResult:
-    """删除重复副本：执行层的唯一入口，所有前置校验在此，不在 UI。
-
-    校验顺序不可调换：① 保留项不得在待删集合里 ② 待删文件必须在资源根内
-    ③ 不是链接/目录 ④ 与保留项全文哈希一致 ⑤ 与诊断时的哈希一致。
-    任何一条不成立只跳过该条，绝不「按过期诊断删文件」。
-
-    mode=quarantine 移到资源根之外的隔离区（可撤销，同盘 move 很快，但不立即释放空间）；
-    mode=purge 直接删除（释放空间，不可撤销，需 confirm）。
-    """
-    if mode not in {"quarantine", "purge"}:
-        raise ValueError("删除方式必须是 quarantine（移入隔离区）或 purge（彻底删除）")
+    """删除重复副本：执行层的唯一入口，所有前置校验在此，不在 UI。"""
+    mode = "recycle" if mode == "quarantine" else mode
+    if mode not in {"recycle", "purge"}:
+        raise ValueError("删除方式必须是 recycle（移入回收站）或 purge（彻底删除）")
     if mode == "purge" and not confirm:
         raise ValueError("彻底删除必须显式确认")
     base = Path(root).resolve()
@@ -299,15 +301,14 @@ def delete_duplicates(
     tx_path = Path(transaction_log).resolve() if transaction_log else base.parent / REPORT_DIR_NAME / f"删除日志_{stamp}.jsonl"
     tx_path.parent.mkdir(parents=True, exist_ok=True)
     result.transaction_log = str(tx_path)
-    trash = Path(trash_dir).resolve() if trash_dir else base.parent / f"{QUARANTINE_DIR_PREFIX}{stamp}"
-    if mode == "quarantine":
-        result.trash_dir = str(trash)
 
     handled: set[str] = set()
-    for entry in entries:
+    for index, entry in enumerate(entries, 1):
         victim = Path(entry.path).resolve()
         keep = Path(entry.keep_path).resolve()
         key = str(victim)
+        if progress:
+            progress(index, len(entries), victim.name)
         if key in handled:
             result.skipped += 1
             result.rows.append(_delete_row(victim, "skipped", "DUPLICATE_REQUEST", "同一文件在本批请求里出现多次", 0))
@@ -328,15 +329,13 @@ def delete_duplicates(
                 result.deleted += 1
                 result.freed_bytes += size
                 result.rows.append(_delete_row(victim, "deleted", "OK", "已彻底删除", size))
+            elif send_to_recycle_bin(victim):
+                write_tx(tx_path, {"action": "recycle", "source": str(victim), "status": "done"})
+                result.recycled += 1
+                result.recycled_bytes += size
+                result.rows.append(_delete_row(victim, "recycled", "OK", "已移入回收站（可在回收站还原；清空回收站才真正释放空间）", size))
             else:
-                target = _quarantine_target(trash, base, victim)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                write_tx(tx_path, {"action": "quarantine", "source": str(victim), "target": str(target), "status": "started"})
-                shutil.move(str(victim), str(target))
-                write_tx(tx_path, {"action": "quarantine", "source": str(victim), "target": str(target), "status": "done"})
-                result.quarantined += 1
-                result.quarantined_bytes += size
-                result.rows.append(_delete_row(victim, "quarantined", "OK", f"已移入隔离区: {target}", size))
+                raise OSError("回收站操作未生效")
         except OSError as exc:
             result.failed += 1
             code = classify_exception(exc)
@@ -365,17 +364,6 @@ def _delete_precheck(victim: Path, keep: Path, base: Path, expected_sha256: str)
     if expected_sha256 and expected_sha256 != actual:
         return "CONTENT_CHANGED", "诊断之后文件已变化，拒绝删除"
     return "", ""
-
-
-def _quarantine_target(trash: Path, base: Path, victim: Path) -> Path:
-    target = trash / victim.relative_to(base)
-    if not target.exists():
-        return target
-    for index in range(1, 100):
-        candidate = target.with_name(f"{target.stem}__{index}{target.suffix}")
-        if not candidate.exists():
-            return candidate
-    raise FileExistsError(f"隔离区内同名文件过多: {target}")
 
 
 def _delete_row(victim: Path, status: str, code: str, message: str, size: int) -> dict:

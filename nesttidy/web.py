@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import json
 import socket
+import subprocess
 import threading
 from datetime import datetime
 from http import HTTPStatus
@@ -103,6 +104,15 @@ def _move_log_path(plan: OperationPlan) -> Path:
     return base.parent / REPORT_DIR_NAME / f"事务日志_{stamp}.jsonl"
 
 
+def reveal_in_explorer(raw: str, select: bool) -> str:
+    """在资源管理器里定位：select=True 选中这个文件，否则打开它所在的文件夹。"""
+    path = Path(str(raw).strip()).resolve()
+    if not path.exists():
+        raise ValueError(f"路径不存在: {path}")
+    subprocess.Popen(["explorer", f"/select,{path}"] if select else ["explorer", str(path if path.is_dir() else path.parent)])
+    return str(path)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         return
@@ -136,13 +146,17 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/duplicates":
                 self.send_json(self.detect_duplicates_payload(body))
             elif self.path == "/api/duplicates/delete":
+                _, progress = _track(body)
                 result = delete_duplicates(
                     body.get("selected_root", ""),
                     _delete_entries(body),
-                    mode=body.get("mode", "quarantine"),
+                    mode=body.get("mode", "recycle"),
                     confirm=bool(body.get("confirm")),
+                    progress=progress,
                 )
                 self.send_json(result.to_dict())
+            elif self.path == "/api/reveal":
+                self.send_json({"opened": reveal_in_explorer(body.get("path", ""), bool(body.get("select")))})
             elif self.path == "/api/undo-delete":
                 log_path = body.get("transaction_log")
                 if not isinstance(log_path, str) or not log_path:
@@ -193,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
         root = body.get("selected_root", "")
         level = body.get("level", "standard")
         verify = body.get("verify", True) is not False
-        rows = detect_duplicates(root, level, verify=verify)
+        rows = detect_duplicates(root, level, verify=verify, progress=_track(body)[1])
         return {
             "selected_root": str(Path(root).resolve()) if root else "",
             "phase1_level": level,

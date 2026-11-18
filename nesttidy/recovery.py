@@ -43,6 +43,9 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
     for key in reversed(order):
         item = collected[key]
         action = item.get("action", "")
+        if action == "recycle":
+            results.append(UndoResult(action, str(item.get("source", "")), "", "skipped", "已移入回收站：在回收站里右键「还原」即可放回原位置"))
+            continue
         if action not in {"move", "quarantine"}:
             # delete（彻底删除）没有现场可回收，必须显式说清，不能让它静默混在 skipped 里。
             note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "该操作不支持自动撤销"

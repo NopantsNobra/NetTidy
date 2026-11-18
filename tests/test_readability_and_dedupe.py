@@ -154,26 +154,24 @@ class DeleteDuplicateTests(unittest.TestCase):
         group = group_rows(detect_duplicates(str(root), "deep"))[0]
         return [DeleteEntry(path=path, keep_path=group.keep_path, expected_sha256=group.verified_hash) for path in group.deletable_paths]
 
-    def test_quarantine_keeps_one_copy_and_is_undoable(self) -> None:
+    def test_recycle_bin_keeps_one_copy_and_is_not_auto_undoable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             entries = self._twins(base)
             victim, keep = Path(entries[0].path), Path(entries[0].keep_path)
             log = base / "delete_log.jsonl"
 
-            result = delete_duplicates(str(base / "资源"), entries, mode="quarantine", transaction_log=str(log))
+            result = delete_duplicates(str(base / "资源"), entries, mode="recycle", transaction_log=str(log))
 
-            self.assertEqual((result.quarantined, result.failed, result.freed_bytes), (1, 0, 0))
-            self.assertFalse(victim.exists())
+            self.assertEqual((result.recycled, result.failed, result.freed_bytes), (1, 0, 0))
+            self.assertFalse(victim.exists(), "副本必须已经从原位置消失")
             self.assertTrue(keep.exists(), "每组必须保留一份")
-            trash = Path(result.trash_dir)
-            self.assertFalse(trash.is_relative_to(base / "资源"), "隔离区必须落在被整理目录之外")
-            self.assertTrue((trash / victim.relative_to(base / "资源")).exists())
 
             undo = undo_transaction(str(log))
 
-            self.assertEqual([row.status for row in undo], ["ok"])
-            self.assertTrue(victim.exists(), "隔离副本必须能原路放回")
+            self.assertEqual([row.status for row in undo], ["skipped"])
+            self.assertIn("回收站", undo[0].message)
+            self.assertFalse(victim.exists(), "回收站还原由资源管理器完成，程序不代劳")
 
     def test_purge_requires_confirm_and_frees_space(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,6 +378,48 @@ class ProgressAndRepairTests(unittest.TestCase):
 
         for marker in ('id="execFill"', 'id="repairFill"', "trackProgress(", "/api/progress?key=", "正常项略"):
             self.assertIn(marker, INDEX_HTML)
+
+    def test_duplicate_diagnosis_and_delete_report_progress(self) -> None:
+        from nesttidy.duplicate import detect_duplicates
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "素材"
+            touch(root / "A" / "same.txt", "dup-content")
+            touch(root / "B" / "same.txt", "dup-content")
+            touch(root / "C" / "other.txt", "other")
+            seen: list[tuple[int, int]] = []
+
+            rows = detect_duplicates(str(root), "standard", progress=lambda done, total, label="": seen.append((done, total)))
+            self.assertTrue(seen, "诊断过程必须上报进度")
+            self.assertEqual(seen[-1][0], seen[-1][1])
+            group = group_rows(rows)[0]
+
+            deleted: list[tuple[int, int]] = []
+            entries = [DeleteEntry(path=path, keep_path=group.keep_path, expected_sha256=group.verified_hash) for path in group.deletable_paths]
+            delete_duplicates(str(root), entries, mode="recycle", transaction_log=str(Path(tmp) / "log.jsonl"),
+                              progress=lambda done, total, label="": deleted.append((done, total)))
+            self.assertEqual(deleted, [(1, 1)])
+
+    def test_reveal_endpoint_rejects_missing_path(self) -> None:
+        from urllib.error import HTTPError
+
+        port = self._serve()
+        with self.assertRaises(HTTPError) as ctx:
+            self._post(port, "/api/reveal", {"path": str(Path(tempfile.gettempdir()) / "理巢不存在_xyz"), "select": True})
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_page_offers_explorer_jumps_for_duplicates_and_folders(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        self.assertIn('id="dupFill"', INDEX_HTML)
+        self.assertIn('id="dupProg"', INDEX_HTML)
+        self.assertIn("data-pick=", INDEX_HTML)
+        self.assertIn("data-open=", INDEX_HTML)
+        self.assertIn("'/api/reveal'", INDEX_HTML)
+        self.assertIn("addEventListener('contextmenu'", INDEX_HTML)
+        self.assertIn("addEventListener('dblclick'", INDEX_HTML)
+        self.assertIn("移入回收站", INDEX_HTML)
+        self.assertNotIn('value="quarantine"', INDEX_HTML)
 
     def test_each_block_puts_its_controls_above_its_results(self) -> None:
         from nesttidy.ui import INDEX_HTML

@@ -57,14 +57,10 @@ class DuplicateGroup:
         return asdict(self)
 
 
-def detect_duplicates(root: str, level: str = "standard", workers: int = 4, verify: bool = True) -> list[DuplicateRow]:
-    """两阶段重复检测：第一遍按 level 初筛，第二遍默认对候选组做全文件哈希复核。
-
-    第一遍用 fast 只比文件名、standard 只比首尾 1MB——这两种口径都会把
-    「大小相同、首尾相同、中段不同」的文件误判成重复。verify=True 时自动补一遍
-    全文件 SHA-256，复核不一致的成员标 conflict_note 且永不进入可删集合。
-    level="deep" 时第一遍已是全量哈希，不再重复计算。
-    """
+def detect_duplicates(
+    root: str, level: str = "standard", workers: int = 4, verify: bool = True, progress=None
+) -> list[DuplicateRow]:
+    """两阶段重复检测：第一遍按 level 初筛，第二遍默认对候选组做全文件哈希复核。"""
     if level not in LEVELS:
         raise ValueError("重复文件检测级别必须是 fast、standard 或 deep")
     base = Path(root).resolve()
@@ -79,7 +75,10 @@ def detect_duplicates(root: str, level: str = "standard", workers: int = 4, veri
             continue
     rows: list[DuplicateRow] = []
     group_index = 1
-    for size in sorted(by_size):
+    sizes = sorted(by_size)
+    for number, size in enumerate(sizes, 1):
+        if progress:
+            progress(number, len(sizes), f"{size} 字节这一组")
         group = sorted(by_size[size], key=lambda p: stable_key(p, "file"))
         if len(group) < 2:
             if size == 0:
@@ -158,11 +157,7 @@ def _clusters(group: list[Path], level: str, workers: int) -> list[list[Path]]:
 def _verify_cluster(
     cluster: list[Path], level: str, workers: int, verify: bool
 ) -> tuple[list[Path], list[Path], str, bool]:
-    """第二遍复核：返回（确认重复的成员、复核剔除的成员、确认哈希、是否已复核确认）。
-
-    只有拿到「至少两个成员全文哈希一致」才算确认；初筛出来的组如果全文哈希
-    两两不同，说明整组都是误判，全体进剔除集合，谁都拿不到可删资格。
-    """
+    """第二遍复核：返回（确认重复的成员、复核剔除的成员、确认哈希、是否已复核确认）。"""
     if not verify:
         return cluster, [], "", False
     if level == "deep":

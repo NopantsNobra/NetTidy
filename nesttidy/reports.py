@@ -88,12 +88,7 @@ def _inside(path: str, roots: list[str]) -> bool:
 
 
 def plan_display_stats(plan: OperationPlan) -> dict:
-    """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。
-
-    口径：R0 = rmdir 操作数；R1–R5 = mappings[].rule_trace 行首命中条目（按条目去重）；
-    R5 样例取 conflict_resolution_trace 含 R5 的前 5 条（name_cleaning_trace 不含改名后名字）；
-    边界按 copy→output_root / 其余→resource_roots 逐条校验目标，P0 是无痕迹的不变量。
-    """
+    """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。"""
     counts: dict[str, int] = {code: 0 for code in _RULE_CODES}
     counts["R0"] = sum(1 for op in plan.operations if op.op_type == "rmdir")
     for mapping in plan.mappings:
@@ -239,7 +234,9 @@ def readable_plan_view(plan: OperationPlan) -> dict:
         folders.append(
             {
                 "root_name": Path(root).name if root else "（资源根之外）",
+                "root_path": root,
                 "path": _rel(op.source_path, root) if root else op.source_path,
+                "full_path": op.source_path,
                 "depth": _depth(op.source_path, root) if root else 0,
             }
         )

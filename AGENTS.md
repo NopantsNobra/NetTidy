@@ -1,4 +1,4 @@
-﻿# AGENTS.md — 理巢 NestTidy 项目规范与执行指令
+# AGENTS.md — 理巢 NestTidy 项目规范与执行指令
 
 > 版本：规范 v1.0 ｜ 制定日期：2026-10-26
 > 适用对象：在本项目中工作的任何人或 AI agent
@@ -17,7 +17,7 @@
 | 代码规模 | 用 `wc -l nesttidy/*.py tests/*.py` 与 `python -m unittest discover -s tests` 复算，不写死快照 |
 | 技术栈 | Python 3.11+，**零第三方依赖**（纯标准库） |
 | 形态 | 本地 Web UI（绑 127.0.0.1）+ CLI，SQLite 存历史 |
-| 版本 | `1.2.3`，规则版本 `P0-R0-R5-v3` |
+| 版本 | `1.3.0`，规则版本 `P0-R0-R5-v3` |
 | 唯一交付平台 | Windows |
 
 ### 开工必读（三份，不要多读）
@@ -292,9 +292,9 @@ python -m unittest discover -s tests        # ① Windows 全绿
 | **执行层可信度** | copy 交出完整副本 / 计划与模式一致 / 失败必须留痕 / 不写出输出根 | ✅ 前三项 v0.5.1 起、第四项 v0.5.2 起成立（逐文件复查重解析点）；**检查与 `copy2` 之间仍有 TOCTOU 窗口，此处只缩小窗口、不消除竞态** |
 | Windows 回归 | — | ✅ 已在 Windows 跑通（M0/M1.6/M2，2026-11-09） |
 | 手册承诺项（100 万文件 / 管理员提权） | 手册声明 | ⚠️ 部分未实机验证：**「中文路径未做长路径实测」这一历史问题已由 M3 消除**（不带前缀 root 353 / file 372 字符、带 `\\?\` 前缀 357 / 378 字符，实测通过；`LongPathsEnabled=1` 经 PowerShell 查证，属环境前提）；大目录 100,000 真实文件已实测达标（生成 380.158s / 规划 342.692s / Python 层峰值 109.54 MB，2026-11-10）；ADS 经 M3 定性为预期保真行为、非缺陷，不改实现；50 万 / 100 万级未实测；提权代码**已实现**（v0.6.0 起 `app.relaunch_as_admin` 走 `ShellExecuteW(runas)`，elevation.py 已并入 app.py），但提权子进程路径从未在真实管理员权限下跑通；AGENTS.md 4.4 要求的长路径 / ADS unittest 用例本轮未新增 |
-| undo | 已实现 | ⚠️ 回滚 move（含 `done` 缺失兜底）与 quarantine（把副本放回原路径）；空目录删除不重建；purge 彻底删除**不可撤销**，undo 时会明确报出`彻底删除无法撤销`；换盘 quarantine（放回收站卷）无删除日志、无法 undo |
-| **重复副本删除** | v0.6.0 新增 | ✅ 走 `executor.delete_duplicates`，唯一结构写入入口；默认 quarantine（同盘 move，可 undo），purge 需 `confirm=true` 二次确认；删除前逐项硬校验（保留项在、源在、非同一文件、全文哈希与保留项一致、与诊断时哈希一致），任一不满足即 skip 并留痕；每个副本一条 tx 记录 |
-| **两阶段重复比对** | v0.6.0 新增 | ✅ 第一遍按 `fast`/`standard`/`deep` 初筛，自动第二遍全文件 SHA-256 复核；复核后最大组只剩 1 个成员 → 判为误判，组 id 加 `-recheck`、`verified=false`、`conflict_note` 标明「首尾相同但全文哈希不同」，**永不进可删集合**；`--no-verify` 可显式跳过复核（可删集合保留，删除时仍重算全文哈希），行内标「未做第二遍复核」 |
+| undo | 已实现 | ⚠️ 回滚 move（含 `done` 缺失兜底）；v1.3.0 起重复副本走 Windows 回收站，`undo` 对 recycle 行报「已移入回收站：在回收站里右键还原」，对 purge 报`彻底删除无法撤销`；空目录删除不重建 |
+| **重复副本删除** | v0.6.0 新增 | ✅ 走 `executor.delete_duplicates`，唯一结构写入入口；默认 `recycle`（`send_to_recycle_bin`：`SHFileOperationW` + `FOF_ALLOWUNDO/SILENT/NOCONFIRMATION/NOERRORUI`，删完复查文件已不在），purge 需 `confirm=true` 二次确认；删除前逐项硬校验（保留项在、源在、非同一文件、全文哈希与保留项一致、与诊断时哈希一致），任一不满足即 skip 并留痕；每个副本一条 tx 记录；带 `progress` 回调 |
+| **两阶段重复比对** | v0.6.0 新增 | ✅ 诊断过程带 `progress` 回调（按大小分组上报）；第一遍按 `fast`/`standard`/`deep` 初筛，自动第二遍全文件 SHA-256 复核；复核后最大组只剩 1 个成员 → 判为误判，组 id 加 `-recheck`、`verified=false`、`conflict_note` 标明「首尾相同但全文哈希不同」，**永不进可删集合**；`--no-verify` 可显式跳过复核（可删集合保留，删除时仍重算全文哈希），行内标「未做第二遍复核」 |
 | 文件名清洗后再冲突 | 审计曾标"已验证" | ✅ M0 已修，虚拟树用例覆盖；截断撞名 0.5.1 起有短码兜底 |
 | 并发（Web） | — | ✅ v0.5.2 起按 `plan_id` 索引冻结计划（`PlanRegistry`），多标签页各执行各的；此前模块级 `LAST_PLAN` 会被后一次预览覆盖 |
 | 跨平台 | — | ❌ 仅 Windows，其他平台从未验证 |

@@ -280,12 +280,7 @@ def hashed_name(base_name: str, original_path: Path) -> str:
 
 
 def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
-    """取 original_path 由近及远 depth 个祖先，前缀化基础名。
-
-    前缀是「祖先链」的完整表达，第 N 轮必须**替换**前 N-1 轮的前缀，而不是续接：
-    cover.jpg → A-cover.jpg → Group1-A-cover.jpg（正确）
-    cover.jpg → A-cover.jpg → Group1-A-A-cover.jpg（错误，A 的信息重复）
-    """
+    """取 original_path 由近及远 depth 个祖先，前缀化基础名。"""
     parents = [part for part in original_path.parent.parts if part]
     selected = list(reversed(parents))[:depth]
     prefix = "-".join(reversed(selected))
