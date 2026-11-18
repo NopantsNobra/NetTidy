@@ -24,27 +24,20 @@ h3{font-size:14px;margin:14px 0 6px}
 label{display:block;font-weight:600;margin:10px 0 5px;font-size:13px}
 input[type=text],select{width:100%;padding:9px 11px;border:1px solid #b8bfbd;border-radius:6px;background:#fff;font-size:13px}
 button{padding:9px 13px;border:0;border-radius:6px;background:var(--ok);color:#fff;cursor:pointer;font-size:13px;margin:4px 6px 4px 0}
-button.secondary{background:#495057}
-button.danger{background:#a4161a}
-button.ghost{background:#e9efec;color:#174b4f}
+button.secondary{background:#495057} button.danger{background:#a4161a} button.ghost{background:#e9efec;color:#174b4f}
 button:disabled{background:#c3cbc8;cursor:not-allowed}
 table{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px}
 th,td{padding:7px 8px;border-bottom:1px solid #eef1ef;text-align:left;vertical-align:top}
 th{background:#f2f6f4;font-weight:600;white-space:nowrap}
 code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:break-all}
-.row{display:flex;gap:12px;flex-wrap:wrap}
-.row>div{flex:1 1 240px}
+.row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1 1 240px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px}
 .card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fbfcfb}
-.card b{display:block;font-size:20px;line-height:1.2}
-.card span{color:var(--mute);font-size:12px}
-.muted{color:var(--mute)}
+.card b{display:block;font-size:20px;line-height:1.2} .card span{color:var(--mute);font-size:12px}
+.muted{color:var(--mute)} .error{color:var(--bad)} .ok{color:var(--ok)}
 .headline{background:#eef7f3;border-left:4px solid var(--ok);padding:10px 12px;border-radius:6px;font-size:14px}
-.error{color:var(--bad)}
-.ok{color:var(--ok)}
 .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid;margin-right:6px}
-.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1}
-.badge.warn{color:#7a5200;border-color:#e2c98a;background:#fdf6e3}
+.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1} .badge.warn{color:#7a5200;border-color:#e2c98a;background:#fdf6e3}
 .badge.bad{color:#9b1c1c;border-color:#e3a8a8;background:#fdeeee}
 .chips{margin:8px 0}
 .chip{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:14px;margin:0 6px 6px 0;cursor:pointer;font-size:12px;background:#fff}
@@ -53,126 +46,55 @@ code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:brea
 .group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px}
 .group h4{margin:0 0 6px;font-size:13px}
 details summary{cursor:pointer;font-weight:600;padding:4px 0}
-.filtered{display:none}
-.hidden{display:none}
+.filtered{display:none} .hidden{display:none}
 pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;margin:6px 0}
 </style>
 </head>
 <body>
-<header>
-  <h1>理巢 NestTidy</h1>
-  <p>本地离线资源目录剥壳整理 · 试运行只读：先看清「哪些文件会换位置」，再决定复制、移动，或者删掉多余副本；每一步都要你亲手点按钮</p>
-</header>
+<header><h1>理巢 NestTidy</h1>
+  <p>本地离线资源目录剥壳整理 · 试运行只读：先看清「哪些文件会换位置」，再决定复制、移动，或者删掉多余副本；每一步都要你亲手点按钮</p></header>
 <main>
-<section>
-  <h2>第 1 步 · 选目录并试运行</h2>
+<section><h2>第 1 步 · 选目录并试运行</h2>
   <div class="row">
-    <div>
-      <label>源目录（要整理哪个文件夹）</label>
-      <input type="text" id="root" placeholder="把文件夹路径粘贴到这里，例如 F:\\私人定制\\【系列作品】">
-    </div>
-    <div>
-      <label>整理单位</label>
-      <select id="mode">
-        <option value="batch">批量：这个文件夹里每个子文件夹都是独立资源包，各自整理</option>
-        <option value="single">单个：把这个文件夹本身当一个资源包整理</option>
-      </select>
-    </div>
+    <div><label>源目录（要整理哪个文件夹）</label><input type="text" id="root" placeholder="把文件夹路径粘贴到这里，例如 F:\\私人定制\\【系列作品】"></div>
+    <div><label>整理单位</label><select id="mode"><option value="batch">批量：这个文件夹里每个子文件夹都是独立资源包，各自整理</option><option value="single">单个：把这个文件夹本身当一个资源包整理</option></select></div>
   </div>
-  <label>输出目录（只有"安全复制"才需要；留空表示只做移动式整理）</label>
+  <label>输出目录（只有「复制到输出目录」需要；原地整理留空）</label>
   <input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118">
-  <p>
-    <button onclick="makePlan()">试运行：看看会变成什么样</button>
-    <button class="secondary" onclick="exportReport()">导出报告文件</button>
-    <button class="secondary" onclick="makeManual()">生成 PDF 手册</button>
-  </p>
+  <label>执行方式</label>
+  <select id="execMode"><option value="move">原地整理：文件在资源包内换位置，空壳文件夹随之清掉（源目录会变）</option><option value="copy">复制到输出目录：源目录一动不动，另存一份整理好的副本（占双份空间）</option></select>
+  <p><button onclick="makePlan()">试运行：看看会变成什么样</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button></p>
   <p id="msg" class="muted">还没有生成计划。</p>
 </section>
-
-<section id="summarySection" class="hidden">
-  <h2>第 2 步 · 会发生什么（大白话版）</h2>
-  <div class="headline" id="headline"></div>
-  <div class="cards" id="cards"></div>
-</section>
-
-<section id="previewSection" class="hidden">
-  <h2>整理前 → 整理后：逐个文件对照</h2>
+<section id="summarySection" class="hidden"><h2>第 2 步 · 会发生什么（大白话版）</h2>
+  <div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
+<section id="previewSection" class="hidden"><h2>整理前 → 整理后：逐个文件对照</h2>
   <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。点下面的筛选条可以只看会变的文件。</p>
-  <div class="chips" id="filters"></div>
-  <div id="preview"></div>
-</section>
-
-<section id="foldersSection" class="hidden">
-  <h2>会被清掉的空文件夹</h2>
-  <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p>
-  <div id="folders"></div>
-</section>
-
-<section id="dupSection">
-  <h2>第 3 步 · 重复文件诊断（两阶段自动复核）</h2>
+  <div class="chips" id="filters"></div><div id="preview"></div></section>
+<section id="foldersSection" class="hidden"><h2>会被清掉的空文件夹</h2>
+  <p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders"></div></section>
+<section id="execSection" class="hidden"><h2>第 3 步 · 真正执行</h2>
+  <p class="muted" id="execHint"></p><p><button id="execBtn" onclick="executePlan()">确认执行</button></p><div id="execResult"></div></section>
+<section id="dupSection"><h2>第 4 步 · 重复文件诊断（两阶段自动复核）</h2>
   <p class="muted">第一遍按你选的级别快速初筛，程序会自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件会被标成「复核剔除」，永远不进入可删名单。看到结果后，逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。</p>
   <div class="row">
-    <div>
-      <label>第一遍初筛口径</label>
-      <select id="dupLevel">
-        <option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option>
-        <option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option>
-        <option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option>
-      </select>
-    </div>
-    <div>
-      <label>删除方式</label>
-      <select id="delMode">
-        <option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option>
-        <option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option>
-      </select>
-    </div>
+    <div><label>第一遍初筛口径</label><select id="dupLevel"><option value="standard">标准：大小 + 首尾各 1MB 哈希（推荐）</option><option value="fast">快速：大小 + 文件名（最快，误判最多，靠第二遍兜底）</option><option value="deep">深度：直接全文件哈希（最慢，不重复计算）</option></select></div>
+    <div><label>删除方式</label><select id="delMode"><option value="quarantine">移入隔离区（可撤销，同盘瞬间完成；清空隔离区才真正释放空间）</option><option value="purge">彻底删除（立即释放空间，不可撤销，需二次确认）</option></select></div>
   </div>
-  <p><button onclick="runDuplicate()">诊断重复文件</button></p>
-  <div id="dupResult"><p class="muted">尚未诊断。</p></div>
-</section>
-
-<section>
-  <details>
-    <summary>权限修复（可选）</summary>
-    <p>
-      <label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label>
-      <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label>
-      <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label>
-      <button class="secondary" onclick="runRepair()">执行所选权限修复</button>
-    </p>
-    <div id="diagnostics"></div>
-  </details>
-</section>
-
-<section>
-  <details>
-    <summary>异常项、规则口径、历史与健康检查</summary>
-    <h3>异常项（这些文件不会被动）</h3>
-    <div id="issues"></div>
-    <h3>规则分类计数与边界检查</h3>
-    <div id="ruleStats"></div>
-    <div id="boundaryNote"></div>
-    <h3>执行安全复制</h3>
-    <p><button onclick="executeCopy()">按当前计划执行安全复制</button></p>
-    <h3>历史</h3>
-    <p><button class="secondary" onclick="loadHistory()">查看历史</button></p>
-    <h3>健康检查</h3>
-    <div id="health"></div>
-  </details>
-</section>
+  <p><button onclick="runDuplicate()">诊断重复文件</button></p><div id="dupResult"><p class="muted">尚未诊断。</p></div></section>
+<section><details><summary>权限修复（可选）</summary>
+  <p><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label> <label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label> <label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label> <button class="secondary" onclick="runRepair()">执行所选权限修复</button></p>
+  <div id="diagnostics"></div></details></section>
+<section><details><summary>异常项、规则口径、历史与健康检查</summary>
+  <h3>异常项（这些文件不会被动）</h3><div id="issues"></div>
+  <h3>规则分类计数与边界检查</h3><div id="ruleStats"></div><div id="boundaryNote"></div>
+  <h3>历史</h3><p><button class="secondary" onclick="loadHistory()">查看历史</button></p>
+  <h3>健康检查</h3><div id="health"></div></details></section>
 </main>
 <script>
-let currentPlanId = null;
-let lastPlan = null;
-let lastDup = null;
-let filterMode = 'all';
-
-const root = document.getElementById('root');
-const mode = document.getElementById('mode');
-const output = document.getElementById('output');
-const dupLevel = document.getElementById('dupLevel');
-const delMode = document.getElementById('delMode');
+let currentPlanId = null, lastPlan = null, lastDup = null, filterMode = 'all';
+const root = document.getElementById('root'), mode = document.getElementById('mode'), output = document.getElementById('output');
+const execMode = document.getElementById('execMode'), dupLevel = document.getElementById('dupLevel'), delMode = document.getElementById('delMode');
 const fixReadonly = document.getElementById('fixReadonly');
 const fixHidden = document.getElementById('fixHidden');
 const fixZone = document.getElementById('fixZone');
@@ -199,9 +121,9 @@ function say(text, isError){const el=document.getElementById('msg');el.className
 async function makePlan(){
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
   try{
-    const data = await api('/api/plan',{selected_root:root.value.trim(),mode:mode.value,output_root:output.value.trim()||null});
-    currentPlanId = data.plan_id; lastPlan = data;
-    renderPlan(data);
+    const isCopy = execMode.value === 'copy';
+    const data = await api('/api/plan',{selected_root:root.value.trim(),mode:mode.value,output_root:isCopy?(output.value.trim()||null):null});
+    currentPlanId = data.plan_id; lastPlan = data; renderPlan(data);
     say('计划已生成：共 '+data.operations.length+' 个操作，'+data.issues.length+' 个异常。磁盘上还没有任何改动。');
   }catch(e){say(e.message,true);}
 }
@@ -260,6 +182,17 @@ function renderPlan(plan){
       + plan.issues.map(i=>'<tr><td>'+pathCell(i.path)+'</td><td>'+esc(issueText(i.code,i.message))+'</td><td class="muted">'+esc(i.code)+'</td><td>'+esc(i.final_status)+'</td></tr>').join('')+'</tbody></table>'
     : '<p class="muted">没有异常项。</p>';
   applyFilter();
+  updateExecPanel(v);
+}
+function updateExecPanel(v){
+  document.getElementById('execSection').classList.remove('hidden');
+  const isCopy = (execMode.value === 'copy') || !!(v.output_root);
+  const c = v.counts || {};
+  document.getElementById('execHint').textContent = isCopy
+    ? '复制方式：把整理后的完整副本写到输出目录，源目录不动。会多占一份空间（'+ (v.headline||'') +' 的体积），看完满意后可以自己删掉源目录。'
+    : '原地整理：'+ (c.moved||0) +' 个文件在资源包内换位置，顺手清掉 '+ (c.folders||0) +' 个空壳文件夹。源目录会变，执行前会再确认一次，执行后可撤销。';
+  document.getElementById('execBtn').textContent = isCopy ? '确认复制到输出目录' : '确认原地整理';
+  document.getElementById('execResult').innerHTML = '';
 }
 function setFilter(f){filterMode=f;document.querySelectorAll('#filters .chip').forEach(c=>c.classList.toggle('active',c.dataset.f===f));applyFilter();}
 function applyFilter(){
@@ -360,13 +293,36 @@ async function runRepair(){
     say('权限修复完成。');
   }catch(e){say(e.message,true);}
 }
-async function executeCopy(){
-  if(!output.value.trim()){say('安全复制要先填输出目录。',true);return;}
+async function executePlan(){
   if(!currentPlanId){say('请先生成试运行计划。',true);return;}
+  return execMode.value === 'copy' ? executeCopy() : executeMove();
+}
+async function executeCopy(){
+  if(!output.value.trim()){say('复制方式要先填输出目录。',true);return;}
   try{
+    say('正在复制...');
     const data = await api('/api/execute-copy',{plan_id:currentPlanId});
-    document.getElementById('diagnostics').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态']);
-    say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
+    document.getElementById('execResult').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态']);
+    say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。');
+  }catch(e){say(e.message,true);}
+}
+async function executeMove(){
+  const c = ((lastPlan && lastPlan.display && lastPlan.display.readable) || {}).counts || {};
+  const ok = confirm('确认原地整理？\n\n会换位置的文件：'+(c.moved||0)+' 个\n会清掉的空文件夹：'+(c.folders||0)+' 个\n\n源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原。');
+  if(!ok) return;
+  try{
+    say('正在原地整理...');
+    const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true});
+    document.getElementById('execResult').innerHTML = table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'])
+      + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" onclick="undoRun(\''+esc(data.transaction_log).replace(/'/g,'&#39;')+'\')">撤销这次整理</button></p>' : '');
+    say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
+  }catch(e){say(e.message,true);}
+}
+async function undoRun(logPath){
+  try{
+    const data = await api('/api/undo',{transaction_log:logPath});
+    document.getElementById('execResult').innerHTML = table(data.rows||[],['path','status','message'],['路径','结果','说明']);
+    say('撤销完成，逐条结果见下方。');
   }catch(e){say(e.message,true);}
 }
 async function exportReport(){
@@ -375,8 +331,7 @@ async function exportReport(){
   catch(e){say(e.message,true);}
 }
 async function loadHistory(){
-  try{
-    const data = await fetch('/api/history').then(r=>r.json());
+  try{ const data = await fetch('/api/history').then(r=>r.json());
     document.getElementById('diagnostics').innerHTML = table(data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
   }catch(e){say(e.message,true);}
 }
@@ -389,9 +344,8 @@ function table(rows, cols, heads){
     + rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(Array.isArray(r[c])?r[c].join(' | '):r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
 }
 document.addEventListener('change', e=>{ if(e.target && e.target.classList.contains('delbox')) updateSelNote(); });
-fetch('/api/health').then(r=>r.json()).then(rows=>{
-  document.getElementById('health').innerHTML = table(rows,['name','ok','detail'],['检查项','结果','详情']);
-});
+execMode.addEventListener('change', ()=>{ if(lastPlan && lastPlan.display) updateExecPanel(lastPlan.display.readable); });
+fetch('/api/health').then(r=>r.json()).then(rows=>{ document.getElementById('health').innerHTML = table(rows,['name','ok','detail'],['检查项','结果','详情']); });
 </script>
 </body>
 </html>"""

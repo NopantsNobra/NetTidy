@@ -4,10 +4,12 @@ import errno
 import json
 import socket
 import threading
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .config import REPORT_DIR_NAME
 from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize
 from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
@@ -25,7 +27,7 @@ class PlanRegistry:
     """按 plan_id 索引冻结计划，替代模块级单值 LAST_PLAN。
 
     LAST_PLAN 是单值 + ThreadingHTTPServer 多线程：任何一次预览都会覆盖上一次，
-    B 标签页生成计划后，A 标签页点「执行安全复制」执行的就是 B 的计划。
+    B 标签页生成计划后，A 标签页点「确认执行」执行的就是 B 的计划。
     按 id 索引后每个标签页只持有自己的 id；服务端仍只执行自己保存的冻结计划，
     不信任前端回传的计划对象（不变量 6：正式执行前必须有冻结计划）。
     """
@@ -82,6 +84,13 @@ def _delete_entries(body: dict) -> list[DeleteEntry]:
     return entries
 
 
+def _move_log_path(plan: OperationPlan) -> Path:
+    """move 的事务日志与隔离区同级：选中目录的上一级 / 理巢报告 / 事务日志_<时间>.jsonl。"""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = Path(plan.selected_root).resolve()
+    return base.parent / REPORT_DIR_NAME / f"事务日志_{stamp}.jsonl"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         return
@@ -135,6 +144,23 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/execute-copy":
                 result = execute_plan(PLANS.get(_plan_id(body)), "copy")
                 self.send_json({"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
+            elif self.path == "/api/execute-move":
+                plan = PLANS.get(_plan_id(body))
+                if body.get("confirm") is not True:
+                    raise ValueError("原地整理会修改源目录；请先看预览，再点确认执行")
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)))
+                self.send_json({
+                    "completed": result.completed,
+                    "skipped": result.skipped,
+                    "failed": result.failed,
+                    "transaction_log": result.transaction_log,
+                    "issues": [row.to_dict() for row in result.issues],
+                })
+            elif self.path == "/api/undo":
+                log_path = body.get("transaction_log")
+                if not isinstance(log_path, str) or not log_path:
+                    raise ValueError("缺少 transaction_log（事务日志路径）")
+                self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
             elif self.path == "/api/manual":
                 self.send_json({"manual_pdf": str(write_manual_pdf("理巢_NestTidy_简要操作手册.pdf"))})
             else:
