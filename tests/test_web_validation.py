@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -41,6 +42,9 @@ class _ServerMixin(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.base = Path(tempfile.mkdtemp(prefix="nesttidy_v14_"))
+        # 试运行成功会把「上次的源目录」写进启动目录的 理巢配置.json，测试必须与真实启动一样落在临时目录里。
+        cls._old_cwd = Path.cwd()
+        os.chdir(cls.base)
         cls.server: ThreadingHTTPServer = create_server("127.0.0.1", 0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -50,6 +54,7 @@ class _ServerMixin(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        os.chdir(cls._old_cwd)
 
     def _mkdir(self, name: str) -> str:
         path = self.base / name

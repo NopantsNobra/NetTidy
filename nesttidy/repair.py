@@ -16,6 +16,7 @@ class RepairResult:
     status: str
     message: str
 
+
 def repair_permissions(
     root: str,
     clear_readonly: bool = False,
@@ -47,6 +48,7 @@ def repair_permissions(
             rows.append(run_icacls(path, "/inheritance:e", action="fix_inheritance"))
     return rows
 
+
 def iter_paths(base: Path):
     yield base
     for dirpath, dirnames, filenames in os.walk(base):
@@ -57,6 +59,7 @@ def iter_paths(base: Path):
         for name in filenames:
             yield Path(dirpath) / name
 
+
 def clear_readonly_attr(path: Path) -> RepairResult:
     try:
         mode = path.stat().st_mode
@@ -65,12 +68,14 @@ def clear_readonly_attr(path: Path) -> RepairResult:
     except Exception as exc:
         return RepairResult(str(path), "clear_readonly", "failed", str(exc))
 
+
 def run_attrib(path: Path, flag: str, action: str) -> RepairResult:
     try:
         subprocess.run(["attrib", flag, str(path)], check=True, capture_output=True, text=True)
         return RepairResult(str(path), action, "ok", "attrib 执行成功")
     except Exception as exc:
         return RepairResult(str(path), action, "failed", str(exc))
+
 
 def remove_ads(path: Path, stream_name: str) -> RepairResult:
     ads = Path(f"{path}:{stream_name}")
@@ -82,12 +87,14 @@ def remove_ads(path: Path, stream_name: str) -> RepairResult:
     except Exception as exc:
         return RepairResult(str(path), "clear_zone_identifier", "failed", str(exc))
 
+
 def run_icacls(path: Path, *args: str, action: str) -> RepairResult:
     try:
         subprocess.run(["icacls", str(path), *args], check=True, capture_output=True, text=True)
         return RepairResult(str(path), action, "ok", "icacls 执行成功")
     except Exception as exc:
         return RepairResult(str(path), action, "failed", str(exc))
+
 
 def rows_as_dicts(rows: list[RepairResult]) -> list[dict]:
     return [asdict(row) for row in rows]

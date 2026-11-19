@@ -10,12 +10,14 @@ from .config import REPORT_DIR_NAME
 from .model import OperationPlan
 from .storage import record_plan
 
+
 def new_report_dir(base_dir: str | None = None) -> Path:
     base = Path(base_dir).resolve() if base_dir else Path.cwd() / REPORT_DIR_NAME
     stamp = datetime.now().strftime("task_%Y%m%d_%H%M%S")
     path = base / stamp
     path.mkdir(parents=True, exist_ok=True)
     return path
+
 
 def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None, db_path: str | Path | None = None) -> Path:
     out = Path(report_dir).resolve() if report_dir else new_report_dir()
@@ -69,9 +71,11 @@ _RULE_NAMES = {
 _RULE_CODES = tuple(_RULE_NAMES)
 _R5_SAMPLE_LIMIT = 5
 
+
 def _norm_path(value: str) -> str:
     """纯词法归一化：消 .. 并统一大小写/分隔符，不读磁盘、不跟随链接。"""
     return os.path.normcase(os.path.abspath(value))
+
 
 def _inside(path: str, roots: list[str]) -> bool:
     """判断 path 是否落在 roots 任一目录内（含目录自身），按路径分量比较。"""
@@ -81,6 +85,7 @@ def _inside(path: str, roots: list[str]) -> bool:
         if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
             return True
     return False
+
 
 def plan_display_stats(plan: OperationPlan) -> dict:
     """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。"""
@@ -123,6 +128,7 @@ _RULE_WHY = {
 _OP_PLAIN = {"move": "移动到", "copy": "复制到", "keep": "原地保留"}
 _ACTION_PLAIN = {"moved": "挪了位置", "renamed": "原地改名", "same": "原地不动"}
 
+
 def human_bytes(value: int | None) -> str:
     if not value:
         return "0 B"
@@ -134,6 +140,7 @@ def human_bytes(value: int | None) -> str:
         size /= 1024
     return f"{value} B"
 
+
 def _rel(path: str, base: str) -> str:
     """相对路径用于阅读；跨根时退回绝对路径，绝不谎报层级。"""
     try:
@@ -142,15 +149,18 @@ def _rel(path: str, base: str) -> str:
         return path
     return path if rel.startswith("..") else rel
 
+
 def _depth(path: str, base: str) -> int:
     rel = _rel(path, base)
     return 0 if rel == path else len([part for part in rel.split(os.sep) if part]) - 1
+
 
 def _root_for(path: str, roots: list[str]) -> str:
     """取包含该路径的最长资源根；都不包含时返回空串。"""
     norm = _norm_path(path)
     hits = [root for root in roots if norm == _norm_path(root) or norm.startswith(_norm_path(root).rstrip(os.sep) + os.sep)]
     return max(hits, key=len) if hits else ""
+
 
 def readable_plan_view(plan: OperationPlan) -> dict:
     """把冻结计划翻译成人能读的「整理前 → 整理后」清单：纯派生视图，不读盘、不改计划字段。"""
@@ -262,6 +272,7 @@ def readable_plan_view(plan: OperationPlan) -> dict:
         "folders": folders,
         "counts": {"moved": moved, "renamed": renamed, "folders": len(folders), "in_place": in_place},
     }
+
 
 def markdown_summary(plan: OperationPlan) -> str:
     op_counts: dict[str, int] = {}

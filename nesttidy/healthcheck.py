@@ -14,6 +14,7 @@ class HealthItem:
     ok: bool
     detail: str
 
+
 def run_healthcheck(host: str = "127.0.0.1") -> list[HealthItem]:
     items: list[HealthItem] = []
     items.append(HealthItem("Python 版本", sys.version_info >= (3, 11), sys.version.split()[0]))

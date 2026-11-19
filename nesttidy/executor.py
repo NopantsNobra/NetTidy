@@ -57,8 +57,10 @@ class DeleteResult:
             "issues": [row.to_dict() for row in self.issues],
         }
 
+
 class OutputBoundaryError(ValueError):
     """copy 写入前复查发现目标越过用户选择的输出根边界。"""
+
 
 def ensure_target_within_output(target: Path, output_root: Path) -> None:
     """copy 写入前复查目标是否仍在用户选择的输出根内。"""
@@ -68,6 +70,7 @@ def ensure_target_within_output(target: Path, output_root: Path) -> None:
     resolved_parent = target.parent.resolve()
     if not resolved_parent.is_relative_to(root_abs):
         raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
+
 
 def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None) -> ExecutionResult:
     if not plan.frozen:
@@ -139,6 +142,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None)
 
+
 def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: list[ExecutionIssue]) -> None:
     """把执行事实回写进计划：否则 issues.csv 只含计划期问题、状态永远停在 planned。"""
     for op in plan.operations:
@@ -155,12 +159,14 @@ def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: 
         plan.issues.append(row)
         seen.add(key)
 
+
 def deterministic_ops(ops: list[Operation]) -> list[Operation]:
     files = [op for op in ops if op.op_type != "rmdir"]
     dirs = [op for op in ops if op.op_type == "rmdir"]
     files.sort(key=lambda op: ((op.source_path or "").casefold(), op.target_path or ""))
     dirs.sort(key=lambda op: (op.source_path or "").casefold(), reverse=True)
     return files + dirs
+
 
 def precheck(op: Operation) -> None:
     if op.op_type == "rmdir":
@@ -183,6 +189,7 @@ def precheck(op: Operation) -> None:
     if target.exists() and target.resolve() != source.resolve():
         raise FileExistsError(f"目标已存在，禁止覆盖: {target}")
 
+
 def do_copy(op: Operation, output_root: Path | None = None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
@@ -196,6 +203,7 @@ def do_copy(op: Operation, output_root: Path | None = None) -> None:
     if target.stat().st_size != source.stat().st_size:
         raise RuntimeError(f"复制后大小校验失败: {target}")
 
+
 def do_move(op: Operation, tx_path: Path | None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
@@ -206,6 +214,7 @@ def do_move(op: Operation, tx_path: Path | None) -> None:
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
     shutil.move(str(source), str(target))
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
+
 
 def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
     """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
@@ -220,11 +229,13 @@ def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
     return True
 
+
 def write_tx(tx_path: Path | None, row: dict) -> None:
     if not tx_path:
         return
     with tx_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
 
 def classify_exception(exc: Exception) -> str:
     if isinstance(exc, OutputBoundaryError):
@@ -238,6 +249,7 @@ def classify_exception(exc: Exception) -> str:
     if isinstance(exc, OSError) and getattr(exc, "winerror", None) in {32, 33}:
         return "FILE_LOCKED"
     return "EXECUTION_FAILED"
+
 
 def send_to_recycle_bin(path: Path) -> bool:
     """把单个文件交给 Windows 回收站（FOF_ALLOWUNDO + 不弹窗），回收站里可自行还原。"""
@@ -257,6 +269,7 @@ def send_to_recycle_bin(path: Path) -> bool:
     op = SHFILEOPSTRUCTW(None, 3, str(path) + "\0", None, flags, False, None, None)
     code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     return code == 0 and not op.fAnyOperationsAborted and not path.exists()
+
 
 def delete_duplicates(
     root: str,
@@ -330,6 +343,7 @@ def delete_duplicates(
             result.rows.append(_delete_row(victim, "failed", code, str(exc), 0))
     return result
 
+
 def _delete_precheck(victim: Path, keep: Path, base: Path, expected_sha256: str) -> tuple[str, str]:
     """返回 (错误码, 说明)；空字符串表示通过。"""
     if str(victim) == str(keep):
@@ -350,6 +364,7 @@ def _delete_precheck(victim: Path, keep: Path, base: Path, expected_sha256: str)
     if expected_sha256 and expected_sha256 != actual:
         return "CONTENT_CHANGED", "诊断之后文件已变化，拒绝删除"
     return "", ""
+
 
 def _delete_row(victim: Path, status: str, code: str, message: str, size: int) -> dict:
     return {"path": str(victim), "status": status, "code": code, "message": message, "bytes": size}

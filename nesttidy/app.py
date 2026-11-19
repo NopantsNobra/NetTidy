@@ -23,6 +23,7 @@ from .web import PortInUseError, serve
 
 EXIT_PORT_IN_USE = 23
 
+
 def is_admin() -> bool:
     """是否已具备管理员权限（提权只为绕过部分受保护目录的移动限制）。"""
     if os.name != "nt":
@@ -32,6 +33,7 @@ def is_admin() -> bool:
     except Exception:
         return False
 
+
 def relaunch_as_admin(argv: list[str] | None = None) -> bool:
     args = argv if argv is not None else sys.argv
     params = subprocess.list2cmdline(args[1:])
@@ -39,6 +41,7 @@ def relaunch_as_admin(argv: list[str] | None = None) -> bool:
         return ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1) > 32
     except Exception:
         return False
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="nesttidy", description="理巢 NestTidy 本地目录整理工具")

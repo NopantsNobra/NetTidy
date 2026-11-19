@@ -41,10 +41,12 @@ class VDir:
         for child in self.dirs:
             child.sort()
 
+
 def stable_key(path: Path, entry_type: str) -> tuple[str, str, int]:
     order = 0 if entry_type == "dir" else 1
     text = str(path)
     return (os.path.normcase(text).casefold(), text, order)
+
 
 def truncate_middle(text: str, limit: int) -> str:
     """保留首尾、折叠中段，保证长度不超过 limit。"""
@@ -59,6 +61,7 @@ def truncate_middle(text: str, limit: int) -> str:
     right = room - left
     return f"{text[:left]}...{text[-right:]}"
 
+
 def fit_component(name: str, limit: int = MAX_NAME_LEN) -> str:
     """把单个文件名分量压到 limit 以内，尽量保留扩展名。"""
     if len(name) <= limit:
@@ -67,6 +70,7 @@ def fit_component(name: str, limit: int = MAX_NAME_LEN) -> str:
     if len(suffix) > MAX_SUFFIX_LEN:
         suffix = suffix[:MAX_SUFFIX_LEN]
     return truncate_middle(stem, max(1, limit - len(suffix))) + suffix
+
 
 def clean_name(name: str) -> tuple[str, list[str]]:
     traces: list[str] = []
@@ -93,6 +97,7 @@ def clean_name(name: str) -> tuple[str, list[str]]:
         cleaned = fit_component(cleaned)
         traces.append("过长文件名保留扩展名截断")
     return cleaned, traces
+
 
 def build_tree(root: Path, should_skip) -> tuple[VDir, list[dict]]:
     issues: list[dict] = []
@@ -134,6 +139,7 @@ def build_tree(root: Path, should_skip) -> tuple[VDir, list[dict]]:
     tree.sort()
     return tree, issues
 
+
 def prune_empty_dirs(node: VDir, removed: list[Path]) -> None:
     kept: list[VDir] = []
     for child in node.dirs:
@@ -144,6 +150,7 @@ def prune_empty_dirs(node: VDir, removed: list[Path]) -> None:
             child.traces.append("R0 空目录清理")
             removed.append(child.original_path)
     node.dirs = kept
+
 
 def apply_root_chain_penetration(root: VDir) -> bool:
     if root.files or len(root.dirs) != 1:
@@ -164,6 +171,7 @@ def apply_root_chain_penetration(root: VDir) -> bool:
     root.traces.append("R1 资源根内直链穿透: " + " -> ".join(d.name for d in chain))
     return True
 
+
 def absorb_shell_children_until_stable(node: VDir) -> None:
     changed = True
     while changed:
@@ -178,11 +186,14 @@ def absorb_shell_children_until_stable(node: VDir) -> None:
                     item.traces.append("R2 壳吸收")
                 changed = True
 
+
 def is_branch(node: VDir) -> bool:
     return not node.files and len(node.dirs) >= 2
 
+
 def is_single_file_dir(node: VDir) -> bool:
     return len(node.files) == 1 and not node.dirs
+
 
 def process_node(node: VDir, removed: list[Path]) -> None:
     prune_empty_dirs(node, removed)
@@ -216,6 +227,7 @@ def process_node(node: VDir, removed: list[Path]) -> None:
     node.dirs = kept_dirs
     resolve_names(node)
 
+
 def resolve_names(node: VDir) -> None:
     entries: list[VFile | VDir] = [*node.dirs, *node.files]
     if not entries:
@@ -246,6 +258,7 @@ def resolve_names(node: VDir) -> None:
                 _trace_conflict(group, "R5 撞名重命名")
     raise ValueError(f"无法解决命名冲突: {node.original_path}")
 
+
 def _trace_conflict(group: list[VFile | VDir], label: str) -> None:
     for entry in group:
         if isinstance(entry, VFile):
@@ -253,6 +266,7 @@ def _trace_conflict(group: list[VFile | VDir], label: str) -> None:
             entry.traces.append(label)
         else:
             entry.traces.append(f"{label}: {entry.name}")
+
 
 def hashed_name(base_name: str, original_path: Path) -> str:
     """前缀无法区分时的确定性唯一化：在原路径哈希短码前保留基础名。"""
@@ -264,6 +278,7 @@ def hashed_name(base_name: str, original_path: Path) -> str:
     keep = max(1, MAX_NAME_LEN - len(suffix) - len(tag))
     return truncate_middle(stem, keep) + tag + suffix
 
+
 def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
     """取 original_path 由近及远 depth 个祖先，前缀化基础名。"""
     parents = [part for part in original_path.parent.parts if part]
@@ -271,6 +286,7 @@ def prefixed_name(original_path: Path, base_name: str, depth: int) -> str:
     prefix = "-".join(reversed(selected))
     name = f"{prefix}-{base_name}" if prefix else base_name
     return fit_component(name)
+
 
 def final_files(node: VDir, base: Path) -> list[tuple[VFile, Path]]:
     rows: list[tuple[VFile, Path]] = []

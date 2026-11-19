@@ -18,8 +18,10 @@ from .rules import (
     prune_empty_dirs,
 )
 
+
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
 
 def issue(path: str, stage: str, code: str, message: str) -> ExecutionIssue:
     return ExecutionIssue(
@@ -30,6 +32,7 @@ def issue(path: str, stage: str, code: str, message: str) -> ExecutionIssue:
         message=message,
         created_at=utc_now(),
     )
+
 
 def should_skip_path(path: Path) -> str | None:
     try:
@@ -52,6 +55,7 @@ def should_skip_path(path: Path) -> str | None:
         return f"ACCESS_ERROR:{exc}"
     return None
 
+
 def resource_roots(selected_root: Path, mode: str) -> tuple[list[Path], list[ExecutionIssue]]:
     selected_root = selected_root.resolve()
     issues: list[ExecutionIssue] = []
@@ -73,6 +77,7 @@ def resource_roots(selected_root: Path, mode: str) -> tuple[list[Path], list[Exe
             issues.append(issue(str(child), "scan", "IGNORED_ROOT_FILE", "批量模式下运行根目录文件原地保留"))
     return roots, issues
 
+
 def snapshot_digest(paths: list[Path]) -> str:
     h = hashlib.sha256()
     for root in sorted(paths, key=lambda p: str(p).casefold()):
@@ -91,6 +96,7 @@ def snapshot_digest(paths: list[Path]) -> str:
                 h.update(str(stat.st_mtime_ns).encode())
     return h.hexdigest()
 
+
 def collect_dir_paths(tree: VDir) -> list[Path]:
     """在树被规则改写之前，记下所有被扫描到的目录原路径。"""
     paths: list[Path] = []
@@ -103,12 +109,14 @@ def collect_dir_paths(tree: VDir) -> list[Path]:
     walk(tree)
     return paths
 
+
 def collect_parent_paths(targets: list[Path]) -> set[Path]:
     """一次性收集所有目标路径的祖先目录。"""
     parents: set[Path] = set()
     for target in targets:
         parents.update(target.parents)
     return parents
+
 
 def scan_residual_dirs(
     scanned_dirs: list[Path],
@@ -124,6 +132,7 @@ def scan_residual_dirs(
             continue
         if resolved not in occupied:
             removed_dirs.add(resolved)
+
 
 def build_plan(selected_root: str, mode: str = "batch", output_root: str | None = None) -> OperationPlan:
     selected = Path(selected_root).resolve()
@@ -235,6 +244,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
         frozen=True,
         estimated_space=estimated_space,
     )
+
 
 def validate_copy_output(selected_root: str, output_root: str) -> None:
     selected = Path(selected_root).resolve()

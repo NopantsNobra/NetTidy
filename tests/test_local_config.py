@@ -2,7 +2,7 @@
 
 覆盖：
 1. 文件不存在回落默认；读取时去引号、忽略未知键；
-2. JSON 损坏 / 非对象 / 字段类型错 / 端口越界一律显式报错（不静默回落）；
+2. JSON 损坏 / 非对象 / 字段类型错 / 端口越界一律显式报错（不静默回落，口径同 v1.4.0 空路径修复）；
 3. 保存-读取回环（含中文路径）；remember_selected_root 只改源目录、保留端口、拒绝空路径、并发安全；
 4. GET /api/config 预填契约；试运行/诊断成功后把解析后的源目录写回配置；
 5. 启动端口优先级：--port > 理巢配置.json > 默认 8766；配置损坏时启动显式失败。
@@ -138,7 +138,7 @@ class LocalConfigTests(unittest.TestCase):
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join(timeout=15)
+            thread.join()
         roots = {load_local_config(self.base).selected_root for _ in range(4)}
         self.assertEqual(len(roots), 1)
         self.assertRegex(roots.pop(), r"D:\\下载\\\d")

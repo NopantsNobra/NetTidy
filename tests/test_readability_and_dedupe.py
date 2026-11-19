@@ -116,7 +116,7 @@ class TwoPhaseDuplicateTests(unittest.TestCase):
             self.assertTrue(groups[0].verified)
             self.assertEqual(len(groups[0].deletable_paths), 1)
             self.assertEqual(groups[0].verified_hash, full_sha256(first))
-            self.assertEqual(groups[0].keep_path, str(first), "保留项取层级最浅者")
+            self.assertEqual(Path(groups[0].keep_path).resolve(), first.resolve(), "保留项取层级最浅者")
             self.assertEqual(summarize(rows)["reclaimable_bytes"], first.stat().st_size)
 
     def test_without_second_phase_rows_are_flagged_unverified(self) -> None:
@@ -229,8 +229,7 @@ class DuplicatePayloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             touch(Path(tmp) / "A" / "same.txt", "same")
             touch(Path(tmp) / "B" / "same.txt", "same")
-
-            # 诊断成功会记住「上次的源目录」，配置必须落在临时目录而非进程 CWD。
+            # 直接调用真实处理器：诊断成功会记住「上次的源目录」，配置必须落在临时目录而非进程 CWD。
             previous_cwd = Path.cwd()
             os.chdir(tmp)
             try:
@@ -290,8 +289,12 @@ class ScriptHygieneTests(unittest.TestCase):
 
         script = INDEX_HTML[INDEX_HTML.index("<script>") + 8 : INDEX_HTML.index("</script>")]
 
+        # v1.4.0：原生 confirm 换成页内模态后，确认文案用 <br> 分行，
+        # 脚本字符串里不允许出现裸换行（含 "\n\n"）这一约束不变。
         self.assertNotIn("\n\n会换位置", script)
-        self.assertIn("\\n\\n会换位置", script)
+        self.assertNotIn("\\n\\n", script)
+        self.assertIn("<br>会清掉的空文件夹", script)
+        self.assertIn("showModal(", script)
         self.assertNotIn("undoRun(''", script)
         self.assertIn("button[data-tx]", script)
 
@@ -376,10 +379,10 @@ class ProgressAndRepairTests(unittest.TestCase):
             root = Path(tmp) / "素材"
             touch(root / "a.txt", "a")
             touch(root / "b.txt", "b")
-            bad = str(root / "b.txt")
+            bad = str((root / "b.txt").resolve())
 
             def fake(path):
-                if str(path) == bad:
+                if str(Path(path).resolve()) == bad:
                     return RepairResult(str(path), "clear_readonly", "failed", "模拟失败")
                 return RepairResult(str(path), "clear_readonly", "ok", "已确保当前用户可写位")
 

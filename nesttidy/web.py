@@ -24,6 +24,7 @@ from .reports import plan_display_stats, write_plan_report
 from .storage import list_history
 from .ui import INDEX_HTML
 
+
 class PlanRegistry:
     """按 plan_id 索引冻结计划：多标签页各持自己的 id，服务端不信任前端回传的计划对象（不变量 6）。"""
 
@@ -55,6 +56,7 @@ PLANS = PlanRegistry()
 
 PROGRESS: dict[str, dict] = {}
 
+
 def _track(body: dict):
     """progress_key → 旁路进度槽；执行接口本身仍是同步的。"""
     key = str(body.get("progress_key") or "")
@@ -69,11 +71,33 @@ def _track(body: dict):
     PROGRESS[key] = {"done": 0, "total": 0, "label": "正在准备"}
     return key, report
 
+
 def _plan_id(body: dict) -> str:
     plan_id = body.get("plan_id")
     if not isinstance(plan_id, str) or not plan_id:
         raise ValueError("缺少 plan_id，请重新生成试运行计划")
     return plan_id
+
+
+def _selected_root(body: dict) -> str:
+    """需要源目录的接口统一入口：空/空白路径必须显式报错。
+
+    历史 bug：Path('').resolve() 会落到进程 CWD，空路径曾被静默当成
+    「扫描理巢程序自己的目录」并生成可执行计划（v1.4.0 修复）。
+    """
+    raw = body.get("selected_root")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("请先填写源目录（当前为空）")
+    return raw
+
+
+def _existing_root(body: dict) -> str:
+    """在 _selected_root 基础上要求目录真实存在（repair/duplicates/delete）。"""
+    root = _selected_root(body)
+    if not Path(root).is_dir():
+        raise ValueError(f"目录不存在或不是文件夹: {root}")
+    return root
+
 
 def _delete_entries(body: dict) -> list[DeleteEntry]:
     raw = body.get("entries")
@@ -92,18 +116,21 @@ def _delete_entries(body: dict) -> list[DeleteEntry]:
         )
     return entries
 
+
 def _move_log_path(plan: OperationPlan) -> Path:
     """move 的事务日志与隔离区同级：选中目录的上一级 / 理巢报告 / 事务日志_<时间>.jsonl。"""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = Path(plan.selected_root).resolve()
     return base.parent / REPORT_DIR_NAME / f"事务日志_{stamp}.jsonl"
 
+
 def _remember_root_quietly(root: str) -> None:
-    """成功操作后记住「上次的源目录」。写不进去只损失下次预填，不能让已成功的操作报错。"""
+    """成功操作后记住「上次的源目录」。写不进去只损失下次的预填便利，不能让已成功的操作报错。"""
     try:
         remember_selected_root(root)
     except OSError:
         pass
+
 
 def reveal_in_explorer(raw: str, select: bool) -> str:
     """在资源管理器里定位：select=True 选中这个文件，否则打开它所在的文件夹。"""
@@ -112,6 +139,7 @@ def reveal_in_explorer(raw: str, select: bool) -> str:
         raise ValueError(f"路径不存在: {path}")
     subprocess.Popen(["explorer", f"/select,{path}"] if select else ["explorer", str(path if path.is_dir() else path.parent)])
     return str(path)
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
@@ -142,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self.read_json()
             if self.path == "/api/plan":
-                plan = build_plan(body.get("selected_root", ""), body.get("mode", "batch"), body.get("output_root") or None)
+                plan = build_plan(_selected_root(body), body.get("mode", "batch"), body.get("output_root") or None)
                 PLANS.put(plan)
                 _remember_root_quietly(plan.selected_root)
                 data = plan.to_dict()
@@ -156,13 +184,15 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/duplicates/delete":
                 _, progress = _track(body)
                 result = delete_duplicates(
-                    body.get("selected_root", ""),
+                    _existing_root(body),
                     _delete_entries(body),
                     mode=body.get("mode", "recycle"),
                     confirm=bool(body.get("confirm")),
                     progress=progress,
                 )
                 self.send_json(result.to_dict())
+            elif self.path == "/api/validate-root":
+                self.send_json(self.validate_root_payload(body))
             elif self.path == "/api/reveal":
                 self.send_json({"opened": reveal_in_explorer(body.get("path", ""), bool(body.get("select")))})
             elif self.path == "/api/undo-delete":
@@ -172,15 +202,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
             elif self.path == "/api/repair":
                 _, progress = _track(body)
+                root = _existing_root(body)
+                if not any(
+                    bool(body.get(key))
+                    for key in ("clear_readonly", "clear_hidden", "clear_zone_identifier", "grant_current_user", "fix_inheritance")
+                ):
+                    raise ValueError("请先勾选至少一项修复动作，再执行")
                 rows = repair_permissions(
-                    body.get("selected_root", ""),
+                    root,
                     clear_readonly=bool(body.get("clear_readonly")),
                     clear_hidden=bool(body.get("clear_hidden")),
                     clear_zone_identifier=bool(body.get("clear_zone_identifier")),
                     progress=progress,
                 )
                 bad = [row for row in rows if row.status != "ok"]
-                _remember_root_quietly(str(Path(body.get("selected_root", "")).resolve()))
+                _remember_root_quietly(str(Path(root).resolve()))
                 self.send_json({"rows": rows_as_dicts(bad), "checked": len(rows), "passed": len(rows) - len(bad)})
             elif self.path == "/api/execute-copy":
                 _, progress = _track(body)
@@ -211,15 +247,29 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"error": str(exc)}, status=400)
 
+    def validate_root_payload(self, body: dict) -> dict:
+        """输入框失焦预检：只判存在性，不扫描；空路径返回 ok=false 而非异常。"""
+        raw = body.get("path")
+        if not isinstance(raw, str) or not raw.strip():
+            return {"ok": False, "error": "路径为空"}
+        cleaned = raw.strip().strip('"').strip("'")
+        path = Path(cleaned)
+        if not path.is_absolute():
+            return {"ok": False, "error": "请使用完整路径（例如 D:\\下载\\资源包）"}
+        if not path.exists():
+            return {"ok": False, "error": "目录不存在"}
+        if not path.is_dir():
+            return {"ok": False, "error": "这是一个文件，不是文件夹"}
+        return {"ok": True, "resolved": str(path.resolve())}
+
     def detect_duplicates_payload(self, body: dict) -> dict:
         """两阶段诊断的统一出口：rows 供 CSV/明细，groups 供分组卡片与删除按钮。"""
-        root = body.get("selected_root", "")
+        root = _existing_root(body)
         level = body.get("level", "standard")
         verify = body.get("verify", True) is not False
         rows = detect_duplicates(root, level, verify=verify, progress=_track(body)[1])
-        resolved = str(Path(root).resolve()) if root else ""
-        if resolved:
-            _remember_root_quietly(resolved)
+        resolved = str(Path(root).resolve())
+        _remember_root_quietly(resolved)
         return {
             "selected_root": resolved,
             "phase1_level": level,
@@ -253,6 +303,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+
 class PortInUseError(RuntimeError):
     """绑定阶段判定为端口占用时的明确错误类型。"""
 
@@ -264,6 +315,7 @@ class PortInUseError(RuntimeError):
 
 _PORT_IN_USE_CODES: frozenset[int] = frozenset({errno.EADDRINUSE, 10048})
 _WINDOWS_ACCESS_DENIED = 10013  # WSAEACCES：占用方未设 SO_REUSEADDR 时 Windows 的实际报错
+
 
 def _is_port_in_use(exc: OSError, host: str, port: int) -> bool:
     """只把真实占用归类；其他 OSError 一律返回 False 由调用方原样抛。"""
@@ -277,10 +329,12 @@ def _is_port_in_use(exc: OSError, host: str, port: int) -> bool:
             return probe.connect_ex((host, port)) == 0
     return False
 
+
 class NestTidyHTTPServer(ThreadingHTTPServer):
     """关闭 SO_REUSEADDR：否则 Windows 上与同为 reuse 的占用方会静默共存。"""
 
     allow_reuse_address = False
+
 
 def create_server(host: str, port: int) -> NestTidyHTTPServer:
     """创建并绑定 HTTP 服务；仅转译绑定阶段的端口占用错误。"""
@@ -290,6 +344,7 @@ def create_server(host: str, port: int) -> NestTidyHTTPServer:
         if _is_port_in_use(exc, host, port):
             raise PortInUseError(port, exc) from exc
         raise
+
 
 def serve(host: str, port: int) -> None:
     if host != "127.0.0.1":
