@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import DEFAULT_HOST, DEFAULT_PORT
+from .config import DEFAULT_HOST, load_local_config
 from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize, write_duplicate_report
 from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
@@ -23,7 +23,6 @@ from .web import PortInUseError, serve
 
 EXIT_PORT_IN_USE = 23
 
-
 def is_admin() -> bool:
     """是否已具备管理员权限（提权只为绕过部分受保护目录的移动限制）。"""
     if os.name != "nt":
@@ -33,7 +32,6 @@ def is_admin() -> bool:
     except Exception:
         return False
 
-
 def relaunch_as_admin(argv: list[str] | None = None) -> bool:
     args = argv if argv is not None else sys.argv
     params = subprocess.list2cmdline(args[1:])
@@ -42,11 +40,10 @@ def relaunch_as_admin(argv: list[str] | None = None) -> bool:
     except Exception:
         return False
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(prog="nesttidy", description="理巢 NestTidy 本地目录整理工具")
     parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--port", type=int, default=None, help="监听端口；缺省读 理巢配置.json，仍缺省为 8766")
     sub = parser.add_subparsers(dest="command")
 
     plan_cmd = sub.add_parser("plan", help="生成试运行计划并导出报告")
@@ -203,7 +200,11 @@ def main() -> None:
         print(json.dumps({"report_dir": str(report_dir), **result.__dict__}, ensure_ascii=False, indent=2, default=str))
         return
     try:
-        serve(args.host, args.port)
+        local_config = load_local_config()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    try:
+        serve(args.host, args.port if args.port is not None else local_config.port)
     except PortInUseError as exc:
         print(f"理巢启动失败：{exc}", file=sys.stderr)
         raise SystemExit(EXIT_PORT_IN_USE) from exc

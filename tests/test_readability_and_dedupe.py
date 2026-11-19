@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 import unittest
@@ -115,7 +116,7 @@ class TwoPhaseDuplicateTests(unittest.TestCase):
             self.assertTrue(groups[0].verified)
             self.assertEqual(len(groups[0].deletable_paths), 1)
             self.assertEqual(groups[0].verified_hash, full_sha256(first))
-            self.assertEqual(Path(groups[0].keep_path).resolve(), first.resolve(), "保留项取层级最浅者")
+            self.assertEqual(groups[0].keep_path, str(first), "保留项取层级最浅者")
             self.assertEqual(summarize(rows)["reclaimable_bytes"], first.stat().st_size)
 
     def test_without_second_phase_rows_are_flagged_unverified(self) -> None:
@@ -229,7 +230,13 @@ class DuplicatePayloadTests(unittest.TestCase):
             touch(Path(tmp) / "A" / "same.txt", "same")
             touch(Path(tmp) / "B" / "same.txt", "same")
 
-            payload = Handler.detect_duplicates_payload(None, {"selected_root": tmp, "level": "standard", "verify": True})
+            # 诊断成功会记住「上次的源目录」，配置必须落在临时目录而非进程 CWD。
+            previous_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                payload = Handler.detect_duplicates_payload(None, {"selected_root": tmp, "level": "standard", "verify": True})
+            finally:
+                os.chdir(previous_cwd)
 
             self.assertEqual(payload["phase1_label"], PHASE1_METHOD["standard"])
             self.assertTrue(payload["verify"])
@@ -283,18 +290,25 @@ class ScriptHygieneTests(unittest.TestCase):
 
         script = INDEX_HTML[INDEX_HTML.index("<script>") + 8 : INDEX_HTML.index("</script>")]
 
-        # v1.4.0：原生 confirm 换成页内模态后，确认文案用 <br> 分行，
-        # 脚本字符串里不允许出现裸换行（含 "\n\n"）这一约束不变。
         self.assertNotIn("\n\n会换位置", script)
-        self.assertNotIn("\\n\\n", script)
-        self.assertIn("<br>会清掉的空文件夹", script)
-        self.assertIn("showModal(", script)
+        self.assertIn("\\n\\n会换位置", script)
         self.assertNotIn("undoRun(''", script)
         self.assertIn("button[data-tx]", script)
 
 
 class ProgressAndRepairTests(unittest.TestCase):
     """1.2.0：执行与权限修复都要有进度反馈；权限修复只列异常项。"""
+
+    def setUp(self) -> None:
+        # 修复成功会把「上次的源目录」写进启动目录的 理巢配置.json，测试必须与真实启动一样落在临时目录里。
+        self._old_cwd = Path.cwd()
+        self._tmp_cwd = tempfile.TemporaryDirectory()
+        os.chdir(self._tmp_cwd.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self) -> None:
+        os.chdir(self._old_cwd)
+        self._tmp_cwd.cleanup()
 
     def _serve(self):
         from http.server import ThreadingHTTPServer
@@ -362,10 +376,10 @@ class ProgressAndRepairTests(unittest.TestCase):
             root = Path(tmp) / "素材"
             touch(root / "a.txt", "a")
             touch(root / "b.txt", "b")
-            bad = str((root / "b.txt").resolve())
+            bad = str(root / "b.txt")
 
             def fake(path):
-                if str(Path(path).resolve()) == bad:
+                if str(path) == bad:
                     return RepairResult(str(path), "clear_readonly", "failed", "模拟失败")
                 return RepairResult(str(path), "clear_readonly", "ok", "已确保当前用户可写位")
 

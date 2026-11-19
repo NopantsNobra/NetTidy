@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
+from dataclasses import dataclass, replace
+from pathlib import Path
+
 APP_NAME = "理巢 NestTidy"
-# 1.4.0：界面与反馈可信度修订（规则语义不变）——空源目录不再静默扫描程序目录；
-# 全局状态条让任何页签的错误都可见；试运行失败即作废旧计划；执行后按钮转「重新试运行」；
-# 主操作防重入；进度条失败不满格；路径失焦预检 + 拖入；下拉短语化；重复表只列文件名；
-# confirm/alert 换页内模态；<900px 单列、<700px 页签 2×2；页签支持键盘操作。
+# 1.5.0：最小本地配置（只记上次的源目录与监听端口，见 load_local_config）；历次明细见 ROADMAP。
 # 1.3.0：去重改走 Windows 回收站；诊断与删除带进度条；资源管理器定位。
 # 1.0.0：首个可用版本。0.5.x 的剥壳闭环 + 1.0.0 的可读计划视图、两阶段去重、点选式隔离删除合流。
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
 # 单文件名分量硬上限 180 落实到 R5 与 clean_name 两处。
 RULE_VERSION = "P0-R0-R5-v3"
@@ -28,3 +31,54 @@ REPORT_DIR_NAME = "理巢报告"
 OUTPUT_DIR_PREFIX = "理巢输出_"
 # 历史隔离区前缀：v1.3.0 起重复副本改走 Windows 回收站，旧隔离目录仍参与扫描跳过，避免被当成资源包。
 QUARANTINE_DIR_PREFIX = "理巢隔离_"
+
+CONFIG_FILE_NAME = "理巢配置.json"
+# 路线图 P1「最小化本地配置」：只放上次的源目录与端口。规则阈值、语义、排除编辑器一律不开放。
+_CONFIG_LOCK = threading.Lock()
+
+
+@dataclass
+class LocalConfig:
+    selected_root: str = ""
+    port: int = DEFAULT_PORT
+
+def config_path(base_dir: str | Path | None = None) -> Path:
+    """与理巢报告、历史库同一口径：跟着启动目录走，不在被整理目录内另设位置。"""
+    return (Path(base_dir).resolve() if base_dir else Path.cwd()) / CONFIG_FILE_NAME
+
+def _clean_root(raw: str) -> str:
+    return raw.strip().strip('"').strip("'").strip()
+
+def load_local_config(base_dir: str | Path | None = None) -> LocalConfig:
+    """读配置；文件不存在用默认值；字段损坏显式报错，绝不静默回落。"""
+    path = config_path(base_dir)
+    if not path.exists():
+        return LocalConfig()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        raise ValueError(f"配置文件无法解析：{path}（{exc}）；删除该文件可恢复默认") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"配置文件必须是一个 JSON 对象：{path}")
+    root, port = data.get("selected_root", ""), data.get("port", DEFAULT_PORT)
+    if not isinstance(root, str):
+        raise ValueError(f"配置文件的 selected_root 必须是字符串：{path}")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError(f"配置文件的 port 必须是 1–65535 的整数：{path}")
+    return LocalConfig(selected_root=_clean_root(root), port=port)
+
+def save_local_config(config: LocalConfig, base_dir: str | Path | None = None) -> Path:
+    """原子写回（临时文件 + replace），进程被杀也不会留下半个 JSON。"""
+    path = config_path(base_dir)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"selected_root": config.selected_root, "port": config.port}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+def remember_selected_root(root: str, base_dir: str | Path | None = None) -> Path:
+    """记住上次的源目录；端口保持文件里的值，不被启动参数覆盖。空路径直接拒绝。"""
+    cleaned = _clean_root(root)
+    if not cleaned:
+        raise ValueError("不记录空源目录")
+    with _CONFIG_LOCK:
+        return save_local_config(replace(load_local_config(base_dir), selected_root=cleaned), base_dir)

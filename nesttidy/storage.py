@@ -8,10 +8,8 @@ from pathlib import Path
 from .config import REPORT_DIR_NAME
 from .model import OperationPlan
 
-
 def default_db_path() -> Path:
     return Path.cwd() / REPORT_DIR_NAME / "history.sqlite"
-
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     path = Path(db_path).resolve() if db_path else default_db_path()
@@ -35,7 +33,6 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     )
     conn.commit()
     return conn
-
 
 def record_plan(plan: OperationPlan, report_dir: str | None = None, db_path: str | Path | None = None) -> None:
     data = plan.to_dict()
@@ -62,7 +59,6 @@ def record_plan(plan: OperationPlan, report_dir: str | None = None, db_path: str
             ),
         )
         conn.commit()
-
 
 def list_history(limit: int = 50, db_path: str | Path | None = None) -> list[dict]:
     with closing(connect(db_path)) as conn:

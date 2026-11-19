@@ -18,7 +18,6 @@ MANUAL_LINES = [
     "10. 报告会写入 理巢报告 目录，可查看 summary、mappings、issues 和 history.sqlite。",
 ]
 
-
 def write_manual_pdf(path: str | Path) -> Path:
     out = Path(path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +33,6 @@ def write_manual_pdf(path: str | Path) -> Path:
     write_pdf(out, objects)
     return out
 
-
 def build_content_stream(lines: list[str]) -> bytes:
     chunks = ["BT", "/F1 15 Tf", "50 790 Td", "20 TL"]
     for idx, line in enumerate(lines):
@@ -43,7 +41,6 @@ def build_content_stream(lines: list[str]) -> bytes:
         chunks.append(f"<{line.encode('utf-16-be').hex().upper()}> Tj")
     chunks.append("ET")
     return "\n".join(chunks).encode("ascii")
-
 
 def write_pdf(path: Path, objects: list[bytes]) -> None:
     offsets: list[int] = []

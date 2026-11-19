@@ -14,7 +14,6 @@ class UndoResult:
     status: str
     message: str
 
-
 def undo_transaction(transaction_log: str) -> list[UndoResult]:
     path = Path(transaction_log).resolve()
     if not path.exists():
@@ -69,7 +68,6 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
             message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
         results.append(UndoResult(action, str(source), str(target), "ok", message))
     return results
-
 
 def rows_as_dicts(rows: list[UndoResult]) -> list[dict]:
     return [asdict(row) for row in rows]

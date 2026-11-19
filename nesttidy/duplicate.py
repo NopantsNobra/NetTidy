@@ -56,7 +56,6 @@ class DuplicateGroup:
     def to_dict(self) -> dict:
         return asdict(self)
 
-
 def detect_duplicates(
     root: str, level: str = "standard", workers: int = 4, verify: bool = True, progress=None
 ) -> list[DuplicateRow]:
@@ -106,7 +105,6 @@ def detect_duplicates(
             group_index += 1
     return rows
 
-
 def collect_files(base: Path) -> list[Path]:
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(base):
@@ -122,7 +120,6 @@ def collect_files(base: Path) -> list[Path]:
             except OSError:
                 continue
     return files
-
 
 def _singleton_row(path: Path, index: int) -> DuplicateRow:
     try:
@@ -146,13 +143,11 @@ def _singleton_row(path: Path, index: int) -> DuplicateRow:
         conflict_note="",
     )
 
-
 def _clusters(group: list[Path], level: str, workers: int) -> list[list[Path]]:
     signatures: dict[str, list[Path]] = {}
     for path, value in _hash_map(group, level, workers):
         signatures.setdefault(value, []).append(path)
     return [sorted(paths, key=lambda p: stable_key(p, "file")) for _, paths in sorted(signatures.items())]
-
 
 def _verify_cluster(
     cluster: list[Path], level: str, workers: int, verify: bool
@@ -175,7 +170,6 @@ def _verify_cluster(
         return [], rejected, confirmed_hash, False
     rejected = sorted([p for _, paths in ordered[1:] for p in paths], key=lambda p: stable_key(p, "file"))
     return best, rejected, confirmed_hash, True
-
 
 def _group_rows(
     paths: list[Path],
@@ -221,7 +215,6 @@ def _group_rows(
         )
     return rows
 
-
 def _hash_map(paths: list[Path], level: str, workers: int) -> list[tuple[Path, str]]:
     def one(path: Path) -> tuple[Path, str]:
         try:
@@ -231,7 +224,6 @@ def _hash_map(paths: list[Path], level: str, workers: int) -> list[tuple[Path, s
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         return list(pool.map(one, paths))
-
 
 def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
     """把行聚成组：可删集合 = 组内没被复核否决、且不是保留项的文件（删除时 executor 仍会重算全文哈希）。"""
@@ -273,7 +265,6 @@ def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
         )
     return groups
 
-
 def summarize(rows: list[DuplicateRow]) -> dict:
     groups = group_rows(rows)
     return {
@@ -284,7 +275,6 @@ def summarize(rows: list[DuplicateRow]) -> dict:
         "deletable_files": sum(len(group.deletable_paths) for group in groups),
         "reclaimable_bytes": sum(group.reclaimable_bytes for group in groups),
     }
-
 
 def file_signature(path: Path, level: str) -> str:
     stat = path.stat()
@@ -306,7 +296,6 @@ def file_signature(path: Path, level: str) -> str:
                 h.update(chunk)
     return h.hexdigest()
 
-
 def full_sha256(path: Path) -> str:
     """全文件 SHA-256：删除前的最后一道校验，与 file_signature(level="deep") 同口径。"""
     h = hashlib.sha256()
@@ -320,17 +309,14 @@ def full_sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-
 def is_hardlink(path: Path) -> bool:
     try:
         return path.stat().st_nlink > 1
     except Exception:
         return False
 
-
 def choose_keep(paths: list[Path]) -> Path:
     return sorted(paths, key=lambda p: (len(p.parts), str(p).casefold(), str(p)))[0]
-
 
 def write_duplicate_report(rows: list[DuplicateRow], csv_path: str | Path) -> Path:
     out = Path(csv_path).resolve()
