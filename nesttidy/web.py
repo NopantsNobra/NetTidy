@@ -79,6 +79,26 @@ def _plan_id(body: dict) -> str:
     return plan_id
 
 
+def _selected_root(body: dict) -> str:
+    """需要源目录的接口统一入口：空/空白路径必须显式报错。
+
+    历史 bug：Path('').resolve() 会落到进程 CWD，空路径曾被静默当成
+    「扫描理巢程序自己的目录」并生成可执行计划（v1.4.0 修复）。
+    """
+    raw = body.get("selected_root")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("请先填写源目录（当前为空）")
+    return raw
+
+
+def _existing_root(body: dict) -> str:
+    """在 _selected_root 基础上要求目录真实存在（repair/duplicates/delete）。"""
+    root = _selected_root(body)
+    if not Path(root).is_dir():
+        raise ValueError(f"目录不存在或不是文件夹: {root}")
+    return root
+
+
 def _delete_entries(body: dict) -> list[DeleteEntry]:
     raw = body.get("entries")
     if not isinstance(raw, list) or not raw:
@@ -135,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self.read_json()
             if self.path == "/api/plan":
-                plan = build_plan(body.get("selected_root", ""), body.get("mode", "batch"), body.get("output_root") or None)
+                plan = build_plan(_selected_root(body), body.get("mode", "batch"), body.get("output_root") or None)
                 PLANS.put(plan)
                 data = plan.to_dict()
                 data["display"] = plan_display_stats(plan)
@@ -148,13 +168,15 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/duplicates/delete":
                 _, progress = _track(body)
                 result = delete_duplicates(
-                    body.get("selected_root", ""),
+                    _existing_root(body),
                     _delete_entries(body),
                     mode=body.get("mode", "recycle"),
                     confirm=bool(body.get("confirm")),
                     progress=progress,
                 )
                 self.send_json(result.to_dict())
+            elif self.path == "/api/validate-root":
+                self.send_json(self.validate_root_payload(body))
             elif self.path == "/api/reveal":
                 self.send_json({"opened": reveal_in_explorer(body.get("path", ""), bool(body.get("select")))})
             elif self.path == "/api/undo-delete":
@@ -164,8 +186,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
             elif self.path == "/api/repair":
                 _, progress = _track(body)
+                root = _existing_root(body)
+                if not any(
+                    bool(body.get(key))
+                    for key in ("clear_readonly", "clear_hidden", "clear_zone_identifier", "grant_current_user", "fix_inheritance")
+                ):
+                    raise ValueError("请先勾选至少一项修复动作，再执行")
                 rows = repair_permissions(
-                    body.get("selected_root", ""),
+                    root,
                     clear_readonly=bool(body.get("clear_readonly")),
                     clear_hidden=bool(body.get("clear_hidden")),
                     clear_zone_identifier=bool(body.get("clear_zone_identifier")),
@@ -202,9 +230,24 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"error": str(exc)}, status=400)
 
+    def validate_root_payload(self, body: dict) -> dict:
+        """输入框失焦预检：只判存在性，不扫描；空路径返回 ok=false 而非异常。"""
+        raw = body.get("path")
+        if not isinstance(raw, str) or not raw.strip():
+            return {"ok": False, "error": "路径为空"}
+        cleaned = raw.strip().strip('"').strip("'")
+        path = Path(cleaned)
+        if not path.is_absolute():
+            return {"ok": False, "error": "请使用完整路径（例如 D:\\下载\\资源包）"}
+        if not path.exists():
+            return {"ok": False, "error": "目录不存在"}
+        if not path.is_dir():
+            return {"ok": False, "error": "这是一个文件，不是文件夹"}
+        return {"ok": True, "resolved": str(path.resolve())}
+
     def detect_duplicates_payload(self, body: dict) -> dict:
         """两阶段诊断的统一出口：rows 供 CSV/明细，groups 供分组卡片与删除按钮。"""
-        root = body.get("selected_root", "")
+        root = _existing_root(body)
         level = body.get("level", "standard")
         verify = body.get("verify", True) is not False
         rows = detect_duplicates(root, level, verify=verify, progress=_track(body)[1])
