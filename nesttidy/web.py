@@ -20,7 +20,7 @@ from .model import OperationPlan
 from .planner import build_plan
 from .recovery import rows_as_dicts, undo_transaction
 from .repair import repair_permissions
-from .reports import plan_display_stats, write_plan_report
+from .reports import plan_display_stats, readable_group_rows, write_plan_report
 from .storage import list_history
 from .ui import INDEX_HTML
 
@@ -56,6 +56,37 @@ PLANS = PlanRegistry()
 
 PROGRESS: dict[str, dict] = {}
 
+ROW_LIMIT = 80          # 每个资源包一次最多下发的对照行数：28 万个文件全量渲染会把浏览器卡死
+ROW_PAGE = 200          # 「显示更多」每页追加的行数
+FOLDER_LIMIT = 300      # 空文件夹清单同样截断
+ISSUE_LIMIT = 200       # 异常项同样只下发前若干条，余下按总数提示
+DUPLICATE_ROW_LIMIT = 400
+ROW_TOTAL = 1500        # 所有资源包合计下发行数上限：280 个包各 80 行也有 2 万行，浏览器照样卡
+
+
+def _plan_payload(plan: OperationPlan) -> dict:
+    """下发精简计划：mappings 一条不下发（28 万条就是上百 MB JSON），operations/issues 截断，明细走 /api/plan/rows 分页。"""
+    return {
+        "plan_id": plan.plan_id,
+        "app_version": plan.app_version,
+        "rule_version": plan.rule_version,
+        "mode": plan.mode,
+        "selected_root": plan.selected_root,
+        "output_root": plan.output_root,
+        "config_snapshot": plan.config_snapshot,
+        "source_snapshot_digest": plan.source_snapshot_digest,
+        "resource_roots": plan.resource_roots,
+        "operations": [op.to_dict() for op in plan.operations[:ROW_LIMIT]],
+        "operation_count": len(plan.operations),
+        "issues": [issue.to_dict() for issue in plan.issues[:ISSUE_LIMIT]],
+        "issue_total": len(plan.issues),
+        "mapping_count": len(plan.mappings),
+        "created_at": plan.created_at,
+        "frozen": plan.frozen,
+        "estimated_space": plan.estimated_space,
+        "display": plan_display_stats(plan, ROW_LIMIT, FOLDER_LIMIT, ROW_TOTAL),
+    }
+
 
 def _track(body: dict):
     """progress_key → 旁路进度槽；执行接口本身仍是同步的。"""
@@ -70,6 +101,15 @@ def _track(body: dict):
 
     PROGRESS[key] = {"done": 0, "total": 0, "label": "正在准备"}
     return key, report
+
+
+def _duplicate_group_payload(group) -> dict:
+    """单组去重结果：可删路径截断到一页，余下只报总数（一次下发几十万条同样会卡死页面）。"""
+    item = group.to_dict()
+    total = len(group.deletable_paths)
+    item["deletable_paths"] = group.deletable_paths[:DUPLICATE_ROW_LIMIT]
+    item["deletable_total"] = total
+    return item
 
 
 def _plan_id(body: dict) -> str:
@@ -170,12 +210,23 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self.read_json()
             if self.path == "/api/plan":
-                plan = build_plan(_selected_root(body), body.get("mode", "batch"), body.get("output_root") or None)
+                _, progress = _track(body)
+                plan = build_plan(
+                    _selected_root(body), body.get("mode", "batch"), body.get("output_root") or None, progress=progress
+                )
                 PLANS.put(plan)
                 _remember_root_quietly(plan.selected_root)
-                data = plan.to_dict()
-                data["display"] = plan_display_stats(plan)
-                self.send_json(data)
+                self.send_json(_plan_payload(plan))
+            elif self.path == "/api/plan/rows":
+                plan = PLANS.get(_plan_id(body))
+                self.send_json(
+                    readable_group_rows(
+                        plan,
+                        str(body.get("root") or ""),
+                        int(body.get("offset") or 0),
+                        min(int(body.get("limit") or ROW_PAGE), 1000),
+                    )
+                )
             elif self.path == "/api/report":
                 report_dir = write_plan_report(PLANS.get(_plan_id(body)))
                 self.send_json({"report_dir": str(report_dir)})
@@ -276,8 +327,9 @@ class Handler(BaseHTTPRequestHandler):
             "phase1_label": PHASE1_METHOD.get(level, level),
             "verify": verify and level != "deep",
             "stats": summarize(rows),
-            "groups": [group.to_dict() for group in group_rows(rows)],
-            "rows": [row.to_dict() for row in rows],
+            "groups": [_duplicate_group_payload(group) for group in group_rows(rows)],
+            "rows": [row.to_dict() for row in rows[:DUPLICATE_ROW_LIMIT]],
+            "row_total": len(rows),
         }
 
     def read_json(self) -> dict:

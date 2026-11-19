@@ -67,6 +67,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
 <div class="msgbar" id="msgbar"><span class="muted" id="msg">粘贴源目录路径后点「试运行」——试运行只读，不会改动磁盘上的任何东西。</span></div>
 <div class="panel" id="panel-preview"><section><h2>整理预览</h2>
   <div class="bar"><button onclick="makePlan()">试运行：看看会变成什么样</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button><span class="sp"></span></div>
+  <div class="pbar"><div class="pfill" id="planFill"></div></div><p class="muted" id="planProg">还没试运行。大目录扫描要几分钟，这里会显示已经扫过多少个文件。</p>
   <section id="summarySection" class="hidden"><div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
   <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理</option><option value="copy">复制到输出目录</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
@@ -148,8 +149,11 @@ function trackProgress(fillId, textId){
   const key = 'p' + Math.random().toString(36).slice(2), fill = document.getElementById(fillId), text = document.getElementById(textId);
   const tick = () => fetch('/api/progress?key=' + key).then(r => r.json()).then(d => {
     const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-    fill.style.width = (d.total ? pct : 5) + '%';
-    text.textContent = (d.total ? d.done + ' / ' + d.total + ' · ' + pct + '%' : '正在准备') + (d.label ? ' · ' + d.label : '');
+    // 大目录扫描时总量未知（total=0）：显示已扫过的条数，进度条保持低位蠕动，不要假装有百分比。
+    fill.style.width = (d.total ? pct : (d.done ? 5 : 5)) + '%';
+    text.textContent = d.total
+      ? d.done + ' / ' + d.total + ' · ' + pct + '%' + (d.label ? ' · ' + d.label : '')
+      : (d.done ? '已处理 ' + d.done + ' 个' : '正在准备') + (d.label ? ' · 当前资源包 ' + d.label : '');
   }).catch(() => {});
   const timer = setInterval(tick, 300); tick();
   return {key: key, stop: (ok) => { clearInterval(timer); if(ok){ fill.style.width='100%'; fill.classList.remove('failed'); } else { fill.classList.add('failed'); } }};
@@ -220,15 +224,18 @@ delMode.addEventListener('change', updateSelectHints);
 updateSelectHints();
 async function makePlanInner(stay){
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
+  const prog = trackProgress('planFill','planProg');
   try{
     const isCopy = execMode.value === 'copy';
-    const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null});
+    const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,progress_key:prog.key});
     currentPlanId = data.plan_id; lastPlan = data; planExecuted = false; planMode = isCopy ? 'copy' : 'move'; renderPlan(data); if(!stay){setTab('preview');}
     document.getElementById('steps').classList.add('hidden');
-    say('计划已生成：共 '+data.operations.length+' 个操作，'+data.issues.length+' 个异常。磁盘上还没有任何改动。');
+    say('计划已生成：文件 '+data.mapping_count+' 个，操作 '+data.operation_count+' 个，异常 '+(data.issue_total||0)+' 个。磁盘上还没有任何改动。');
   }catch(e){
     invalidatePlan();
     say('生成计划失败：'+e.message+'（上一份计划已失效，不再可执行）',true);
+  }finally{
+    prog.stop();
   }
 }
 const makePlan = guard(makePlanInner);
@@ -242,35 +249,21 @@ function renderPlan(plan){
   document.getElementById('headline').innerHTML = esc(v.headline);
   document.getElementById('cards').innerHTML = v.cards.map(c=>'<div class="card"><b>'+esc(c.value)+'</b>'+esc(c.label)+'<span>'+esc(c.hint)+'</span></div>').join('');
   document.getElementById('previewSection').classList.remove('hidden');
-  const allRows = v.groups.reduce((acc,g)=>acc.concat(g.rows),[]);
-  const changedCount = allRows.filter(r=>r.changed).length;
   document.getElementById('filters').innerHTML = [
-    ['all','全部 '+allRows.length],
-    ['changed','只看会变的 '+changedCount],
+    ['all','全部 '+v.counts.total],
+    ['changed','只看会变的 '+v.counts.changed],
     ['renamed','只看改名 '+v.counts.renamed],
     ['same','只看原地不动 '+v.counts.in_place]
   ].map(x=>'<span class="chip'+(x[0]===filterMode?' active':'')+'" data-f="'+x[0]+'">'+esc(x[1])+'</span>').join('');
   document.querySelectorAll('#filters .chip').forEach(el=>el.addEventListener('click',()=>setFilter(el.dataset.f)));
+  // 大目录（几十万文件）不能一次渲染：每个资源包先给前若干行，余下点「显示更多」按页取。
   let html = '';
-  v.groups.forEach(g=>{
-    const moved = g.rows.filter(r=>r.changed).length;
-    const renamed = g.rows.filter(r=>r.renamed).length;
-    html += '<section class="gblock" data-changed="'+(moved?1:0)+'" data-renamed="'+(renamed?1:0)+'" data-same="'+(g.rows.length-moved?1:0)+'">'
-      + '<h3>'+esc(g.root_name)+' <span class="muted">（'+g.rows.length+' 个文件，会换位置 '+g.moved+' 个，改名 '+g.renamed+' 个）</span></h3>'
-      + '<table><thead><tr><th style="width:26%">现在在哪</th><th style="width:26%">整理后在哪</th><th>动作</th><th>规则</th><th>为什么要这样</th><th style="width:8%">大小</th></tr></thead><tbody>';
-    g.rows.forEach(r=>{
-      const tag = r.renamed ? ' <span class="badge warn">改名</span>' : '';
-      const depth = r.depth>=2 ? ' <span class="depth">藏了 '+r.depth+' 层</span>' : '';
-      const open = g.root_path ? g.root_path + '\\\\' + String(r.before).split(' › ').join('\\\\') : '';
-      html += '<tr data-row data-open="'+esc(open)+'" data-changed="'+(r.changed?'1':'0')+'" data-renamed="'+(r.renamed?'1':'0')+'">'
-        + '<td>'+pathCell(r.before)+depth+'</td>'
-        + '<td>'+pathCell(r.after)+tag+'</td>'
-        + '<td>'+esc(r.action)+'</td>'
-        + '<td>'+esc(r.rules.join('；')||'—')+'</td>'
-        + '<td>'+esc(r.why)+'</td>'
-        + '<td>'+esc(r.size)+'</td></tr>';
-    });
-    html += '</tbody></table></section>';
+  v.groups.forEach((g,gi)=>{
+    html += '<section class="gblock" id="gb-'+gi+'" data-changed="'+(g.changed?1:0)+'" data-renamed="'+(g.renamed?1:0)+'" data-same="'+(g.row_total-g.changed?1:0)+'">'
+      + '<h3>'+esc(g.root_name)+' <span class="muted">（'+g.row_total+' 个文件'+(g.renamed?('，改名 '+g.renamed+' 个'):'')+'，会换位置 '+g.moved+' 个）</span></h3>'
+      + '<table><thead><tr><th style="width:26%">现在在哪</th><th style="width:26%">整理后在哪</th><th>动作</th><th>规则</th><th>为什么要这样</th><th style="width:8%">大小</th></tr></thead>'
+      + '<tbody id="tb-'+gi+'">'+g.rows.map(r=>rowHtml(g,r)).join('')+'</tbody></table>'
+      + '<p class="muted" id="more-'+gi+'">'+(g.rows.length < g.row_total ? rowMoreHint(gi,g) : '')+'</p></section>';
   });
   html += '<p id="previewEmpty" class="muted" style="display:none">当前筛选下，这些资源包都不受这次整理影响——切回「全部」可以看完整对照。</p>';
   document.getElementById('preview').innerHTML = html || '<p class="muted">没有需要整理的文件。</p>';
@@ -293,6 +286,35 @@ function renderPlan(plan){
     : '<p class="muted">没有异常项。</p>';
   applyFilter();
   updateExecPanel(v);
+  document.querySelectorAll('#preview [data-more]').forEach(b=>b.addEventListener('click',()=>loadMore(Number(b.dataset.more))));
+}
+function rowHtml(g,r){
+  const tag = r.renamed ? ' <span class="badge warn">改名</span>' : '';
+  const depth = r.depth>=2 ? ' <span class="depth">藏了 '+r.depth+' 层</span>' : '';
+  const SEP = String.fromCharCode(92);
+  const open = g.root_path ? g.root_path + SEP + String(r.before).split(' › ').join(SEP) : '';
+  return '<tr data-row data-open="'+esc(open)+'" data-changed="'+(r.changed?'1':'0')+'" data-renamed="'+(r.renamed?'1':'0')+'">'
+    + '<td>'+pathCell(r.before)+depth+'</td><td>'+pathCell(r.after)+tag+'</td><td>'+esc(r.action)+'</td>'
+    + '<td>'+esc(r.rules.join('；')||'—')+'</td><td>'+esc(r.why)+'</td><td>'+esc(r.size)+'</td></tr>';
+}
+function rowMoreHint(gi,g){
+  return '这里只显示前 '+g.rows.length+' 行（共 '+g.row_total+' 行）。<button class="secondary" data-more="'+gi+'">显示更多</button>';
+}
+async function loadMore(gi){
+  const g = lastPlan.display.readable.groups[gi], btn = document.querySelector('[data-more="'+gi+'"]');
+  if(btn){ btn.disabled = true; btn.textContent = '正在取…'; }
+  try{
+    const data = await api('/api/plan/rows',{plan_id:currentPlanId,root:g.root_path,offset:g.rows.length,limit:200});
+    document.getElementById('tb-'+gi).insertAdjacentHTML('beforeend', data.rows.map(r=>rowHtml(g,r)).join(''));
+    g.rows = g.rows.concat(data.rows);
+    document.getElementById('more-'+gi).innerHTML = g.rows.length < g.row_total ? rowMoreHint(gi,g) : '';
+    const next = document.querySelector('[data-more="'+gi+'"]');
+    if(next){ next.addEventListener('click',()=>loadMore(gi)); }
+    applyFilter();
+  }catch(e){
+    say('取更多行失败：'+e.message,true);
+    if(btn){ btn.disabled = false; btn.textContent = '显示更多'; }
+  }
 }
 function updateExecPanel(v){
   const isCopy = (execMode.value === 'copy') || !!(v && v.output_root);

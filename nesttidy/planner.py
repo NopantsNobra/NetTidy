@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -134,7 +135,13 @@ def scan_residual_dirs(
             removed_dirs.add(resolved)
 
 
-def build_plan(selected_root: str, mode: str = "batch", output_root: str | None = None) -> OperationPlan:
+def build_plan(
+    selected_root: str,
+    mode: str = "batch",
+    output_root: str | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> OperationPlan:
+    """扫描 + 冻结计划。`progress(done, total, label)` 只上报进度：total 为 0 表示总量未定。"""
     selected = Path(selected_root).resolve()
     roots, root_issues = resource_roots(selected, mode)
     operations: list[Operation] = []
@@ -142,6 +149,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
     issues: list[ExecutionIssue] = list(root_issues)
     removed_dirs: set[Path] = set()
     estimated_space = 0
+    done = 0
 
     for root in roots:
         resource_id = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
@@ -163,7 +171,10 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
         if not output_root:
             removed_dirs.update(path.resolve() for path in local_removed if path.resolve() != root)
         local_targets: list[Path] = []
-        for file_item, target in final_files(tree, root):
+        files = list(final_files(tree, root))
+        for index, (file_item, target) in enumerate(files, 1):
+            if progress:
+                progress(done + index, 0, root.name)
             local_targets.append(target)
             estimated_space += file_item.size
             if output_root:
@@ -210,6 +221,7 @@ def build_plan(selected_root: str, mode: str = "batch", output_root: str | None 
         # 剥壳（R1/R2）只重挂内存树，被丢弃的壳节点不会自己进 local_removed。
         # 统一按「执行后是否还有文件落在该目录里」判定：没有就必然变空，必须登记删除。
         # 这条同时覆盖穿透点下方被重新挂载的子目录——它们的旧路径同样会变空。
+        done += len(files)
         if not output_root:
             scan_residual_dirs(scanned_dirs, local_targets, root, removed_dirs)
 

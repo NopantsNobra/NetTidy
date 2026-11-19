@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import REPORT_DIR_NAME
-from .model import OperationPlan
+from .model import MappingEntry, OperationPlan
 from .storage import record_plan
 
 
@@ -77,17 +77,14 @@ def _norm_path(value: str) -> str:
     return os.path.normcase(os.path.abspath(value))
 
 
-def _inside(path: str, roots: list[str]) -> bool:
-    """判断 path 是否落在 roots 任一目录内（含目录自身），按路径分量比较。"""
-    candidate = _norm_path(path)
-    for root in roots:
-        base = _norm_path(root)
-        if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
-            return True
-    return False
+def _inside(path: str, roots: list[str], lookup: dict[str, str] | None = None,
+            cache: dict[str, str] | None = None) -> bool:
+    """判断 path 是否落在 roots 任一目录内（含目录自身）；借资源根查表，别对每条操作扫一遍根列表。"""
+    return bool(_root_for(path, roots, lookup, cache))
 
 
-def plan_display_stats(plan: OperationPlan) -> dict:
+def plan_display_stats(plan: OperationPlan, row_limit: int = 0, folder_limit: int = 0,
+                       total_row_limit: int = 0) -> dict:
     """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。"""
     counts: dict[str, int] = {code: 0 for code in _RULE_CODES}
     counts["R0"] = sum(1 for op in plan.operations if op.op_type == "rmdir")
@@ -108,14 +105,31 @@ def plan_display_stats(plan: OperationPlan) -> dict:
     roots = [plan.output_root] if plan.output_root else plan.resource_roots
     label = "output_root（copy 模式）" if plan.output_root else "resource_roots（资源根内）"
     file_ops = [op for op in plan.operations if op.op_type in {"move", "copy", "keep"} and op.target_path]
-    escaped = [op for op in file_ops if not _inside(op.target_path, roots)]
+    lookup = _root_lookup(roots)
+    escaped = [op for op in file_ops if not _inside(op.target_path, roots, lookup, {})]
     return {
         "rule_counts": counts,
         "rule_rows": [{"rule": c, "name": _RULE_NAMES[c], "count": counts[c]} for c in _RULE_CODES],
         "r5_samples": samples,
         "boundary": {"checked": len(file_ops), "out_of_bound": len(escaped), "label": label},
-        "readable": readable_plan_view(plan),
+        "readable": readable_plan_view(plan, row_limit, folder_limit, total_row_limit),
     }
+
+
+def readable_group_rows(plan: OperationPlan, root_path: str, offset: int = 0, limit: int = 200) -> dict:
+    """按资源包分页取对照行：给「显示更多」用，避免一次性传输几十万行。"""
+    roots = list(plan.resource_roots)
+    lookup = _root_lookup(roots)
+    root_cache: dict[str, str] = {}
+    rows: list[dict] = []
+    total = 0
+    for mapping in plan.mappings:
+        if _root_for(mapping.original_path, roots, lookup, root_cache) != root_path:
+            continue
+        if offset <= total < offset + max(limit, 1):
+            rows.append(_readable_row(plan, mapping, root_path))
+        total += 1
+    return {"root_path": root_path, "offset": offset, "total": total, "rows": rows}
 
 
 _RULE_WHY = {
@@ -142,12 +156,20 @@ def human_bytes(value: int | None) -> str:
 
 
 def _rel(path: str, base: str) -> str:
-    """相对路径用于阅读；跨根时退回绝对路径，绝不谎报层级。"""
-    try:
-        rel = os.path.relpath(path, base)
-    except ValueError:
+    """相对路径用于阅读；跨根时退回绝对路径，绝不谎报层级。
+
+    这里用前缀切片而不是 os.path.relpath：28 万条映射时 relpath 的 normcase 能把一次试运行
+    拖慢几十秒，而 before/after 本来就落在资源包根之内，切片结果与 relpath 完全一致。
+    """
+    if not base:
         return path
-    return path if rel.startswith("..") else rel
+    head = base.rstrip(os.sep) + os.sep
+    low_path, low_head = path.lower(), head.lower()
+    if low_path.startswith(low_head):
+        return path[len(head):]
+    if low_path.rstrip(os.sep) == head.rstrip(os.sep):
+        return ""
+    return path
 
 
 def _depth(path: str, base: str) -> int:
@@ -155,82 +177,155 @@ def _depth(path: str, base: str) -> int:
     return 0 if rel == path else len([part for part in rel.split(os.sep) if part]) - 1
 
 
-def _root_for(path: str, roots: list[str]) -> str:
-    """取包含该路径的最长资源根；都不包含时返回空串。"""
-    norm = _norm_path(path)
-    hits = [root for root in roots if norm == _norm_path(root) or norm.startswith(_norm_path(root).rstrip(os.sep) + os.sep)]
-    return max(hits, key=len) if hits else ""
+def _root_lookup(roots: list[str]) -> dict[str, str]:
+    """资源根 → 归一化路径表：28 万条映射逐条扫根列表会把一次试运行拖到几分钟。"""
+    table: dict[str, str] = {}
+    for root in roots:
+        norm = _norm_path(root)
+        table[norm] = root
+        table[norm.rstrip(os.sep).rstrip("/")] = root      # 驱动器根 E:\ 归一化后是 "e:"，两种写法都要认
+    return table
 
 
-def readable_plan_view(plan: OperationPlan) -> dict:
-    """把冻结计划翻译成人能读的「整理前 → 整理后」清单：纯派生视图，不读盘、不改计划字段。"""
-    roots = list(plan.resource_roots)
+def _root_for(path: str, roots: list[str], lookup: dict[str, str] | None = None,
+              cache: dict[str, str] | None = None) -> str:
+    """取包含该路径的最长资源根；都不包含时返回空串。
+
+    `cache` 记住「目录 → 资源根」：28 万条映射其实只落在几百个目录里，重复向上找没有意义。
+    """
+    table = lookup if lookup is not None else _root_lookup(roots)
+    node = _norm_path(path)
+    walked: list[str] = []
+    while True:
+        if cache is not None:
+            hit = cache.get(node)
+            if hit is not None:
+                found = hit
+                break
+        if node in table:
+            found = table[node]
+            break
+        walked.append(node)
+        parent = os.path.dirname(node)
+        if parent == node:
+            found = ""
+            break
+        node = parent
+    if cache is not None:
+        for item in walked:
+            cache[item] = found
+    return found
+
+
+def _readable_row(plan: OperationPlan, mapping: MappingEntry, root: str) -> dict:
+    """单条映射 → 一行「整理前 → 整理后」；整表与分页共用，纯函数不读盘。"""
     after_base = plan.output_root or ""
+    before = _rel(mapping.original_path, root) if root else mapping.original_path
+    # 阅读口径要「同构」：before 相对资源包根，after 也必须相对「输出目录里的同名资源包」，
+    # 否则输出前缀会被算成位置变化，所有文件都显示成「换位置」。
+    base_after = root
+    if plan.output_root and root:
+        base_after = os.path.join(after_base, os.path.basename(root))
+    after = _rel(mapping.planned_target_path, base_after) if base_after else mapping.planned_target_path
+    # 用户关心的是「结构变没变」：copy 模式下目标整体落在输出目录里，绝对路径必然不同，
+    # 但相对资源包的层级可能一模一样。按相对路径比对，才不会把「原样带过去」说成「搬动」。
+    rel_changed = _norm_path(before) != _norm_path(after)
+    is_renamed = os.path.basename(mapping.original_path) != os.path.basename(mapping.planned_target_path)
+    hits = [code for code in _RULE_CODES for trace in mapping.rule_trace if trace.startswith(code)]
+    why = "；".join(dict.fromkeys(_RULE_WHY[code] for code in hits if code in _RULE_WHY))
+    if mapping.name_cleaning_trace:
+        why = (why + "；" if why else "") + "文件名里的非法字符被替换成安全字符"
+    if not why:
+        why = "位置和名字都不变，只是跟着复制过去" if not rel_changed and not is_renamed else "按规则提到资源包根部"
+    if not rel_changed and not is_renamed:
+        action, action_code = _ACTION_PLAIN["same"], "same"
+    elif not rel_changed:
+        action, action_code = _ACTION_PLAIN["renamed"], "renamed"
+    else:
+        action, action_code = _OP_PLAIN.get(mapping.operation_type, mapping.operation_type), mapping.operation_type
+    return {
+        "before": before,
+        "after": after,
+        "depth": _depth(mapping.original_path, root) if root else 0,
+        "action": action,
+        "action_code": action_code,
+        "rules": [_RULE_NAMES[code] for code in hits if code in _RULE_NAMES],
+        "why": why,
+        "renamed": is_renamed,
+        "moved": rel_changed,
+        "changed": rel_changed or is_renamed,
+        "size": human_bytes(mapping.source_size),
+        "size_bytes": mapping.source_size or 0,
+        "status": mapping.status,
+    }
+
+
+def _row_flags(plan: OperationPlan, mapping: MappingEntry, root: str) -> tuple[bool, bool, int]:
+    """只算「换位置 / 改名 / 体积」这三个标记，不构造整行——几十万条里绝大多数不显示。"""
+    before = _rel(mapping.original_path, root) if root else mapping.original_path
+    base_after = root
+    if plan.output_root and root:
+        base_after = os.path.join(plan.output_root, os.path.basename(root))
+    after = _rel(mapping.planned_target_path, base_after) if base_after else mapping.planned_target_path
+    moved = _norm_path(before) != _norm_path(after)
+    is_renamed = os.path.basename(mapping.original_path) != os.path.basename(mapping.planned_target_path)
+    return moved, is_renamed, mapping.source_size or 0
+
+
+def readable_plan_view(plan: OperationPlan, row_limit: int = 0, folder_limit: int = 0,
+                       total_row_limit: int = 0) -> dict:
+    """把冻结计划翻译成人能读的「整理前 → 整理后」清单：纯派生视图，不读盘、不改计划字段。
+
+    `row_limit > 0` 时每个资源包只带前 row_limit 行——28 万个文件一次塞进浏览器会把页面卡死，
+    余下行数用 row_total / rows_shown 标注，前端按 `/api/plan/rows` 分页补齐。
+    """
+    roots = list(plan.resource_roots)
+    lookup = _root_lookup(roots)
+    root_cache: dict[str, str] = {}
+    rows_emitted = 0
     groups: dict[str, dict] = {}
-    renamed = in_place = 0
+    renamed = in_place = changed = 0
     total_bytes = 0
     for mapping in plan.mappings:
-        root = _root_for(mapping.original_path, roots)
+        root = _root_for(mapping.original_path, roots, lookup, root_cache)
         bucket = groups.setdefault(
             root,
-            {"root_path": root, "root_name": Path(root).name if root else "（资源根之外）", "rows": [], "moved": 0, "renamed": 0},
+            {"root_path": root, "root_name": Path(root).name if root else "（资源根之外）",
+             "rows": [], "moved": 0, "renamed": 0, "changed": 0, "row_total": 0, "rows_shown": 0},
         )
-        before = _rel(mapping.original_path, root) if root else mapping.original_path
-        # 阅读口径要「同构」：before 相对资源包根，after 也必须相对「输出目录里的同名资源包」，
-        # 否则输出前缀会被算成位置变化，所有文件都显示成「换位置」。
-        base_after = root
-        if plan.output_root and root:
-            base_after = str(Path(after_base) / Path(root).name)
-        after = _rel(mapping.planned_target_path, base_after) if base_after else mapping.planned_target_path
-        # 用户关心的是「结构变没变」：copy 模式下目标整体落在输出目录里，绝对路径必然不同，
-        # 但相对资源包的层级可能一模一样。按相对路径比对，才不会把「原样带过去」说成「搬动」。
-        rel_changed = _norm_path(before) != _norm_path(after)
-        is_renamed = Path(mapping.original_path).name != Path(mapping.planned_target_path).name
-        hits = [code for code in _RULE_CODES for trace in mapping.rule_trace if trace.startswith(code)]
-        why = "；".join(dict.fromkeys(_RULE_WHY[code] for code in hits if code in _RULE_WHY))
-        if mapping.name_cleaning_trace:
-            why = (why + "；" if why else "") + "文件名里的非法字符被替换成安全字符"
-        if not why:
-            why = "位置和名字都不变，只是跟着复制过去" if not rel_changed and not is_renamed else "按规则提到资源包根部"
-        if not rel_changed and not is_renamed:
-            action = _ACTION_PLAIN["same"]
-            action_code = "same"
-        elif not rel_changed:
-            action = _ACTION_PLAIN["renamed"]
-            action_code = "renamed"
+        bucket["row_total"] += 1
+        # 28 万条里绝大多数不会显示（每包只发前几十行），先算轻量标记，确实要显示才造整行 dict。
+        emit = (row_limit <= 0 or bucket["rows_shown"] < row_limit) and (
+            total_row_limit <= 0 or rows_emitted < total_row_limit
+        )
+        if emit:
+            row = _readable_row(plan, mapping, root)
+            bucket["rows"].append(row)
+            bucket["rows_shown"] += 1
+            rows_emitted += 1
+            moved, is_renamed, size_bytes = row["moved"], row["renamed"], row["size_bytes"]
         else:
-            action = _OP_PLAIN.get(mapping.operation_type, mapping.operation_type)
-            action_code = mapping.operation_type
-        bucket["rows"].append(
-            {
-                "before": before,
-                "after": after,
-                "depth": _depth(mapping.original_path, root) if root else 0,
-                "action": action,
-                "action_code": action_code,
-                "rules": [_RULE_NAMES[code] for code in hits if code in _RULE_NAMES],
-                "why": why,
-                "renamed": is_renamed,
-                "changed": rel_changed or is_renamed,
-                "size": human_bytes(mapping.source_size),
-                "size_bytes": mapping.source_size or 0,
-                "status": mapping.status,
-            }
-        )
-        if rel_changed:
+            moved, is_renamed, size_bytes = _row_flags(plan, mapping, root)
+        if moved or is_renamed:
+            changed += 1
+            bucket["changed"] += 1
+        if moved:
             bucket["moved"] += 1
-            total_bytes += mapping.source_size or 0
+            total_bytes += size_bytes
         else:
             in_place += 1
         if is_renamed:
             renamed += 1
             bucket["renamed"] += 1
-
     folders = []
+    folder_total = 0
     for op in plan.operations:
         if op.op_type != "rmdir" or not op.source_path:
             continue
-        root = _root_for(op.source_path, roots)
+        folder_total += 1
+        if folder_limit > 0 and len(folders) >= folder_limit:
+            continue
+        root = _root_for(op.source_path, roots, lookup, root_cache)
         folders.append(
             {
                 "root_name": Path(root).name if root else "（资源根之外）",
@@ -248,7 +343,7 @@ def readable_plan_view(plan: OperationPlan) -> dict:
         {"label": "资源包", "value": len(roots), "hint": "每个子文件夹算一个独立资源包"},
         {"label": "会换位置的文件", "value": moved, "hint": "从深层子文件夹提到资源包根部"},
         {"label": "会改名的文件", "value": renamed, "hint": "撞名时加来源目录前缀，绝不覆盖"},
-        {"label": "会清掉的空文件夹", "value": len(folders), "hint": folders_hint},
+        {"label": "会清掉的空文件夹", "value": folder_total, "hint": folders_hint},
         {"label": "换位置的体积", "value": human_bytes(total_bytes), "hint": "这些文件加起来有多大"},
         {"label": "原地不动", "value": in_place, "hint": "位置和名字都不用改"},
         {"label": "异常项", "value": len(plan.issues), "hint": "下载未完成、符号链接、无权限等"},
@@ -261,7 +356,7 @@ def readable_plan_view(plan: OperationPlan) -> dict:
     else:
         headline = (
             f"整理 {len(roots)} 个资源包（原地移动）：{moved} 个文件换位置（{human_bytes(total_bytes)}），"
-            f"{renamed} 个文件改名，{in_place} 个原地不动，清掉 {len(folders)} 个空文件夹，{len(plan.issues)} 个异常。"
+            f"{renamed} 个文件改名，{in_place} 个原地不动，清掉 {folder_total} 个空文件夹，{len(plan.issues)} 个异常。"
         )
     return {
         "headline": headline,
@@ -270,7 +365,9 @@ def readable_plan_view(plan: OperationPlan) -> dict:
         "output_root": plan.output_root,
         "groups": [groups[key] for key in sorted(groups, key=lambda k: (k.casefold(), k))],
         "folders": folders,
-        "counts": {"moved": moved, "renamed": renamed, "folders": len(folders), "in_place": in_place},
+        "folder_total": folder_total,
+        "counts": {"moved": moved, "renamed": renamed, "changed": changed, "folders": folder_total,
+                   "in_place": in_place, "total": len(plan.mappings)},
     }
 
 

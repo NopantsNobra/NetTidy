@@ -507,3 +507,102 @@ class ProgressAndRepairTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class LargePlanPagingTests(unittest.TestCase):
+    """28 万个文件把浏览器卡死之后（v1.5.1）：一次只给一页，余下按需取。"""
+
+    def setUp(self) -> None:
+        self._old_cwd = Path.cwd()
+        self._tmp_cwd = tempfile.TemporaryDirectory()
+        os.chdir(self._tmp_cwd.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self) -> None:
+        os.chdir(self._old_cwd)
+        self._tmp_cwd.cleanup()
+
+    def _serve(self) -> int:
+        from http.server import ThreadingHTTPServer
+        import threading
+
+        from nesttidy import web
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return port
+
+    @staticmethod
+    def _post(port: int, path: str, body: dict) -> dict:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _big_plan(self, count: int = 300) -> tuple[str, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "素材"
+            for index in range(count):
+                touch(root / "包A" / "壳" / f"{index:04d}.mp4", "x")
+            port = self._serve()
+            return str(root), self._post(port, "/api/plan", {"selected_root": str(root), "mode": "batch"})
+
+    def test_plan_payload_never_ships_every_mapping(self) -> None:
+        _, payload = self._big_plan(300)
+        group = payload["display"]["readable"]["groups"][0]
+        body = json.dumps(payload, ensure_ascii=False)
+
+        self.assertNotIn("mappings", payload)
+        self.assertEqual(payload["mapping_count"], 300)
+        self.assertEqual(group["row_total"], 300)
+        self.assertEqual(len(group["rows"]), 80, "一次最多下发 ROW_LIMIT 行")
+        self.assertLess(len(body), 300_000, "28 万个文件时下发体必须被截断，否则浏览器直接卡死")
+
+    def test_rows_endpoint_pages_the_rest(self) -> None:
+        _, payload = self._big_plan(300)
+        port = self._serve()
+        plan_id = payload["plan_id"]
+        root = payload["display"]["readable"]["groups"][0]["root_path"]
+
+        page = self._post(port, "/api/plan/rows", {"plan_id": plan_id, "root": root, "offset": 80, "limit": 200})
+        tail = self._post(port, "/api/plan/rows", {"plan_id": plan_id, "root": root, "offset": 280, "limit": 200})
+
+        self.assertEqual(page["total"], 300)
+        self.assertEqual(len(page["rows"]), 200)
+        self.assertEqual(len(tail["rows"]), 20, "最后一页只给剩下的行，不越界")
+        self.assertEqual(page["rows"][0]["before"], str(Path("壳") / "0080.mp4"))
+
+    def test_page_limit_is_clamped(self) -> None:
+        _, payload = self._big_plan(1200)
+        port = self._serve()
+        root = payload["display"]["readable"]["groups"][0]["root_path"]
+
+        page = self._post(port, "/api/plan/rows", {"plan_id": payload["plan_id"], "root": root, "offset": 0, "limit": 9999})
+
+        self.assertEqual(len(page["rows"]), 1000, "单页上限 1000 行，别让一次请求又把浏览器拖死")
+
+    def test_unknown_plan_is_rejected(self) -> None:
+        import urllib.error
+
+        port = self._serve()
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self._post(port, "/api/plan/rows", {"plan_id": "nope", "root": "", "offset": 0, "limit": 10})
+
+        self.assertEqual(caught.exception.code, 400)
+        self.assertIn("计划不存在", caught.exception.read().decode("utf-8"))
+
+    def test_page_template_renders_groups_lazily(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        self.assertIn("function loadMore(", INDEX_HTML)
+        self.assertIn("data-more=", INDEX_HTML)
+        self.assertIn("rowMoreHint(", INDEX_HTML)
+        self.assertIn("id=\"more-", INDEX_HTML.replace("'", '"'))
+        self.assertIn("trackProgress('planFill'", INDEX_HTML.replace('"', "'"))
