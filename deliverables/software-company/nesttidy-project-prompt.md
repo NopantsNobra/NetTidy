@@ -1,6 +1,6 @@
 # 理巢 NestTidy · 项目提示词
 
-**【现行】** 面向 AI 会话的完整任务说明。按 `templates/task-prompt.md` 结构编写（2026-11-18），事实基线为提交 `f7cc04e`（已推送远端）。开工另需三份：工作区 `AGENTS.md`（含第 10 节工程协作约定）、手册第 0/19/20 章、`docs/规则对照表.md`。本文不复述规则细节，只给入口与边界。
+**【现行】** 面向 AI 会话的完整任务说明。按 `templates/task-prompt.md` 结构编写（2026-11-18），事实基线为当前 main 提交 `e5f36ea`（v1.5.1，已推送远端）。开工另需三份：工作区 `AGENTS.md`（含第 10 节工程协作约定）、手册第 0/19/20 章、`docs/规则对照表.md`。本文不复述规则细节，只给入口与边界。
 
 ---
 
@@ -13,8 +13,8 @@
 **相关文件与决策入口**
 
 - 规则语义唯一权威：`docs/规则对照表.md`；产品能力边界：手册第 19 章；冲突裁决：第 20 章八条优先级；路线与遗留：`ROADMAP.md`（第八节为竞品对标升级计划，含三档待办与风险台账）。
-- 技术栈：Python 3.11+，零第三方运行时依赖（纯标准库），`http.server` + 内联 HTML 本地 Web UI（绑 `127.0.0.1:8766`）+ CLI，SQLite 存历史。源码 2084 行 / 16 个 `.py` 模块（一律现算，不写死快照）。
-- 测试：`python -m unittest discover -s tests`，Windows 实机全绿才算通过（79 例基线，数量用 `grep -h "def test_" tests/*.py | wc -l` 现算）。POSIX 通过不算。
+- 技术栈：Python 3.11+，零第三方运行时依赖（纯标准库），`http.server` + 内联 HTML 本地 Web UI（绑 `127.0.0.1:8766`）+ CLI，SQLite 存历史。源码行数与模块数一律现算（`wc -l nesttidy/*.py`、`ls nesttidy/*.py | wc -l`），不写死快照。
+- 测试：`python -m unittest discover -s tests`，Windows 实机全绿才算通过；用例数一律现算（`grep -h "def test_" tests/*.py | wc -l`），不写死快照。POSIX 通过不算。
 - 规模数字（参考基线，非阻塞，2026-11-19 管理员裁决放宽）：源码 3,000 行、单文件 400 行、治理三文件 600 行均为复算记录项，偏离时在回报中说明原因即可，不作为停手门槛；**模块数 ≤20 仍是硬约束**（防反复拆模块）。产品文档只许 2 份（手册 + README）。依据见 `AGENTS.md` 第 1 节修订说明。
 - 远端：`git@github.com:NopantsNobra/NetTidy.git`（私有，SSH-over-443 间歇故障属已知环境现象）。推送链路按 `AGENTS.md` 6.2 第 6 条：先 fetch 查分叉，push 后 ls-remote 核对 + 干净克隆复跑。
 - 管理员已裁决事项（不得反复重提）：EXE 单文件封装**暂缓**（2026-11-17：开发阶段过早封装只增加额外工作；PyInstaller POC 数据与五项前置条件保留在 ROADMAP）；版本号不随小步改动连续升，升号与附注标签在完整交付时同步。
@@ -22,6 +22,7 @@
 **必须保持兼容的行为**
 
 - CLI 子命令与参数（`plan` / `copy` / `move` / `undo` / `duplicates` / `repair` / `history` / `manual`，`--confirm` 强制、`--report-dir` 等）；报告产物命名与格式（`summary.md` / `summary.json` / `mappings.csv` / `issues.csv` / `transaction_log.jsonl`）；`plan_id` 索引的冻结计划（多标签页各执行各的）；move 事务日志可撤销；`理巢输出_` 前缀目录自动跳过；默认端口 8766 与 `NESTTIDY_PORT` 环境变量。
+- v1.5.1 起冻结的对外契约（公开契约，后续变更需走兼容性裁决）：`POST /api/plan/rows` 分页端点（入参 `plan_id` / `root` / `offset` / `limit`）、`GET /api/config` 配置端点；精简计划载荷不再下发 `mappings`，改由 `mapping_count` 与 `display` 派生字段承载；去重结果的 `deletable_total` / `row_total` 截断披露字段（与截断后的 `deletable_paths` / `rows` 配套）。
 
 **禁止修改的范围**
 

@@ -246,6 +246,60 @@ class DuplicatePayloadTests(unittest.TestCase):
             self.assertTrue(payload["rows"])
 
 
+class DuplicateTruncationDisclosureTests(unittest.TestCase):
+    """v1.5.1 截断披露缺口：可删路径与 rows 都截到 400，页面必须说清「只显示前 X 条，共 Y 条」。"""
+
+    def setUp(self) -> None:
+        # 诊断成功会写「上次的源目录」到 cwd；测试必须与真实启动一样落在临时目录，不污染仓库根。
+        self._old_cwd = Path.cwd()
+        self._tmp_cwd = tempfile.TemporaryDirectory()
+        os.chdir(self._tmp_cwd.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self) -> None:
+        os.chdir(self._old_cwd)
+        self._tmp_cwd.cleanup()
+
+    def _payload(self, copies: int) -> dict:
+        """构造 1 个保留项 + copies 个全同副本：可删项与 rows 都超过 DUPLICATE_ROW_LIMIT。"""
+        root = Path(self._tmp_cwd.name) / "资源"
+        touch(root / "保留" / "same.bin", "dup-content")
+        for index in range(copies):
+            touch(root / f"副本{index:04d}" / "same.bin", "dup-content")
+        return Handler.detect_duplicates_payload(None, {"selected_root": str(root), "level": "deep", "verify": True})
+
+    def test_truncated_payload_carries_true_totals(self) -> None:
+        payload = self._payload(405)
+        group = payload["groups"][0]
+
+        self.assertIn("deletable_total", group)
+        self.assertIn("row_total", payload)
+        self.assertEqual(len(group["deletable_paths"]), 400)
+        self.assertEqual(group["deletable_total"], 405)
+        self.assertEqual(len(payload["rows"]), 400)
+        self.assertEqual(payload["row_total"], 406)
+
+    def test_untruncated_payload_has_no_gap_to_disclose(self) -> None:
+        payload = self._payload(2)
+        group = payload["groups"][0]
+
+        self.assertEqual(group["deletable_total"], len(group["deletable_paths"]))
+        self.assertEqual(payload["row_total"], len(payload["rows"]))
+
+    def test_page_discloses_both_truncated_totals(self) -> None:
+        from nesttidy.ui import INDEX_HTML
+
+        # 披露函数：只在 total>shown 时输出，未截断返回空串，不给误导性提示。
+        self.assertIn("function dupTruncNote(", INDEX_HTML)
+        self.assertIn("total>shown", INDEX_HTML)
+        self.assertIn("这里只显示前 ", INDEX_HTML)
+        self.assertIn("，共 ", INDEX_HTML)
+        # 两处调用点分别接在可删组与 rows 的真实字段上，X/Y 才是下发数与总数。
+        # 必须匹配真实执行语句而非任意子串：注释掉调用后残留的 `// dupTruncNote(...)` 不能算通过。
+        self.assertRegex(INDEX_HTML, r"(?m)^\s*html \+= dupTruncNote\(g\.deletable_paths\.length, g\.deletable_total,")
+        self.assertRegex(INDEX_HTML, r"(?m)^\s*html \+= dupTruncNote\(data\.rows\.length, data\.row_total,")
+
+
 class BlockFilterTests(unittest.TestCase):
     """1.0.0：只显示会动的资源包——筛选必须作用在包这一级，不能只藏行。"""
 

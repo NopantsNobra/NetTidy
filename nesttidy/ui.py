@@ -367,10 +367,15 @@ const runDuplicate = guard(async function runDuplicate(){
   }catch(e){ failed = true; document.getElementById('dupResult').innerHTML = '<p class="error">'+esc(e.message)+'</p>'; say(e.message,true); }
   finally{ prog.stop(!failed); }
 });
+// 截断披露：服务端为防大目录卡死只下发前若干条，页面必须说清「只显示前 X 条，共 Y 条」；未截断时不显示，避免误导。
+function dupTruncNote(shown,total,label){
+  return total>shown ? '<p class="muted">这里只显示前 '+shown+' 条'+label+'，共 '+total+' 条。</p>' : '';
+}
 function renderDup(data){
   const s = data.stats;
   let html = '<div class="headline">第一遍「'+esc(data.phase1_label)+'」找到 '+s.groups+' 组；自动跑第二遍全量哈希复核，剔除 '+s.recheck_rejected_groups
     + ' 组误判；可删副本 '+s.deletable_files+' 个，可回收 '+fmtBytes(s.reclaimable_bytes)+'。</div>';
+  html += dupTruncNote(data.rows.length, data.row_total, '重复明细');
   document.getElementById('dupTools').innerHTML = '<button class="ghost" onclick="checkAll(true)">全选可删副本</button><button class="ghost" onclick="checkAll(false)">取消全选</button><button class="danger" onclick="deleteSelected()">删除所选副本</button>';
   const groups = data.groups || [];
   if(!groups.length) html += '<p class="muted">没有发现重复文件。</p>';
@@ -379,6 +384,7 @@ function renderDup(data){
     const badge = g.verified && deletable ? '<span class="badge ok">已全量复核</span>' : (g.verified ? '<span class="badge ok">已复核</span>' : '<span class="badge warn">复核剔除</span>');
     html += '<div class="group" id="g-'+esc(g.duplicate_group_id)+'"><h4>'+badge+' 组 '+esc(g.duplicate_group_id)+' · '+g.file_count+' 个文件 · 每个 '+fmtBytes(g.size)+'</h4>';
     html += '<p class="muted" style="margin:2px 0 8px">'+esc(g.note)+'</p>';
+    html += dupTruncNote(g.deletable_paths.length, g.deletable_total, '可删副本');
     html += '<table><thead><tr><th style="width:34px">删</th><th>文件</th><th>相对资源包</th><th>大小</th></tr></thead><tbody>';
     const rootPath = data.selected_root || '';
     const rows = data.rows.filter(r=>r.duplicate_group_id===g.duplicate_group_id);
