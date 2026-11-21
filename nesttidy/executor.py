@@ -204,13 +204,25 @@ def do_copy(op: Operation, output_root: Path | None = None) -> None:
         raise RuntimeError(f"复制后大小校验失败: {target}")
 
 
+def missing_dirs(path: Path) -> list[Path]:
+    """返回从浅到深、当前尚不存在的目录链：整理时新建的文件夹必须记账，撤销才能一起收掉。"""
+    missing: list[Path] = []
+    current = path
+    while not current.exists() and current.parent != current:
+        missing.append(current)
+        current = current.parent
+    return list(reversed(missing))
+
+
 def do_move(op: Operation, tx_path: Path | None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
+    for created in missing_dirs(target.parent):
+        created.mkdir()
+        write_tx(tx_path, {"action": "mkdir", "source": str(created), "status": "done"})
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
     shutil.move(str(source), str(target))
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})

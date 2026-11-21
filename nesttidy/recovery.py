@@ -5,6 +5,8 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .config import REPORT_DIR_NAME
+
 
 @dataclass
 class UndoResult:
@@ -46,6 +48,22 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
         if action == "recycle":
             results.append(UndoResult(action, str(item.get("source", "")), "", "skipped", "已移入回收站：在回收站里右键「还原」即可放回原位置"))
             continue
+        if action == "mkdir":
+            # 整理时新建的空文件夹：文件都已搬回原处后再收掉，非空则一律不动（里面还有别人的东西）。
+            folder = Path(str(item.get("source", "")))
+            if not folder.exists():
+                results.append(UndoResult(action, str(folder), "", "skipped", "目录已不存在"))
+            elif any(folder.iterdir()):
+                results.append(UndoResult(action, str(folder), "", "skipped", "目录里还有别的内容，未删除"))
+            else:
+                folder.rmdir()
+                results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
+            continue
+        if action == "rmdir":
+            # M2 裁决不变：空目录删除不重建。重建出来的空壳和用户当初看到的目录树并非同一件事，
+            # 而且会让「撤销」凭空多出目录。这里只如实说明，不重放。
+            results.append(UndoResult(action, str(item.get("source", "")), "", "skipped", "空目录删除不重建（该操作不支持自动撤销）"))
+            continue
         if action not in {"move", "quarantine"}:
             # delete（彻底删除）没有现场可回收，必须显式说清，不能让它静默混在 skipped 里。
             note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "该操作不支持自动撤销"
@@ -68,7 +86,30 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
         else:
             message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
         results.append(UndoResult(action, str(source), str(target), "ok", message))
+    _retire_log(path, results)
     return results
+
+
+def _retire_log(path: Path, results: list[UndoResult]) -> None:
+    """撤销全部到位后收掉这次执行留下的记录物，别把「整理产生的文件夹」留在用户目录里。
+
+    只在没有任何失败行时动手（失败行还要靠日志再撤一次）；只删本次日志，并且仅当
+    `理巢报告` 目录已经空了才连带删掉它——里面还有别的日志就原样保留。
+    """
+    if any(row.status == "failed" for row in results):
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return
+    parent = path.parent
+    if parent.name.casefold() != REPORT_DIR_NAME.casefold():
+        return
+    try:
+        if not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        return
 
 
 def rows_as_dicts(rows: list[UndoResult]) -> list[dict]:

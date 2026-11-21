@@ -17,6 +17,7 @@ from unittest import mock
 
 import nesttidy.executor as executor
 from nesttidy.executor import execute_plan
+from nesttidy.model import Operation, OperationPlan
 from nesttidy.planner import build_plan
 from nesttidy.recovery import undo_transaction
 from nesttidy.reports import write_plan_report
@@ -314,6 +315,140 @@ class ExecutorFailureTests(unittest.TestCase):
             self.assertTrue(source.exists(), "权限失败后源文件仍被搬走")
             self.assertEqual(source.read_text(encoding="utf-8"), "payload", "源文件内容被改动")
             self.assertFalse((root / "电影.mkv").exists(), "权限失败后仍产生了目标文件")
+
+
+class UndoCreatedFolderTests(unittest.TestCase):
+    """整理时新建的文件夹必须随撤销一起收掉。
+
+    真实现场：move 会为目标路径 mkdir，撤销只搬回文件、不记账新建的目录，
+    于是「撤销」之后磁盘上多出一串空壳——用户以为复原了，其实没复原干净。
+    """
+
+    @staticmethod
+    def _plan(root: Path, source: Path, target: Path) -> OperationPlan:
+        return OperationPlan(
+            plan_id="p", app_version="t", rule_version="r", mode="move",
+            selected_root=str(root), output_root=None, config_snapshot={},
+            source_snapshot_digest="d", resource_roots=[str(root)],
+            operations=[Operation("o1", "rid", "move", str(source), str(target), ["R4 单文件提级"])],
+            issues=[], mappings=[], created_at="t",
+        )
+
+    def test_undo_removes_folders_created_by_move(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            source = root / "a" / "b" / "deep.txt"
+            touch(source, "payload")
+            target = root / "新分类" / "深层" / "deep.txt"
+            tx = base / "tx.jsonl"
+
+            result = execute_plan(self._plan(root, source, target), "move", confirm_move=True, transaction_log=str(tx))
+            self.assertEqual(result.completed, 1)
+            self.assertTrue(target.exists(), "夹具未真正搬动文件，用例会假绿")
+
+            rows = undo_transaction(str(tx))
+            self.assertTrue(source.exists(), "文件没有搬回原路径")
+            self.assertFalse((root / "新分类" / "深层").exists(), "撤销后仍留着整理时新建的最深层文件夹")
+            self.assertFalse((root / "新分类").exists(), "撤销后仍留着整理时新建的文件夹")
+            self.assertIn(("mkdir", "ok"), {(row.action, row.status) for row in rows})
+
+    def test_undo_keeps_created_folder_that_gained_other_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            source = root / "a" / "deep.txt"
+            touch(source, "payload")
+            target = root / "新分类" / "deep.txt"
+            tx = base / "tx.jsonl"
+            execute_plan(self._plan(root, source, target), "move", confirm_move=True, transaction_log=str(tx))
+            stranger = root / "新分类" / "用户自己放的文件.txt"
+            touch(stranger, "别动我")
+
+            rows = undo_transaction(str(tx))
+            self.assertTrue(source.exists())
+            mkdir_rows = [row for row in rows if row.action == "mkdir"]
+            self.assertTrue(mkdir_rows, "新建目录没有记账")
+            self.assertEqual(mkdir_rows[0].status, "skipped", "目录非空却被删了")
+            self.assertIn("还有别的内容", mkdir_rows[0].message)
+            self.assertTrue(stranger.exists(), "撤销删掉了不属于本次整理的文件")
+            self.assertTrue((root / "新分类").is_dir())
+
+
+    def test_undo_reports_removed_empty_shell_without_rebuilding_it(self) -> None:
+        """空目录清理删掉的壳按文档口径不重建，但撤销结果必须逐条说清楚。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            touch(root / "外壳" / "正文" / "电影.mkv", "payload")
+            (root / "外壳" / "原本就是空的").mkdir(parents=True)
+            plan = build_plan(str(root), "single")
+            tx = base / "tx.jsonl"
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+            self.assertEqual(result.failed, 0)
+            self.assertFalse((root / "外壳" / "原本就是空的").exists(), "夹具未触发空目录清理，用例会假绿")
+
+            rows = undo_transaction(str(tx))
+            self.assertTrue((root / "外壳" / "正文" / "电影.mkv").exists(), "文件没有搬回原路径")
+            self.assertFalse((root / "外壳" / "原本就是空的").exists(), "空目录删除不该被重建")
+            rmdir_rows = [row for row in rows if row.action == "rmdir"]
+            self.assertTrue(rmdir_rows, "空目录删除没有出现在撤销结果里")
+            self.assertEqual(rmdir_rows[0].status, "skipped")
+            self.assertIn("不重建", rmdir_rows[0].message)
+
+    def test_undo_retires_log_and_empty_report_folder(self) -> None:
+        """撤销到位后，本次执行留下的日志与空掉的「理巢报告」目录一起收掉。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            source = root / "a" / "deep.txt"
+            touch(source, "payload")
+            target = root / "新分类" / "deep.txt"
+            report = base / "理巢报告"
+            report.mkdir()
+            tx = report / "事务日志_1.jsonl"
+
+            execute_plan(self._plan(root, source, target), "move", confirm_move=True, transaction_log=str(tx))
+            self.assertTrue(tx.exists(), "事务日志没有写出来，用例会假绿")
+            undo_transaction(str(tx))
+            self.assertTrue(source.exists(), "文件没有搬回原路径")
+            self.assertFalse(tx.exists(), "撤销后仍留着事务日志")
+            self.assertFalse(report.exists(), "撤销后仍留着空掉的理巢报告目录")
+
+    def test_undo_keeps_report_folder_that_still_holds_other_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            source = root / "a" / "deep.txt"
+            touch(source, "payload")
+            target = root / "新分类" / "deep.txt"
+            report = base / "理巢报告"
+            report.mkdir()
+            tx = report / "事务日志_1.jsonl"
+            other = report / "事务日志_0.jsonl"
+            other.write_text("{}\n", encoding="utf-8")
+
+            execute_plan(self._plan(root, source, target), "move", confirm_move=True, transaction_log=str(tx))
+            undo_transaction(str(tx))
+            self.assertFalse(tx.exists())
+            self.assertTrue(other.exists(), "撤销连带删掉了别人的日志")
+            self.assertTrue(report.is_dir(), "目录里还有别的日志却被删了")
+
+    def test_undo_keeps_log_when_any_row_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "R"
+            source = root / "a" / "deep.txt"
+            touch(source, "payload")
+            target = root / "新分类" / "deep.txt"
+            tx = base / "tx.jsonl"
+            execute_plan(self._plan(root, source, target), "move", confirm_move=True, transaction_log=str(tx))
+            touch(source, "用户又手动放了一份")  # 原路径被占，撤销必然失败
+
+            rows = undo_transaction(str(tx))
+            self.assertIn("failed", {row.status for row in rows})
+            self.assertTrue(tx.exists(), "有失败行还删了日志，用户没法再撤一次")
 
 
 if __name__ == "__main__":

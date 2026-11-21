@@ -532,11 +532,13 @@ function markPlanExecuted(){
     hl.innerHTML = '<span class="badge ok">已执行</span>' + esc(v.headline||'') + ' <span class="muted">（卡片数字是执行前的计划值；要看现状请重新试运行）</span>';
   }
 }
+const UNDO_ACTION = {move:'搬回原处', mkdir:'删除新建文件夹', rmdir:'空目录删除', recycle:'回收站', delete:'彻底删除', quarantine:'放回原处'};
 const undoRun = guard(async function undoRun(logPath){
   let failed = false;
   try{
     const data = await api('/api/undo',{transaction_log:logPath});
-    document.getElementById('execResult').innerHTML = table(data.rows||[],['path','status','message'],['路径','结果','说明']);
+    const rows = (data.rows||[]).map(function(r){ return Object.assign({}, r, {action: (UNDO_ACTION[r.action]||r.action)}); });
+    document.getElementById('execResult').innerHTML = table(rows,['action','source','status','message'],['动作','路径','结果','说明']);
     say('撤销完成，逐条结果见下方。');
   }catch(e){ failed = true; say(e.message,true); }
 });
