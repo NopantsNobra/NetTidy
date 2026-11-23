@@ -224,6 +224,31 @@ class DeleteDuplicateTests(unittest.TestCase):
             self.assertTrue(Path(entries[0].path).exists())
 
 
+class RecycleFallbackTests(unittest.TestCase):
+    """非 Windows 没有回收站：必须按行失败说清原因，不许半路炸掉整批，也不许悄悄改成删除。"""
+
+    @unittest.skipUnless(os.name != "nt", "此用例只覆盖非 Windows 的降级路径；Windows 走真实回收站")
+    def test_recycle_on_non_windows_fails_per_row_without_aborting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "资源"
+            touch(root / "A" / "same.txt", "same-content")
+            touch(root / "B" / "same.txt", "same-content")
+            group = group_rows(detect_duplicates(str(root), "deep"))[0]
+            entries = [
+                DeleteEntry(path=path, keep_path=group.keep_path, expected_sha256=group.verified_hash)
+                for path in group.deletable_paths
+            ]
+            victim = Path(entries[0].path)
+
+            result = delete_duplicates(str(root), entries, mode="recycle", transaction_log=str(base / "log.jsonl"))
+
+            self.assertEqual(result.failed, 1, "回收站不可用必须记为失败，而不是抛异常中断整批")
+            self.assertEqual(result.rows[0]["code"], "EXECUTION_FAILED")
+            self.assertIn("回收站", result.rows[0]["message"])
+            self.assertTrue(victim.exists(), "回收站不可用时不得悄悄降级为直接删除")
+
+
 class DuplicatePayloadTests(unittest.TestCase):
     def test_payload_carries_groups_for_delete_buttons(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -256,10 +256,11 @@ dupLevel.addEventListener('change', updateSelectHints);
 delMode.addEventListener('change', updateSelectHints);
 updateSelectHints();
 async function makePlanInner(stay){
+  const isCopy = execMode.value === 'copy';
+  if(isCopy && !cleanPath(output.value)){ say('复制方式要先填输出目录，再点试运行。',true); return; }
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
   const prog = trackProgress('planFill','planProg');
   try{
-    const isCopy = execMode.value === 'copy';
     const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,progress_key:prog.key});
     currentPlanId = data.plan_id; lastPlan = data; planExecuted = false; planMode = isCopy ? 'copy' : 'move'; renderPlan(data); if(!stay){setTab('preview');}
     document.getElementById('steps').classList.add('hidden');

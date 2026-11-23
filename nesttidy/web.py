@@ -6,6 +6,7 @@ import socket
 import subprocess
 import threading
 from datetime import UTC, datetime
+from email.message import Message
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -55,6 +56,9 @@ class PlanRegistry:
 PLANS = PlanRegistry()
 
 PROGRESS: dict[str, dict] = {}
+# 多标签页并发读/写/淘汰进度槽：三处必须在同一把锁里，
+# 否则两个请求同时 pop(next(iter(...))) 会互踩出 KeyError / RuntimeError。
+_PROGRESS_LOCK = threading.Lock()
 
 
 class ExecutionGuard:
@@ -137,10 +141,19 @@ def _plan_payload(plan: OperationPlan) -> dict:
 
 def _progress_slot(key: str) -> dict:
     """未知 key 也返回完整契约，前端不必为「还没开始」和「已淘汰」写两套渲染。"""
-    state = PROGRESS.get(key)
-    if state is None:
-        return {"phase": "", "status": "running", "done": 0, "total": 0, "label": "", "note": "", "updated_at": ""}
-    return dict(state)
+    with _PROGRESS_LOCK:
+        state = PROGRESS.get(key)
+        if state is None:
+            return {"phase": "", "status": "running", "done": 0, "total": 0, "label": "", "note": "", "updated_at": ""}
+        return dict(state)
+
+
+def _trim_progress_locked() -> None:
+    """调用方必须已持有 _PROGRESS_LOCK。口径与 ExecutionGuard 幂等键一致：
+    优先淘汰已完成键；全部仍在运行时才按插入顺序兜底保上限（槽 ≤65）。"""
+    while len(PROGRESS) > 64:
+        finished = next((item for item, state in PROGRESS.items() if state.get("status") != "running"), None)
+        PROGRESS.pop(finished if finished is not None else next(iter(PROGRESS)))
 
 
 def _track(body: dict, phase: str = "执行"):
@@ -148,19 +161,21 @@ def _track(body: dict, phase: str = "执行"):
     key = str(body.get("progress_key") or "")
     if not key:
         return "", None
-    while len(PROGRESS) > 64:
-        PROGRESS.pop(next(iter(PROGRESS)))
 
     def report(done: int, total: int, label: str = "", step: str | None = None) -> None:
-        PROGRESS[key] = {
-            "phase": step or phase,
-            "status": "running",
-            "done": done,
-            "total": total,
-            "label": label,
-            "note": "",
-            "updated_at": datetime.now(UTC).isoformat(),
-        }
+        with _PROGRESS_LOCK:
+            # 只在插入新键时淘汰：已在跑的槽每报一次进度就淘汰一个历史槽会让别的页签丢结果。
+            if key not in PROGRESS:
+                _trim_progress_locked()
+            PROGRESS[key] = {
+                "phase": step or phase,
+                "status": "running",
+                "done": done,
+                "total": total,
+                "label": label,
+                "note": "",
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
 
     report(0, 0, "正在准备", phase)
     return key, report
@@ -168,12 +183,13 @@ def _track(body: dict, phase: str = "执行"):
 
 def _finish_progress(key: str, ok: bool, note: str = "") -> None:
     """终态由后端写：失败保留最后一帧，只在 status/note/updated_at 上收口。"""
-    state = PROGRESS.get(key)
-    if state is None:
-        return
-    state["status"] = "ok" if ok else "failed"
-    state["note"] = "" if ok else str(note)
-    state["updated_at"] = datetime.now(UTC).isoformat()
+    with _PROGRESS_LOCK:
+        state = PROGRESS.get(key)
+        if state is None:
+            return
+        state["status"] = "ok" if ok else "failed"
+        state["note"] = "" if ok else str(note)
+        state["updated_at"] = datetime.now(UTC).isoformat()
 
 
 def _duplicate_group_payload(group) -> dict:
@@ -254,11 +270,51 @@ def reveal_in_explorer(raw: str, select: bool) -> str:
     return str(path)
 
 
+def _host_name(raw: str) -> str:
+    """Host / Origin 里的主机名：去掉端口、IPv6 方括号与尾随点，统一小写。"""
+    text = (raw or "").strip().lower()
+    if text.startswith("["):
+        return text.split("]")[0].lstrip("[")
+    return text.split(":")[0].rstrip(".")
+
+
+def request_source_error(headers: Message, server_address: tuple[str, int]) -> str | None:
+    """本地服务的浏览器侧防线，返回拒绝原因（None 表示放行）。
+
+    - Host 白名单：挡 DNS 重绑定——恶意域名解析到 127.0.0.1 后页面即「同源」，可读响应；
+    - Origin 校验：挡跨站伪造——任意网页都能向 127.0.0.1 POST 执行 / 删除 / 撤销，
+      而理巢的删除底线是「逐个点选 + 二次确认」，被网页代点就破了这条底线；
+    - POST 另需 application/json（见 do_POST）：表单 / text/plain 是免预检的简单请求。
+
+    无 Origin 的请求（curl、命令行脚本）放行；服务只绑 127.0.0.1，不是对外接口。
+    """
+    allowed = {"127.0.0.1", "localhost"}
+    bound = str(server_address[0])
+    if bound and bound not in {"0.0.0.0", "::"}:
+        allowed.add(_host_name(bound))
+    if _host_name(headers.get("Host") or "") not in allowed:
+        return "拒绝来自非本机 Host 的请求"
+    origin = (headers.get("Origin") or "").strip()
+    if origin:
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme != "http"
+            or _host_name(parsed.hostname or "") not in allowed
+            or (parsed.port or 80) != server_address[1]
+        ):
+            return "拒绝跨站来源的请求（Origin 校验未通过）"
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         return
 
     def do_GET(self) -> None:
+        refused = request_source_error(self.headers, self.server.server_address)
+        if refused:
+            self.send_json({"error": refused}, status=403)
+            return
         if self.path == "/" or self.path.startswith("/index"):
             self.send_html(INDEX_HTML)
         elif self.path == "/api/health":
@@ -295,6 +351,15 @@ class Handler(BaseHTTPRequestHandler):
     _PLAN_LOCK_PATHS = frozenset({"/api/execute-copy", "/api/execute-move"})
 
     def do_POST(self) -> None:
+        refused = request_source_error(self.headers, self.server.server_address)
+        if refused:
+            self.send_json({"error": refused}, status=403)
+            return
+        # 只收 JSON：表单 / text/plain 属浏览器「简单请求」，免预检就能跨站发出；
+        # 卡住 Content-Type 就堵死了 CSRF 的低成本入口（页面自身 fetch 一直是 JSON）。
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+            self.send_json({"error": "请求体必须是 application/json"}, status=415)
+            return
         key = ""
         guard_plan = ""
         guard_key = ""
@@ -370,6 +435,9 @@ class Handler(BaseHTTPRequestHandler):
                     clear_readonly=bool(body.get("clear_readonly")),
                     clear_hidden=bool(body.get("clear_hidden")),
                     clear_zone_identifier=bool(body.get("clear_zone_identifier")),
+                    # 校验放行的五项必须都转发：旧版接受后两项又丢弃，用户勾了静默不生效。
+                    grant_current_user=bool(body.get("grant_current_user")),
+                    fix_inheritance=bool(body.get("fix_inheritance")),
                     progress=progress,
                 )
                 bad = [row for row in rows if row.status != "ok"]

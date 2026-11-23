@@ -8,6 +8,10 @@ from pathlib import Path
 
 from .planner import should_skip_path
 
+# 属性与 ACL 一律不跟随链接：chmod / attrib / icacls 作用在链接目标上，
+# 目标可能落在选定目录之外（页面承诺「符号链接，不跟随不处理」）。
+_NO_FOLLOW_PREFIXES = ("SKIPPED_SYSTEM", "SKIPPED_SYMLINK", "SKIPPED_REPARSE")
+
 
 @dataclass
 class RepairResult:
@@ -28,12 +32,15 @@ def repair_permissions(
 ) -> list[RepairResult]:
     base = Path(root).resolve()
     rows: list[RepairResult] = []
+    # icacls 授权只要一次账户名；os.getlogin() 在非交互会话会抛 OSError，
+    # 取不到就逐行记失败，不让整轮修复半路崩掉。
+    account = current_account() if grant_current_user and os.name == "nt" else ""
     paths = sorted(iter_paths(base, progress), key=lambda p: (str(p).casefold(), str(p)))
     for index, path in enumerate(paths, 1):
         if progress:
             progress(index, len(paths), path.name, "修复")
         skip = should_skip_path(path)
-        if skip and skip.startswith("SKIPPED_SYSTEM"):
+        if skip and skip.startswith(_NO_FOLLOW_PREFIXES):
             rows.append(RepairResult(str(path), "skip", "skipped", skip))
             continue
         if clear_readonly:
@@ -43,7 +50,11 @@ def repair_permissions(
         if clear_zone_identifier and os.name == "nt" and path.is_file():
             rows.append(remove_ads(path, "Zone.Identifier"))
         if grant_current_user and os.name == "nt":
-            rows.append(run_icacls(path, "/grant:r", f"{os.getlogin()}:F", "grant_current_user"))
+            if account:
+                # action 必须走关键字：写成位置参数会被 *args 吞掉，run_icacls 缺 action 直接 TypeError。
+                rows.append(run_icacls(path, "/grant:r", f"{account}:F", action="grant_current_user"))
+            else:
+                rows.append(RepairResult(str(path), "grant_current_user", "failed", "无法确定当前登录用户名，未执行"))
         if fix_inheritance and os.name == "nt":
             rows.append(run_icacls(path, "/inheritance:e", action="fix_inheritance"))
     return rows
@@ -67,6 +78,14 @@ def iter_paths(base: Path, progress=None):
             yield report(Path(dirpath) / name)
         for name in filenames:
             yield report(Path(dirpath) / name)
+
+
+def current_account() -> str:
+    """当前登录账户名；取不到返回空串，由调用方按失败行记录。"""
+    try:
+        return os.getlogin()
+    except OSError:
+        return ""
 
 
 def clear_readonly_attr(path: Path) -> RepairResult:

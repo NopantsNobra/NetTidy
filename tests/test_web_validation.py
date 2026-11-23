@@ -134,6 +134,30 @@ class RepairNoopGuardTests(_ServerMixin):
         self.assertIn("至少一项", data["error"])
 
 
+class RepairActionForwardingTests(_ServerMixin):
+    """校验放行的五个修复动作都必须真正执行：旧版丢弃后两项，勾了静默不生效。"""
+
+    def test_repair_forwards_grant_and_inheritance_flags(self):
+        from unittest import mock
+
+        root = self._mkdir("repair_flags")
+        seen: dict = {}
+
+        def fake_repair(selected_root, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        with mock.patch("nesttidy.web.repair_permissions", side_effect=fake_repair):
+            status, _ = _post(
+                self.port,
+                "/api/repair",
+                {"selected_root": root, "grant_current_user": True, "fix_inheritance": True},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(seen.get("grant_current_user"), "grant_current_user 被校验放行后丢弃")
+        self.assertTrue(seen.get("fix_inheritance"), "fix_inheritance 被校验放行后丢弃")
+
+
 class ValidateRootTests(_ServerMixin):
     """/api/validate-root：输入框失焦预检的契约。"""
 
@@ -218,6 +242,14 @@ class UiShellContractTests(unittest.TestCase):
         self.assertIn('<option value="move">原地整理</option>', self.html)
         self.assertIn('<option value="recycle">移入回收站</option>', self.html)
         self.assertIn('<option value="standard">标准（推荐）</option>', self.html)
+
+    def test_copy_mode_requires_output_before_plan(self):
+        """复制方式没填输出目录就试运行：旧版会生成 move 计划却挂着复制按钮。
+
+        执行侧本来就有一句「复制方式要先填输出目录」，所以断言必须落在试运行这一步
+        独有的措辞上，否则用例在任何版本上都绿。
+        """
+        self.assertIn("复制方式要先填输出目录，再点试运行", self.html)
 
 
 if __name__ == "__main__":

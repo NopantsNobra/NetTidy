@@ -106,6 +106,54 @@ class ProgressSlotTests(unittest.TestCase):
         self.assertEqual(set(web._progress_slot("never-used")), FIELDS)
 
 
+class ProgressConcurrencyTests(unittest.TestCase):
+    """多标签页同时写/读/淘汰进度槽：不许 KeyError / RuntimeError，有界不泄漏。"""
+
+    def setUp(self) -> None:
+        with web._PROGRESS_LOCK:
+            self._saved = dict(web.PROGRESS)
+            web.PROGRESS.clear()
+
+    def tearDown(self) -> None:
+        with web._PROGRESS_LOCK:
+            web.PROGRESS.clear()
+            web.PROGRESS.update(self._saved)
+
+    def test_concurrent_track_slot_and_trim_do_not_corrupt_state(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def worker(i: int) -> None:
+            for n in range(50):
+                key, report = web._track({"progress_key": f"race-{i}-{n}"}, "执行")
+                assert report is not None
+                report(n, 100, "x")
+                web._progress_slot(key)
+                web._finish_progress(key, True)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(worker, range(8)))
+        # 淘汰只发生在插入新键之前：槽最多临时到 65，绝不无界增长。
+        self.assertLessEqual(len(web.PROGRESS), 65)
+
+    def test_running_slot_survives_trim_and_finished_keys_go_first(self) -> None:
+        """淘汰口径与 ExecutionGuard 幂等键一致：先清已完成键，不踩运行中的槽。
+
+        运行中的槽必须先插入：插入顺序最靠前，FIFO 淘汰必然先踩它，
+        只有「优先淘汰已完成键」的口径才能让它活下来。
+        """
+        run_key, _ = web._track({"progress_key": "trim-running"}, "执行")
+        for n in range(64):
+            key, report = web._track({"progress_key": f"trim-done-{n}"}, "执行")
+            assert report is not None
+            web._finish_progress(key, True)
+
+        web._track({"progress_key": "trim-trigger"}, "执行")  # 插入新键，触发一次淘汰
+
+        self.assertIn(run_key, web.PROGRESS, "运行中的进度槽被淘汰")
+        self.assertNotIn("trim-done-0", web.PROGRESS, "淘汰没有先清已完成键")
+        self.assertLessEqual(len(web.PROGRESS), 65)
+
+
 class InstrumentationTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

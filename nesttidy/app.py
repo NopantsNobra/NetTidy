@@ -211,6 +211,9 @@ def main() -> None:
     except PortInUseError as exc:
         print(f"理巢启动失败：{exc}", file=sys.stderr)
         raise SystemExit(EXIT_PORT_IN_USE) from exc
+    except ValueError as exc:
+        # --host 非 127.0.0.1 是明确拒绝，给一行人话，不要一屏 traceback；拒绝语义不变。
+        raise SystemExit(f"理巢启动失败：{exc}") from exc
 
 
 if __name__ == "__main__":

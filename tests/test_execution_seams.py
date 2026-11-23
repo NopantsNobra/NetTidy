@@ -200,6 +200,35 @@ class CopyOutputBoundaryTests(unittest.TestCase):
             self.assertEqual([p for p in escape.rglob("*") if p.is_file()], [])
             self.assertIn("OUTPUT_BOUNDARY_ESCAPED", [row.code for row in result.issues])
 
+    def test_nested_link_escape_creates_no_directory_outside_output(self) -> None:
+        """边界复查必须先于 mkdir：父链被换成链接时，拒绝前连空目录都不许建到输出根之外。
+
+        构造必须是两层：R 下的子目录各放两个文件，否则 R 规则会把「只有一个文件的子目录」
+        拍平，target.parent 直接等于链接本身，mkdir(exist_ok=True) 成为空操作，测不出缺陷。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            for rel in ("keep1/a.txt", "keep1/a2.txt", "keep2/b.txt", "keep2/b2.txt"):
+                touch(base / "src" / "R" / rel, "payload")
+            out = base / "out"
+            out.mkdir()
+            escape = base / "escape"
+            escape.mkdir()
+            plan = build_plan(str(base / "src"), "batch", str(out))
+            try:
+                (out / "R").symlink_to(escape, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("本机无法创建目录链接，跳过此边界场景（Windows 由 junction 用例覆盖）")
+
+            result = execute_plan(plan, "copy")
+
+            self.assertEqual(result.completed, 0)
+            self.assertGreater(result.failed, 0)
+            self.assertEqual(
+                sorted(p.name for p in escape.iterdir()), [], "边界拒绝之前已把目录建到 copy 输出根之外"
+            )
+            self.assertIn("OUTPUT_BOUNDARY_ESCAPED", [row.code for row in result.issues])
+
 
 class FrozenPlanTests(unittest.TestCase):
     """不变量 6：未冻结计划必须在任何磁盘写入之前被拒绝，且零副作用。"""

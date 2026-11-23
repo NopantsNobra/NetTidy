@@ -196,9 +196,11 @@ def do_copy(op: Operation, output_root: Path | None = None) -> None:
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
+    # 边界复查必须先于任何写入，mkdir 也算写入：目标链里若被换成 junction / 目录符号链接，
+    # 先 mkdir 会把空目录建到输出边界之外（junction 逃逸要求「一个字节都不写」）。
     if output_root is not None:
         ensure_target_within_output(target, output_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     if target.stat().st_size != source.stat().st_size:
         raise RuntimeError(f"复制后大小校验失败: {target}")
@@ -265,6 +267,10 @@ def classify_exception(exc: Exception) -> str:
 
 def send_to_recycle_bin(path: Path) -> bool:
     """把单个文件交给 Windows 回收站（FOF_ALLOWUNDO + 不弹窗），回收站里可自行还原。"""
+    if os.name != "nt":
+        # 非 Windows 没有回收站：必须抛 OSError 让上层按行记失败，
+        # 不许让 ctypes.windll 的 AttributeError 半路炸掉整批删除（下层只捕获 OSError）。
+        raise OSError("回收站仅在 Windows 可用；本机请改用 purge 彻底删除")
     class SHFILEOPSTRUCTW(ctypes.Structure):
         _fields_ = [
             ("hwnd", ctypes.c_void_p),

@@ -99,6 +99,25 @@ class PortBindingTests(unittest.TestCase):
         self.assertEqual(ctx.exception.port, port)
         self.assertIn(str(port), str(ctx.exception))
 
+    def test_non_local_host_is_one_line_error_not_traceback(self) -> None:
+        """--host 非 127.0.0.1：拒绝语义不变，但报错形态必须是一行 SystemExit，不是 traceback。"""
+        import sys
+        import tempfile
+        from unittest import mock
+
+        from nesttidy import app
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sys, "argv", ["nesttidy", "--host", "0.0.0.0"]):
+            old_cwd = os.getcwd()
+            os.chdir(tmp)  # 隔离 理巢配置.json，保证 load_local_config 走默认值
+            try:
+                with self.assertRaises(SystemExit) as ctx:
+                    app.main()
+            finally:
+                os.chdir(old_cwd)
+        self.assertIn("理巢启动失败", str(ctx.exception))
+        self.assertIn("127.0.0.1", str(ctx.exception))
+
     def test_unroutable_bind_error_is_not_classified_as_port_in_use(self) -> None:
         """203.0.113.1 本机实测 winerror=10049，属非占用 bind 错误，必须原样抛。"""
         with self.assertRaises(OSError) as ctx:
