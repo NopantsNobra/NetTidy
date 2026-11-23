@@ -12,6 +12,7 @@ from .config import REPORT_DIR_NAME
 from .duplicate import full_sha256
 from .model import ExecutionIssue, Operation, OperationPlan
 from .planner import issue, validate_copy_output
+from .rules import stable_key
 
 
 @dataclass
@@ -21,6 +22,7 @@ class ExecutionResult:
     failed: int
     issues: list[ExecutionIssue]
     transaction_log: str | None
+    swept: int = 0
 
 
 @dataclass
@@ -139,8 +141,9 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
             skipped += 1
         else:
             failed += 1
+    swept = sweep_empty_dirs(plan, tx_path) if mode == "move" else 0
     apply_result_to_plan(plan, statuses, issues)
-    return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None)
+    return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None, swept=swept)
 
 
 def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: list[ExecutionIssue]) -> None:
@@ -242,6 +245,35 @@ def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
     path.rmdir()
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
     return True
+
+
+def sweep_empty_dirs(plan: OperationPlan, tx_path: Path | None) -> int:
+    """R6：move 收尾清扫。空目录（含整理后变空的资源根）一并删除，逐条写 rmdir 事务行，撤销可原样重建。"""
+    # 选中根本身不删：单包模式下它就是资源根，而包内文件只会在根内移动，正常整理不会让它变空。
+    keep = str(Path(plan.selected_root).resolve())
+    removed = 0
+    for root in sorted({str(Path(item).resolve()) for item in plan.resource_roots}):
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        try:
+            dirs = [path for path in base.rglob("*") if path.is_dir()]
+        except OSError:
+            continue
+        if root != keep:
+            dirs.append(base)
+        # 深 → 浅：先收掉最里层，父目录才可能跟着变空；资源根本身排在最后。
+        for path in sorted(dirs, key=lambda item: (-len(item.parts), stable_key(item, "dir"))):
+            try:
+                if any(path.iterdir()):
+                    continue
+                write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
+                path.rmdir()
+            except OSError:
+                continue
+            write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
+            removed += 1
+    return removed
 
 
 def write_tx(tx_path: Path | None, row: dict) -> None:

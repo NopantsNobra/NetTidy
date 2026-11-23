@@ -17,7 +17,7 @@
 | 代码规模 | 用 `wc -l nesttidy/*.py tests/*.py` 与 `python -m unittest discover -s tests` 复算，不写死快照 |
 | 技术栈 | Python 3.11+，**零第三方依赖**（纯标准库） |
 | 形态 | 本地 Web UI（绑 127.0.0.1）+ CLI，SQLite 存历史 |
-| 版本 | `1.7.1`，规则版本 `P0-R0-R5-v3`（以 `nesttidy/config.py` 的 `APP_VERSION` 为唯一来源） |
+| 版本 | `1.8.0`，规则版本 `P0-R0-R5-R6-v4`（以 `nesttidy/config.py` 的 `APP_VERSION` 为唯一来源） |
 | 唯一交付平台 | Windows |
 
 ### 开工必读（三份，不要多读）
@@ -61,7 +61,7 @@ R2 壳吸收          R3 分叉口判定      R4 单文件提级      R5 撞名�
 
 改动任何一条规则的**语义**，必须同时完成四件事，缺一不算改完：
 
-1. 升 `config.py` 的 `RULE_VERSION`（当前 `P0-R0-R5-v3`）
+1. 升 `config.py` 的 `RULE_VERSION`（当前 `P0-R0-R5-R6-v4`）
 2. 更新 `docs/规则对照表.md` 的对应行
 3. 先写一条**能复现旧行为错误**的测试，再改实现
 4. 在 `ROADMAP.md` 记明"为什么改"
@@ -75,7 +75,7 @@ R2 壳吸收          R3 分叉口判定      R4 单文件提级      R5 撞名�
 ```
 1. 任何文件不得被移动/复制/重命名到运行根目录下
 2. 任何文件不得跨资源根目录移动
-3. 资源根目录名称不得被删除或替换
+3. 资源根目录名称不得被替换；整理后为空则连同目录一并删除（R6 收尾，可撤销重建）
 4. 目标路径不得静默覆盖已有文件或目录
 5. 计划生成与执行必须分离
 6. 正式执行前必须生成冻结的 OperationPlan
@@ -295,12 +295,13 @@ python -m unittest discover -s tests        # ① Windows 全绿
 | **执行层可信度** | copy 交出完整副本 / 计划与模式一致 / 失败必须留痕 / 不写出输出根 | ✅ 前三项 v0.5.1 起、第四项 v0.5.2 起成立（逐文件复查重解析点）；**检查与 `copy2` 之间仍有 TOCTOU 窗口，此处只缩小窗口、不消除竞态** |
 | Windows 回归 | — | ✅ 已在 Windows 跑通（M0/M1.6/M2，2026-11-09） |
 | 手册承诺项（100 万文件 / 管理员提权） | 手册声明 | ⚠️ 部分未实机验证：**「中文路径未做长路径实测」这一历史问题已由 M3 消除**（不带前缀 root 353 / file 372 字符、带 `\\?\` 前缀 357 / 378 字符，实测通过；`LongPathsEnabled=1` 经 PowerShell 查证，属环境前提）；大目录 100,000 真实文件已实测达标（生成 380.158s / 规划 342.692s / Python 层峰值 109.54 MB，2026-11-10）；ADS 经 M3 定性为预期保真行为、非缺陷，不改实现；50 万 / 100 万级未实测；提权代码**已实现**（v0.6.0 起 `app.relaunch_as_admin` 走 `ShellExecuteW(runas)`，elevation.py 已并入 app.py），但提权子进程路径从未在真实管理员权限下跑通；AGENTS.md 4.4 要求的长路径 / ADS unittest 用例本轮未新增 |
-| undo | 已实现 | ⚠️ 回滚 move（含 `done` 缺失兜底）；v1.3.0 起重复副本走 Windows 回收站，`undo` 对 recycle 行报「已移入回收站：在回收站里右键还原」，对 purge 报`彻底删除无法撤销`；空目录删除不重建；v1.5.2 起撤销会删掉整理时新建的文件夹（非空不动）、退役本次事务日志，`理巢报告` 空了才连带删除，有失败行则保留日志 |
+| undo | 已实现 | ⚠️ 回滚 move（含 `done` 缺失兜底）；v1.3.0 起重复副本走 Windows 回收站，`undo` 对 recycle 行报「已移入回收站：在回收站里右键还原」，对 purge 报`彻底删除无法撤销`；v1.8.0 起空目录删除（`rmdir` 行）改为**重建目录**，可原样还原；v1.5.2 起撤销会删掉整理时新建的文件夹（非空不动）、退役本次事务日志，`理巢报告` 空了才连带删除，有失败行则保留日志 |
 | **重复副本删除** | v0.6.0 新增 | ✅ 走 `executor.delete_duplicates`，唯一结构写入入口；默认 `recycle`（`send_to_recycle_bin`：`SHFileOperationW` + `FOF_ALLOWUNDO/SILENT/NOCONFIRMATION/NOERRORUI`，删完复查文件已不在），purge 需 `confirm=true` 二次确认；删除前逐项硬校验（保留项在、源在、非同一文件、全文哈希与保留项一致、与诊断时哈希一致），任一不满足即 skip 并留痕；每个副本一条 tx 记录；带 `progress` 回调 |
 | **大目录分页** | v1.5.1 新增 | ✅ `/api/plan` 不再下发 `mappings`（28 万条约 206 MB JSON），只给 `mapping_count` 与截断后的 `operations`/`issues`；`display.readable` 每包最多 `ROW_LIMIT=80` 行、合计最多 `ROW_TOTAL=1500` 行，余下由 `POST /api/plan/rows`（`limit` 上限 1000）按页取；试运行期间 `progress` 按已扫文件数上报（`total=0` 表示总量未知，页面显示已处理个数） |
 | **进度契约** | v1.6.0 新增 | ✅ `GET /api/progress?key=` 返回 `{phase,status,done,total,label,note,updated_at}`，服务端在响应前写 `ok` / `failed` + 原因，六处等待环节埋点齐全；`total=0` 走流动条，等待时常驻「请勿重复操作」。规则语义与计划输出未变 |
 | **遍历与解析优化** | v1.7.0 新增 | ✅ `build_tree`/`resource_roots`/`snapshot_digest` 用 `os.scandir` 的 `DirEntry` 复用枚举元数据（符号链接 / junction 口径与 `os.walk` 一致）；`build_plan` 内 `resolve()` 改为单次规划内记忆化（键为原始路径字符串，resolved 语义保留，缓存随规划丢弃）。两项均有改造前后逐字节一致对照；`test_scandir_equivalence.py` 另含一个手写 mutant 守卫（只证明 digest 对字段变化敏感，不是全量变异测试）。规则语义、计划输出与 `RULE_VERSION` 未变 |
 | **执行锁与幂等** | v1.7.0 新增 | ✅ `web.ExecutionGuard` 两层防护：同一 `plan_id` 并发执行第二个请求 **409**（不排队、不合并，per-plan 锁仅覆盖 `execute-copy` / `execute-move`）；同一 `progress_key` 重复提交 409，不产生第二份事务日志 / 报告（报告、撤销、重复副本删除仅 per-key 幂等，不共享 per-plan 锁）。完成态幂等按 64 条有界淘汰，且优先淘汰已完成键、不淘汰仍在运行的键；`finally` 保证释放，被拒请求不释放他人锁（见 `tests/test_execution_guard.py`） |
+| **R6 收尾清扫** | v1.8.0 新增 | ✅ `executor.sweep_empty_dirs()` 在 move 收尾时自底向上删掉整理后为空的目录（含变空的资源根，选中的根除外）（`rglob` 深→浅、`stable_key` 排序），逐条写 `rmdir` 事务行；copy 模式不扫。补的是「执行期才变空」的目录——规划期只登记计划里写死的 `rmdir`。资源根不再豁免：完全空的资源根连目录一并删除，`rmdir` 事务行保证撤销可重建（不变量 3 于 2026-11-24 按管理员裁决修订）；`RULE_VERSION` 升 `P0-R0-R5-R6-v4`（见 `tests/test_empty_shell_sweep.py` 6 例） |
 | **请求来源防线** | v1.7.1 新增 | ✅ 本地接口只接受本机 `Host`、同源 `Origin`、`POST` 仅 `application/json`：跨站请求 403、非 JSON 415。挡的是「浏览器里任意网页向 127.0.0.1 代点执行/删除/撤销」与 DNS 重绑定；无 `Origin` 的命令行调用放行（需自带 JSON 头）。三道防线不改变「删除必须点选 + 二次确认」的语义，只是把代点这条路堵上（见 `tests/test_web_request_guard.py` 8 例） |
 | **两阶段重复比对** | v0.6.0 新增 | ✅ 诊断过程带 `progress` 回调（按大小分组上报）；第一遍按 `fast`/`standard`/`deep` 初筛，自动第二遍全文件 SHA-256 复核；复核后最大组只剩 1 个成员 → 判为误判，组 id 加 `-recheck`、`verified=false`、`conflict_note` 标明「首尾相同但全文哈希不同」，**永不进可删集合**；`--no-verify` 可显式跳过复核（可删集合保留，删除时仍重算全文哈希），行内标「未做第二遍复核」 |
 | 文件名清洗后再冲突 | 审计曾标"已验证" | ✅ M0 已修，虚拟树用例覆盖；截断撞名 0.5.1 起有短码兜底 |

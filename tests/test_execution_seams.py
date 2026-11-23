@@ -404,8 +404,8 @@ class UndoCreatedFolderTests(unittest.TestCase):
             self.assertTrue((root / "新分类").is_dir())
 
 
-    def test_undo_reports_removed_empty_shell_without_rebuilding_it(self) -> None:
-        """空目录清理删掉的壳按文档口径不重建，但撤销结果必须逐条说清楚。"""
+    def test_undo_rebuilds_removed_empty_shell(self) -> None:
+        """v1.8.0（R6）起空目录删除可还原：撤销把壳重建回来，并逐条说明。"""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             root = base / "R"
@@ -420,11 +420,11 @@ class UndoCreatedFolderTests(unittest.TestCase):
 
             rows = undo_transaction(str(tx))
             self.assertTrue((root / "外壳" / "正文" / "电影.mkv").exists(), "文件没有搬回原路径")
-            self.assertFalse((root / "外壳" / "原本就是空的").exists(), "空目录删除不该被重建")
+            self.assertTrue((root / "外壳" / "原本就是空的").is_dir(), "撤销应把删掉的空目录重建回来")
             rmdir_rows = [row for row in rows if row.action == "rmdir"]
             self.assertTrue(rmdir_rows, "空目录删除没有出现在撤销结果里")
-            self.assertEqual(rmdir_rows[0].status, "skipped")
-            self.assertIn("不重建", rmdir_rows[0].message)
+            self.assertTrue(all(row.status == "ok" for row in rmdir_rows), f"rmdir 行应记为已还原：{rmdir_rows}")
+            self.assertIn("重建", rmdir_rows[0].message)
 
     def test_undo_retires_log_and_empty_report_folder(self) -> None:
         """撤销到位后，本次执行留下的日志与空掉的「理巢报告」目录一起收掉。"""

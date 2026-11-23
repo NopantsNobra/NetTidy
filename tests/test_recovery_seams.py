@@ -45,9 +45,9 @@ class TruncatedLogTests(unittest.TestCase):
 
 
 class UndoRmdirPolicyTests(unittest.TestCase):
-    """M2 裁决：undo 不重建空目录，rmdir 行只报 skipped，绝不重放。"""
+    """v1.8.0（R6）裁决：undo 重建空目录，rmdir 行记 ok 并逐条说明。"""
 
-    def test_rmdir_rows_are_never_replayed(self) -> None:
+    def test_rmdir_rows_are_replayed_by_rebuilding_the_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             removed_dir = base / "壳"
@@ -60,9 +60,9 @@ class UndoRmdirPolicyTests(unittest.TestCase):
             rows = undo_transaction(str(tx))
 
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].status, "skipped")
-            self.assertIn("不支持自动撤销", rows[0].message)
-            self.assertFalse(removed_dir.exists(), "rmdir 行被重放，违反 M2 裁决")
+            self.assertEqual(rows[0].status, "ok")
+            self.assertIn("重建", rows[0].message)
+            self.assertTrue(removed_dir.is_dir(), "rmdir 行必须被重放，把目录重建回来")
 
     def test_purge_delete_rows_are_reported_as_unrecoverable(self) -> None:
         """0.6.0 新增 purge 删除：undo 必须明说不可撤销，不能静默 skipped 了事。"""

@@ -7,15 +7,19 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 APP_NAME = "理巢 NestTidy"
+# 1.8.0：新增 R6「移动完成后变空的目录一并删除」（move 收尾清扫资源根以外的空目录，
+# 逐条写 rmdir 事务行）；撤销侧 rmdir 行由「不重放」改为「重建目录」，删掉的空目录可原样还原。
 # 1.7.1：审计修复 10 项——repair 的 icacls 传参 / 账户名取不到 / 不跟随链接，/api/repair 补齐两项转发，
 # copy 边界复查前移到 mkdir 之前，Web 请求来源防线（Host + Origin + 只收 JSON），进度槽加锁与淘汰口径统一，
 # 非 Windows 回收站逐行失败，复制方式未填输出目录前置提示，--host 非本机一行报错。规则语义与 RULE_VERSION 未变。
 # 1.7.0：P0-2 scandir 元数据复用 / P0-3 单次规划内 resolve 记忆化（规则语义与计划输出不变）；
 # P1-2 服务端 per-plan 执行锁 + progress_key 幂等（同 plan 并发执行 409）。历次版本明细见 ROADMAP。
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
+# v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
+# undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
 # 单文件名分量硬上限 180 落实到 R5 与 clean_name 两处。
-RULE_VERSION = "P0-R0-R5-v3"
+RULE_VERSION = "P0-R0-R5-R6-v4"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766

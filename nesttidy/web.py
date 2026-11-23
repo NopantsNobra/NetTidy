@@ -458,6 +458,7 @@ class Handler(BaseHTTPRequestHandler):
                     "skipped": result.skipped,
                     "failed": result.failed,
                     "transaction_log": result.transaction_log,
+                    "swept": getattr(result, "swept", 0),
                     "issues": [row.to_dict() for row in result.issues],
                 })
             elif self.path == "/api/undo":

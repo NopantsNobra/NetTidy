@@ -62,9 +62,21 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
                 results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
             continue
         if action == "rmdir":
-            # M2 裁决不变：空目录删除不重建。重建出来的空壳和用户当初看到的目录树并非同一件事，
-            # 而且会让「撤销」凭空多出目录。这里只如实说明，不重放。
-            results.append(UndoResult(action, str(item.get("source", "")), "", "skipped", "空目录删除不重建（该操作不支持自动撤销）"))
+            # v1.8.0（R6）起空目录删除改为可还原：重建目录本身，文件早已各自搬回原路径。
+            # 重建出来同样是空目录——这正是整理前的样子（当初它就是个空壳或只含被搬走的文件）。
+            raw = str(item.get("source", ""))
+            if not raw:
+                results.append(UndoResult(action, "", "", "skipped", "日志缺少目录路径，未重建"))
+                continue
+            folder = Path(raw)
+            try:
+                if folder.is_dir():
+                    results.append(UndoResult(action, raw, "", "ok", "目录本来就在，无需重建"))
+                else:
+                    folder.mkdir(parents=True)
+                    results.append(UndoResult(action, raw, "", "ok", "已重建被删除的空目录"))
+            except OSError as exc:
+                results.append(UndoResult(action, raw, "", "failed", f"重建目录失败：{exc}"))
             continue
         if action not in {"move", "quarantine"}:
             # delete（彻底删除）没有现场可回收，必须显式说清，不能让它静默混在 skipped 里。

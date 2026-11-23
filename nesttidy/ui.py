@@ -545,11 +545,11 @@ async function executeMove(){
     const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true,progress_key:prog.key});
     markPlanExecuted();
     document.getElementById('execResult').innerHTML =
-      '<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。</div>'
+      '<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。</div>'
       + table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'])
       + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>' : '');
     document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
-    say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
+    say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。');
   }catch(e){ prog.fail(); say(e.message,true); }
   finally{ prog.stop(); }
 }
