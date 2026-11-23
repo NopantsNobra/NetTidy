@@ -421,7 +421,7 @@ class ProgressAndRepairTests(unittest.TestCase):
 
         slot = self._get(port, "/api/progress?key=never-started")
 
-        self.assertEqual(slot, {"done": 0, "total": 0, "label": ""})
+        self.assertEqual(slot, {"phase": "", "status": "running", "done": 0, "total": 0, "label": "", "note": "", "updated_at": ""})
 
     def test_repair_lists_only_anomalies_and_reports_counts(self) -> None:
         from unittest import mock
@@ -464,7 +464,7 @@ class ProgressAndRepairTests(unittest.TestCase):
             touch(root / "C" / "other.txt", "other")
             seen: list[tuple[int, int]] = []
 
-            rows = detect_duplicates(str(root), "standard", progress=lambda done, total, label="": seen.append((done, total)))
+            rows = detect_duplicates(str(root), "standard", progress=lambda done, total, label="", phase=None: seen.append((done, total)))
             self.assertTrue(seen, "诊断过程必须上报进度")
             self.assertEqual(seen[-1][0], seen[-1][1])
             group = group_rows(rows)[0]

@@ -32,6 +32,7 @@ code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:brea
 .group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px} .group h4{margin:0 0 6px;font-size:13px} details summary{cursor:pointer;font-weight:600;padding:4px 0}
 .filtered{display:none} .hidden{display:none!important}
 .pbar{height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;margin:8px 0} .pfill{height:100%;width:0;background:var(--ok);transition:width .2s} .pfill.failed{background:var(--bad)}
+@keyframes pfslide{from{transform:translateX(-100%)}to{transform:translateX(380%)}} .pfill.indeterminate{width:26%!important;animation:pfslide 1.4s linear infinite}
 .bar{position:sticky;top:0;z-index:6;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fff;padding:8px 0;margin:-4px 0 6px;border-bottom:1px solid #eef1ef} .bar .sp{flex:1 1 40px} .bar label{margin:0;display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px} .bar select{width:auto;max-width:300px} .bar button{margin:0}
 .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 16px} .tab{padding:12px 14px;border:1px solid var(--line);border-radius:10px;cursor:pointer;background:#fff;text-align:center}
 .tab:focus-visible{outline:2px solid var(--ok);outline-offset:2px} .tab b{display:block;font-size:15px} .tab small{color:var(--mute);font-size:12px}
@@ -72,6 +73,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
   <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理</option><option value="copy">复制到输出目录</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
     <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult" class="scrollbox"></div>
+    <div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">撤销事务日志时会在这里显示阶段与进度。</p>
     <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox"></div></section>
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox"></div></section>
 </section></div>
@@ -139,24 +141,55 @@ function setBusy(on){
 }
 function guard(fn){
   return async function(...args){
-    if(busy) return;
+    if(busy){ say('上一步还在执行，请勿重复操作。',true); return; }
     setBusy(true);
     try{ await fn.apply(this, args); }
     finally{ setBusy(false); }
   };
 }
+const PHASE_LABEL = {扫描:'扫描目录', 计划:'生成计划', 报告:'导出报告', 执行:'执行整理', 撤销:'撤销整理', 修复:'修复属性', 去重:'重复文件'};
+function renderProgress(d, fill, text){
+  // 终态只读后端的 status：前端不根据「有没有抛异常」自己判定成功。
+  if(d.status === 'ok'){
+    fill.classList.remove('failed','indeterminate'); fill.style.width = '100%';
+  }else if(d.status === 'failed'){
+    fill.classList.remove('indeterminate'); fill.classList.add('failed');
+  }else if(d.total){
+    fill.classList.remove('indeterminate');
+    fill.style.width = Math.min(100, Math.round(d.done / d.total * 100)) + '%';
+  }else{
+    // total=0 是总量未知：流动条表示在工作，不画假百分比。
+    fill.classList.add('indeterminate');
+  }
+  const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
+  const count = d.total ? d.done + ' / ' + d.total + ' · ' + pct + '%' : (d.done ? '已处理 ' + d.done + ' 个' : '正在准备');
+  const phase = PHASE_LABEL[d.phase] || d.phase || '处理中';
+  const tail = d.status === 'failed' ? ' · 失败：' + (d.note || '请看上方提示')
+    : d.status === 'ok' ? ' · 完成' : ' · 请勿重复操作';
+  text.textContent = phase + '：' + count + (d.label ? ' · ' + d.label : '') + tail;
+  if(d.status === 'failed') text.className = 'error';
+  else text.className = 'muted';
+}
 function trackProgress(fillId, textId){
   const key = 'p' + Math.random().toString(36).slice(2), fill = document.getElementById(fillId), text = document.getElementById(textId);
+  fill.classList.remove('failed','indeterminate'); fill.style.width = '0';
+  let transportFailed = false;
   const tick = () => fetch('/api/progress?key=' + key).then(r => r.json()).then(d => {
-    const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-    // 大目录扫描时总量未知（total=0）：显示已扫过的条数，进度条保持低位蠕动，不要假装有百分比。
-    fill.style.width = (d.total ? pct : (d.done ? 5 : 5)) + '%';
-    text.textContent = d.total
-      ? d.done + ' / ' + d.total + ' · ' + pct + '%' + (d.label ? ' · ' + d.label : '')
-      : (d.done ? '已处理 ' + d.done + ' 个' : '正在准备') + (d.label ? ' · 当前资源包 ' + d.label : '');
+    if(!transportFailed) renderProgress(d, fill, text);
+    else if(d.status === 'failed' || d.status === 'ok') renderProgress(d, fill, text);
   }).catch(() => {});
   const timer = setInterval(tick, 300); tick();
-  return {key: key, stop: (ok) => { clearInterval(timer); if(ok){ fill.style.width='100%'; fill.classList.remove('failed'); } else { fill.classList.add('failed'); } }};
+  const fail = () => {
+    // 请求没有拿到服务端响应（断网/代理/服务退出）时，后端不可能写终态。
+    // 这里只兜底“传输失败”，不把正常响应自行判成成功。
+    transportFailed = true;
+    clearInterval(timer);
+    fill.classList.remove('indeterminate'); fill.classList.add('failed');
+    text.className = 'error';
+    text.textContent = '请求未完成：未收到服务端的最终进度，请查看上方错误信息。';
+    tick();
+  };
+  return {key: key, fail: fail, stop: () => { clearInterval(timer); if(!transportFailed) tick(); }};
 }
 function showModal(opts){
   return new Promise(resolve=>{
@@ -234,6 +267,7 @@ async function makePlanInner(stay){
   }catch(e){
     invalidatePlan();
     say('生成计划失败：'+e.message+'（上一份计划已失效，不再可执行）',true);
+    prog.fail();
   }finally{
     prog.stop();
   }
@@ -360,12 +394,11 @@ const runDuplicate = guard(async function runDuplicate(){
   document.getElementById('dupResult').innerHTML = '<p class="muted">正在第一遍初筛并自动复核（大文件会比较久）...</p>';
   document.getElementById('dupTools').innerHTML = '';
   const prog = trackProgress('dupFill', 'dupProg');
-  let failed = false;
   try{
     const data = await api('/api/duplicates',{selected_root:cleanPath(root.value),level:dupLevel.value,verify:true,progress_key:prog.key});
     lastDup = data; renderDup(data);
-  }catch(e){ failed = true; document.getElementById('dupResult').innerHTML = '<p class="error">'+esc(e.message)+'</p>'; say(e.message,true); }
-  finally{ prog.stop(!failed); }
+  }catch(e){ prog.fail(); document.getElementById('dupResult').innerHTML = '<p class="error">'+esc(e.message)+'</p>'; say(e.message,true); }
+  finally{ prog.stop(); }
 });
 // 截断披露：服务端为防大目录卡死只下发前若干条，页面必须说清「只显示前 X 条，共 Y 条」；未截断时不显示，避免误导。
 function dupTruncNote(shown,total,label){
@@ -435,7 +468,6 @@ const doDelete = guard(async function doDelete(entries){
     if(!again) return;
   }
   const prog = trackProgress('dupFill', 'dupProg');
-  let failed = false;
   try{
     const data = await api('/api/duplicates/delete',{selected_root:cleanPath(root.value),mode:delModeValue,confirm:true,progress_key:prog.key,entries:entries.map(e=>({path:e.path,keep_path:e.keep_path,expected_sha256:e.expected_sha256}))});
     const done = data.deleted + data.recycled;
@@ -448,8 +480,8 @@ const doDelete = guard(async function doDelete(entries){
     document.getElementById('dupTools').innerHTML = '';
     document.getElementById('dupResult').innerHTML = html;
     say('删除完成：成功 '+done+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
-  }catch(e){ failed = true; say(e.message,true); }
-  finally{ prog.stop(!failed); }
+  }catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
 });
 const runRepair = guard(async function runRepair(){
   if(!fixReadonly.checked && !fixHidden.checked && !fixZone.checked){
@@ -457,7 +489,6 @@ const runRepair = guard(async function runRepair(){
     return;
   }
   const prog = trackProgress('repairFill', 'repairProg');
-  let failed = false;
   say('正在执行权限修复...');
   try{
     const data = await api('/api/repair',{selected_root:cleanPath(root.value),clear_readonly:fixReadonly.checked,clear_hidden:fixHidden.checked,clear_zone_identifier:fixZone.checked,progress_key:prog.key});
@@ -467,8 +498,8 @@ const runRepair = guard(async function runRepair(){
         + table(bad,['path','action','status','message'],['文件','动作','状态','说明'])
       : '<p class="muted">检查 '+data.checked+' 项，全部正常，没有需要列出的异常。</p>';
     say('权限修复完成：检查 '+data.checked+' 项，异常 '+bad.length+' 项。');
-  }catch(e){ failed = true; say(e.message,true); }
-  finally{ prog.stop(!failed); }
+  }catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
 });
 const executePlan = guard(async function executePlan(){
   if(planExecuted){ await makePlanInner(); return; }
@@ -485,7 +516,6 @@ async function executeCopy(){
   });
   if(!ok) return;
   const prog = trackProgress('execFill', 'execProg');
-  let failed = false;
   say('正在复制...');
   try{
     const data = await api('/api/execute-copy',{plan_id:currentPlanId,progress_key:prog.key});
@@ -497,8 +527,8 @@ async function executeCopy(){
       + table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态']);
     document.querySelectorAll('#execResult button[data-open-out]').forEach(b=>b.addEventListener('click',()=>reveal(b.dataset.openOut,false)));
     say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动，输出目录见下方。');
-  }catch(e){ failed = true; say(e.message,true); }
-  finally{ prog.stop(!failed); }
+  }catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
 }
 async function executeMove(){
   const c = ((lastPlan && lastPlan.display && lastPlan.display.readable) || {}).counts || {};
@@ -509,7 +539,6 @@ async function executeMove(){
   });
   if(!ok) return;
   const prog = trackProgress('execFill', 'execProg');
-  let failed = false;
   say('正在原地整理...');
   try{
     const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true,progress_key:prog.key});
@@ -520,8 +549,8 @@ async function executeMove(){
       + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>' : '');
     document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
     say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
-  }catch(e){ failed = true; say(e.message,true); }
-  finally{ prog.stop(!failed); }
+  }catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
 }
 function markPlanExecuted(){
   planExecuted = true;
@@ -534,19 +563,22 @@ function markPlanExecuted(){
 }
 const UNDO_ACTION = {move:'搬回原处', mkdir:'删除新建文件夹', rmdir:'空目录删除', recycle:'回收站', delete:'彻底删除', quarantine:'放回原处'};
 const undoRun = guard(async function undoRun(logPath){
-  let failed = false;
+  const prog = trackProgress('undoFill','undoProg');
   try{
-    const data = await api('/api/undo',{transaction_log:logPath});
+    const data = await api('/api/undo',{transaction_log:logPath,progress_key:prog.key});
     const rows = (data.rows||[]).map(function(r){ return Object.assign({}, r, {action: (UNDO_ACTION[r.action]||r.action)}); });
     document.getElementById('execResult').innerHTML = table(rows,['action','source','status','message'],['动作','路径','结果','说明']);
     say('撤销完成，逐条结果见下方。');
-  }catch(e){ failed = true; say(e.message,true); }
+  }catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
 });
-async function exportReport(){
+const exportReport = guard(async function exportReportInner(){
   if(!currentPlanId){ say('请先生成计划。',true); return; }
-  try{ const data = await api('/api/report',{plan_id:currentPlanId}); say('报告已导出：'+data.report_dir); }
-  catch(e){say(e.message,true);}
-}
+  const prog = trackProgress('planFill','planProg');
+  try{ const data = await api('/api/report',{plan_id:currentPlanId,progress_key:prog.key}); say('报告已导出：'+data.report_dir); }
+  catch(e){ prog.fail(); say(e.message,true); }
+  finally{ prog.stop(); }
+});
 async function loadHistory(){
   try{ const data = await fetch('/api/history').then(r=>r.json());
     document.getElementById('history').innerHTML = table(data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);

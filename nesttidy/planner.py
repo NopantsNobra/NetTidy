@@ -67,34 +67,68 @@ def resource_roots(selected_root: Path, mode: str) -> tuple[list[Path], list[Exe
     if mode != "batch":
         raise ValueError("mode 必须是 batch 或 single")
     roots: list[Path] = []
-    for child in sorted(selected_root.iterdir(), key=lambda p: (str(p).casefold(), str(p))):
+    with os.scandir(selected_root) as iterator:
+        entries = list(iterator)
+    for entry in sorted(entries, key=lambda e: (str(Path(e.path)).casefold(), str(Path(e.path)))):
+        child = Path(entry.path)
         skip = should_skip_path(child)
         if skip:
             issues.append(issue(str(child), "scan", skip.split(":", 1)[0], skip))
             continue
-        if child.is_dir():
+        if entry.is_dir():
             roots.append(child.resolve())
-        elif child.is_file():
+        elif entry.is_file():
             issues.append(issue(str(child), "scan", "IGNORED_ROOT_FILE", "批量模式下运行根目录文件原地保留"))
     return roots, issues
 
 
-def snapshot_digest(paths: list[Path]) -> str:
+def snapshot_digest(paths: list[Path], progress=None) -> str:
+    # 与 os.walk(topdown=True, followlinks=False) 等价的前序遍历，但用 DirEntry
+    # 复用枚举时的 stat；dirnames/filenames 的 casefold 排序与递归顺序逐字复刻，
+    # 保证 digest 字节序列与原实现完全一致（见 P0-2 基线对照测试）。
     h = hashlib.sha256()
+    done = 0
+
+    def visit(top: str) -> None:
+        nonlocal done
+        try:
+            with os.scandir(top) as iterator:
+                entries = list(iterator)
+        except OSError:
+            return
+        dirs: list[str] = []
+        files: dict[str, os.DirEntry] = {}
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                is_dir = False
+            if is_dir:
+                dirs.append(entry.name)
+            else:
+                files[entry.name] = entry
+        dirs.sort(key=str.casefold)
+        names = sorted(files, key=str.casefold)
+        h.update(str(Path(top)).encode("utf-8", "surrogatepass"))
+        for name in names:
+            try:
+                stat = files[name].stat()
+            except OSError:
+                continue
+            done += 1
+            if progress:
+                progress(done, 0, name, "计划")
+            path = Path(top) / name
+            h.update(str(path).encode("utf-8", "surrogatepass"))
+            h.update(str(stat.st_size).encode())
+            h.update(str(stat.st_mtime_ns).encode())
+        for dirname in dirs:
+            new_path = os.path.join(top, dirname)
+            if not os.path.islink(new_path):
+                visit(new_path)
+
     for root in sorted(paths, key=lambda p: str(p).casefold()):
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames.sort(key=str.casefold)
-            filenames.sort(key=str.casefold)
-            h.update(str(Path(dirpath)).encode("utf-8", "surrogatepass"))
-            for name in filenames:
-                path = Path(dirpath) / name
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                h.update(str(path).encode("utf-8", "surrogatepass"))
-                h.update(str(stat.st_size).encode())
-                h.update(str(stat.st_mtime_ns).encode())
+        visit(os.fspath(root))
     return h.hexdigest()
 
 
@@ -119,16 +153,38 @@ def collect_parent_paths(targets: list[Path]) -> set[Path]:
     return parents
 
 
+def _path_resolver():
+    """单次规划内的 resolve() 记忆化：键为原始路径字符串，命中返回同一 Path。
+
+    缓存随闭包生命周期丢弃，绝不跨规划复用——避免陈旧路径判定（ROADMAP P0-3）。
+    只做同语义记忆化，resolved 语义（含符号链接）完整保留。
+    """
+    cache: dict[str, Path] = {}
+
+    def resolve(path: Path) -> Path:
+        key = str(path)
+        result = cache.get(key)
+        if result is None:
+            result = path.resolve()
+            cache[key] = result
+        return result
+
+    return resolve
+
+
 def scan_residual_dirs(
     scanned_dirs: list[Path],
     local_targets: list[Path],
     root: Path,
     removed_dirs: set[Path],
+    resolve=None,
 ) -> None:
     """登记「执行后不再有文件落入」的扫描目录（原地修改 removed_dirs）。"""
     occupied = collect_parent_paths(local_targets)
+    if resolve is None:
+        resolve = lambda path: path.resolve()
     for scanned in scanned_dirs:
-        resolved = scanned.resolve()
+        resolved = resolve(scanned)
         if resolved == root or resolved in removed_dirs:
             continue
         if resolved not in occupied:
@@ -139,10 +195,11 @@ def build_plan(
     selected_root: str,
     mode: str = "batch",
     output_root: str | None = None,
-    progress: Callable[[int, int, str], None] | None = None,
+    progress: Callable[[int, int, str, str | None], None] | None = None,
 ) -> OperationPlan:
-    """扫描 + 冻结计划。`progress(done, total, label)` 只上报进度：total 为 0 表示总量未定。"""
-    selected = Path(selected_root).resolve()
+    """扫描 + 冻结计划。`progress(done, total, label, phase)` 只上报进度：total 为 0 表示总量未定。"""
+    resolve = _path_resolver()
+    selected = resolve(Path(selected_root))
     roots, root_issues = resource_roots(selected, mode)
     operations: list[Operation] = []
     mappings: list[MappingEntry] = []
@@ -153,7 +210,7 @@ def build_plan(
 
     for root in roots:
         resource_id = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
-        tree, scan_issues = build_tree(root, should_skip_path)
+        tree, scan_issues = build_tree(root, should_skip_path, progress)
         scanned_dirs = collect_dir_paths(tree)
         for raw in scan_issues:
             code = str(raw["code"]).split(":", 1)[0]
@@ -169,25 +226,25 @@ def build_plan(
         # 旧实现只在「扫描残留空目录」那一段做了 output_root 判断，
         # R0-R4 登记的目录仍然生成 rmdir 操作，混进计划与报告里。
         if not output_root:
-            removed_dirs.update(path.resolve() for path in local_removed if path.resolve() != root)
+            removed_dirs.update(resolve(path) for path in local_removed if resolve(path) != root)
         local_targets: list[Path] = []
         files = list(final_files(tree, root))
         for index, (file_item, target) in enumerate(files, 1):
             if progress:
-                progress(done + index, 0, root.name)
+                progress(done + index, 0, root.name, "计划")
             local_targets.append(target)
             estimated_space += file_item.size
             if output_root:
                 # copy 模式必须交出完整副本：原位文件也要写进输出目录。
                 # 曾经沿用「无需移动 → keep」的判定，执行器跳过后输出缺文件却报 0 失败。
                 op_type = "copy"
-            elif file_item.original_path.resolve() == target.resolve() and not file_item.name_cleaning_trace:
+            elif resolve(file_item.original_path) == resolve(target) and not file_item.name_cleaning_trace:
                 op_type = "keep"
             else:
                 op_type = "move"
             actual_target = target
             if output_root:
-                actual_target = Path(output_root).resolve() / root.name / target.relative_to(root)
+                actual_target = resolve(Path(output_root)) / root.name / target.relative_to(root)
             op = Operation(
                 op_id=str(uuid.uuid4()),
                 resource_root_id=resource_id,
@@ -223,7 +280,7 @@ def build_plan(
         # 这条同时覆盖穿透点下方被重新挂载的子目录——它们的旧路径同样会变空。
         done += len(files)
         if not output_root:
-            scan_residual_dirs(scanned_dirs, local_targets, root, removed_dirs)
+            scan_residual_dirs(scanned_dirs, local_targets, root, removed_dirs, resolve=resolve)
 
     for dir_path in sorted(removed_dirs, key=lambda p: str(p).casefold(), reverse=True):
         operations.append(
@@ -245,9 +302,9 @@ def build_plan(
         rule_version=RULE_VERSION,
         mode=mode,
         selected_root=str(selected),
-        output_root=str(Path(output_root).resolve()) if output_root else None,
+        output_root=str(resolve(Path(output_root))) if output_root else None,
         config_snapshot={"mode": mode, "output_root": output_root},
-        source_snapshot_digest=snapshot_digest(roots),
+        source_snapshot_digest=snapshot_digest(roots, progress),
         resource_roots=[str(root) for root in roots],
         operations=operations,
         issues=issues,

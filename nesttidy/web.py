@@ -5,7 +5,7 @@ import json
 import socket
 import subprocess
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +56,53 @@ PLANS = PlanRegistry()
 
 PROGRESS: dict[str, dict] = {}
 
+
+class ExecutionGuard:
+    """执行类端点的两层防护：per-plan 执行锁 + per-key 请求幂等（P1-2）。
+
+    - 同一 plan_id 并发执行：第二个请求拿不到锁，返回 409，不排队不合并。
+    - 同一 progress_key 重复提交：返回「进行中/已提交」，不重复执行、不产生第二份
+      事务日志或报告；完成态也保留一段时间用于幂等，按 64 条有界淘汰。键满时优先
+      淘汰已完成键；若全部仍在运行则拒绝新任务，绝不淘汰正在执行的键。
+    两层状态用同一把锁做「检查 + 登记」的原子操作，避免检查与登记之间被抢占。
+    """
+
+    def __init__(self, max_keys: int = 64) -> None:
+        self._lock = threading.Lock()
+        self._inflight: dict[str, str] = {}
+        self._locked_plans: set[str] = set()
+        self._max_keys = max(1, max_keys)
+
+    def acquire(self, plan_id: str, progress_key: str) -> str | None:
+        """返回 None 表示获得执行权；否则返回应展示给用户的冲突原因。"""
+        with self._lock:
+            if progress_key and progress_key in self._inflight:
+                return "任务进行中或已提交，请勿重复操作"
+            if plan_id and plan_id in self._locked_plans:
+                return "该计划正在执行中，请勿重复提交"
+            if progress_key:
+                # 只淘汰已完成的幂等键；仍在运行的键被淘汰会让同一 key 再次进入，
+                # 形成“看起来幂等、实际并发”的漏洞。全部在跑时宁可拒绝新任务。
+                while len(self._inflight) >= self._max_keys:
+                    completed = next((k for k, v in self._inflight.items() if v != "running"), None)
+                    if completed is None:
+                        return "并发任务过多，请稍后重试"
+                    self._inflight.pop(completed)
+                self._inflight[progress_key] = "running"
+            if plan_id:
+                self._locked_plans.add(plan_id)
+        return None
+
+    def release(self, plan_id: str, progress_key: str, ok: bool = True) -> None:
+        with self._lock:
+            if plan_id:
+                self._locked_plans.discard(plan_id)
+            if progress_key and progress_key in self._inflight:
+                self._inflight[progress_key] = "ok" if ok else "failed"
+
+
+EXECUTION_GUARD = ExecutionGuard()
+
 ROW_LIMIT = 80          # 每个资源包一次最多下发的对照行数：28 万个文件全量渲染会把浏览器卡死
 ROW_PAGE = 200          # 「显示更多」每页追加的行数
 FOLDER_LIMIT = 300      # 空文件夹清单同样截断
@@ -88,19 +135,45 @@ def _plan_payload(plan: OperationPlan) -> dict:
     }
 
 
-def _track(body: dict):
-    """progress_key → 旁路进度槽；执行接口本身仍是同步的。"""
+def _progress_slot(key: str) -> dict:
+    """未知 key 也返回完整契约，前端不必为「还没开始」和「已淘汰」写两套渲染。"""
+    state = PROGRESS.get(key)
+    if state is None:
+        return {"phase": "", "status": "running", "done": 0, "total": 0, "label": "", "note": "", "updated_at": ""}
+    return dict(state)
+
+
+def _track(body: dict, phase: str = "执行"):
+    """progress_key → 旁路进度槽；回调保持 done/total/label 三参，第四参用于覆盖阶段。"""
     key = str(body.get("progress_key") or "")
     if not key:
         return "", None
     while len(PROGRESS) > 64:
         PROGRESS.pop(next(iter(PROGRESS)))
 
-    def report(done: int, total: int, label: str = "") -> None:
-        PROGRESS[key] = {"done": done, "total": total, "label": label}
+    def report(done: int, total: int, label: str = "", step: str | None = None) -> None:
+        PROGRESS[key] = {
+            "phase": step or phase,
+            "status": "running",
+            "done": done,
+            "total": total,
+            "label": label,
+            "note": "",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
 
-    PROGRESS[key] = {"done": 0, "total": 0, "label": "正在准备"}
+    report(0, 0, "正在准备", phase)
     return key, report
+
+
+def _finish_progress(key: str, ok: bool, note: str = "") -> None:
+    """终态由后端写：失败保留最后一帧，只在 status/note/updated_at 上收口。"""
+    state = PROGRESS.get(key)
+    if state is None:
+        return
+    state["status"] = "ok" if ok else "failed"
+    state["note"] = "" if ok else str(note)
+    state["updated_at"] = datetime.now(UTC).isoformat()
 
 
 def _duplicate_group_payload(group) -> dict:
@@ -202,21 +275,51 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"selected_root": config.selected_root})
         elif self.path.startswith("/api/progress"):
             key = (parse_qs(urlparse(self.path).query).get("key") or [""])[0]
-            self.send_json(PROGRESS.get(key) or {"done": 0, "total": 0, "label": ""})
+            self.send_json(_progress_slot(key))
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
+    def send_tracked(self, key: str, obj) -> None:
+        """成功响应前由后端落下 ok 终态；没有 progress_key 时是空操作。"""
+        _finish_progress(key, True)
+        self.send_json(obj)
+
+    # 会产生持久副作用的端点：per-key 幂等 +（执行类额外）per-plan 锁。
+    # 只读端点（plan / plan/rows / duplicates 诊断 / validate-root / reveal）不设防。
+    _GUARD_PATHS = frozenset(
+        {
+            "/api/report", "/api/duplicates/delete", "/api/undo-delete", "/api/undo",
+            "/api/execute-copy", "/api/execute-move",
+        }
+    )
+    _PLAN_LOCK_PATHS = frozenset({"/api/execute-copy", "/api/execute-move"})
+
     def do_POST(self) -> None:
+        key = ""
+        guard_plan = ""
+        guard_key = ""
+        acquired = False
+        failed = False
         try:
             body = self.read_json()
+            # 在 _track 之前 acquire：被拒请求不得重置正在执行请求的进度槽。
+            if self.path in self._GUARD_PATHS:
+                guard_key = str(body.get("progress_key") or "")
+                if self.path in self._PLAN_LOCK_PATHS:
+                    guard_plan = _plan_id(body)
+                conflict = EXECUTION_GUARD.acquire(guard_plan, guard_key)
+                if conflict:
+                    self.send_json({"error": conflict}, status=409)
+                    return
+                acquired = True
             if self.path == "/api/plan":
-                _, progress = _track(body)
+                key, progress = _track(body, "计划")
                 plan = build_plan(
                     _selected_root(body), body.get("mode", "batch"), body.get("output_root") or None, progress=progress
                 )
                 PLANS.put(plan)
                 _remember_root_quietly(plan.selected_root)
-                self.send_json(_plan_payload(plan))
+                self.send_tracked(key, _plan_payload(plan))
             elif self.path == "/api/plan/rows":
                 plan = PLANS.get(_plan_id(body))
                 self.send_json(
@@ -228,12 +331,14 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 )
             elif self.path == "/api/report":
-                report_dir = write_plan_report(PLANS.get(_plan_id(body)))
-                self.send_json({"report_dir": str(report_dir)})
+                key, progress = _track(body, "报告")
+                report_dir = write_plan_report(PLANS.get(_plan_id(body)), progress=progress)
+                self.send_tracked(key, {"report_dir": str(report_dir)})
             elif self.path == "/api/duplicates":
-                self.send_json(self.detect_duplicates_payload(body))
+                key, progress = _track(body, "去重")
+                self.send_tracked(key, self.detect_duplicates_payload(body, progress))
             elif self.path == "/api/duplicates/delete":
-                _, progress = _track(body)
+                key, progress = _track(body, "去重")
                 result = delete_duplicates(
                     _existing_root(body),
                     _delete_entries(body),
@@ -241,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
                     confirm=bool(body.get("confirm")),
                     progress=progress,
                 )
-                self.send_json(result.to_dict())
+                self.send_tracked(key, result.to_dict())
             elif self.path == "/api/validate-root":
                 self.send_json(self.validate_root_payload(body))
             elif self.path == "/api/reveal":
@@ -250,9 +355,10 @@ class Handler(BaseHTTPRequestHandler):
                 log_path = body.get("transaction_log")
                 if not isinstance(log_path, str) or not log_path:
                     raise ValueError("缺少 transaction_log（删除日志路径）")
-                self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
+                key, progress = _track(body, "撤销")
+                self.send_tracked(key, {"rows": rows_as_dicts(undo_transaction(log_path, progress))})
             elif self.path == "/api/repair":
-                _, progress = _track(body)
+                key, progress = _track(body, "修复")
                 root = _existing_root(body)
                 if not any(
                     bool(body.get(key))
@@ -268,18 +374,18 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 bad = [row for row in rows if row.status != "ok"]
                 _remember_root_quietly(str(Path(root).resolve()))
-                self.send_json({"rows": rows_as_dicts(bad), "checked": len(rows), "passed": len(rows) - len(bad)})
+                self.send_tracked(key, {"rows": rows_as_dicts(bad), "checked": len(rows), "passed": len(rows) - len(bad)})
             elif self.path == "/api/execute-copy":
-                _, progress = _track(body)
+                key, progress = _track(body, "执行")
                 result = execute_plan(PLANS.get(_plan_id(body)), "copy", progress=progress)
-                self.send_json({"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
+                self.send_tracked(key, {"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
             elif self.path == "/api/execute-move":
                 plan = PLANS.get(_plan_id(body))
                 if body.get("confirm") is not True:
                     raise ValueError("原地整理会修改源目录；请先看预览，再点确认执行")
-                _, progress = _track(body)
+                key, progress = _track(body, "执行")
                 result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)), progress=progress)
-                self.send_json({
+                self.send_tracked(key, {
                     "completed": result.completed,
                     "skipped": result.skipped,
                     "failed": result.failed,
@@ -290,13 +396,19 @@ class Handler(BaseHTTPRequestHandler):
                 log_path = body.get("transaction_log")
                 if not isinstance(log_path, str) or not log_path:
                     raise ValueError("缺少 transaction_log（事务日志路径）")
-                self.send_json({"rows": rows_as_dicts(undo_transaction(log_path))})
+                key, progress = _track(body, "撤销")
+                self.send_tracked(key, {"rows": rows_as_dicts(undo_transaction(log_path, progress))})
             elif self.path == "/api/manual":
                 self.send_json({"manual_pdf": str(write_manual_pdf("理巢_NestTidy_简要操作手册.pdf"))})
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
         except Exception as exc:
+            failed = True
+            _finish_progress(key, False, str(exc))
             self.send_json({"error": str(exc)}, status=400)
+        finally:
+            if acquired:
+                EXECUTION_GUARD.release(guard_plan, guard_key, ok=not failed)
 
     def validate_root_payload(self, body: dict) -> dict:
         """输入框失焦预检：只判存在性，不扫描；空路径返回 ok=false 而非异常。"""
@@ -313,12 +425,12 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": False, "error": "这是一个文件，不是文件夹"}
         return {"ok": True, "resolved": str(path.resolve())}
 
-    def detect_duplicates_payload(self, body: dict) -> dict:
+    def detect_duplicates_payload(self, body: dict, progress=None) -> dict:
         """两阶段诊断的统一出口：rows 供 CSV/明细，groups 供分组卡片与删除按钮。"""
         root = _existing_root(body)
         level = body.get("level", "standard")
         verify = body.get("verify", True) is not False
-        rows = detect_duplicates(root, level, verify=verify, progress=_track(body)[1])
+        rows = detect_duplicates(root, level, verify=verify, progress=progress)
         resolved = str(Path(root).resolve())
         _remember_root_quietly(resolved)
         return {

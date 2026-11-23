@@ -7,8 +7,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 APP_NAME = "理巢 NestTidy"
-# 1.5.0：新增最小本地配置（仅上次的源目录与端口，见 load_local_config）。历次版本明细见 ROADMAP。
-APP_VERSION = "1.5.2"
+# 1.7.0：P0-2 scandir 元数据复用 / P0-3 单次规划内 resolve 记忆化（规则语义与计划输出不变）；
+# P1-2 服务端 per-plan 执行锁 + progress_key 幂等（同 plan 并发执行 409）。历次版本明细见 ROADMAP。
+APP_VERSION = "1.7.0"
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
 # 单文件名分量硬上限 180 落实到 R5 与 clean_name 两处。
 RULE_VERSION = "P0-R0-R5-v3"

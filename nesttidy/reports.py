@@ -19,12 +19,26 @@ def new_report_dir(base_dir: str | None = None) -> Path:
     return path
 
 
-def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None, db_path: str | Path | None = None) -> Path:
+def write_plan_report(
+    plan: OperationPlan,
+    report_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
+    progress=None,
+) -> Path:
     out = Path(report_dir).resolve() if report_dir else new_report_dir()
     out.mkdir(parents=True, exist_ok=True)
+    steps = 5
+
+    def report(done: int, label: str) -> None:
+        if progress:
+            progress(done, steps, label, "报告")
+
+    report(0, "准备报告")
     data = plan.to_dict()
     (out / "summary.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    report(1, "摘要 JSON")
     (out / "summary.md").write_text(markdown_summary(plan), encoding="utf-8")
+    report(2, "摘要 Markdown")
     with (out / "mappings.csv").open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(
             f,
@@ -49,14 +63,17 @@ def write_plan_report(plan: OperationPlan, report_dir: str | Path | None = None,
             item["name_cleaning_trace"] = " | ".join(row.name_cleaning_trace)
             item["conflict_resolution_trace"] = " | ".join(row.conflict_resolution_trace)
             writer.writerow({k: item.get(k, "") for k in writer.fieldnames})
+    report(3, "对照明细")
     with (out / "issues.csv").open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["issue_id", "path", "stage", "code", "message", "final_status", "created_at"])
         writer.writeheader()
         for row in plan.issues:
             item = row.to_dict()
             writer.writerow({k: item.get(k, "") for k in writer.fieldnames})
+    report(4, "异常明细")
     # 历史库跟随报告目录，而非进程工作目录：报告写在哪，历史就记在哪。
     record_plan(plan, str(out), db_path=db_path or out.parent / "history.sqlite")
+    report(5, "写入历史")
     return out
 
 

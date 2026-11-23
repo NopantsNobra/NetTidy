@@ -17,7 +17,7 @@ class UndoResult:
     message: str
 
 
-def undo_transaction(transaction_log: str) -> list[UndoResult]:
+def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
     path = Path(transaction_log).resolve()
     if not path.exists():
         raise FileNotFoundError(f"事务日志不存在: {path}")
@@ -42,7 +42,9 @@ def undo_transaction(transaction_log: str) -> list[UndoResult]:
         elif item.get("status") == "done":
             collected[key] = item
     results: list[UndoResult] = []
-    for key in reversed(order):
+    for index, key in enumerate(reversed(order), 1):
+        if progress:
+            progress(index, len(order), str(key[1] or ""), "撤销")
         item = collected[key]
         action = item.get("action", "")
         if action == "recycle":

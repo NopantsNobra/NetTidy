@@ -117,10 +117,16 @@ class PlannerResidualDirEquivalenceTests(unittest.TestCase):
 
     @staticmethod
     def legacy_scan(scanned_dirs: list[Path], local_targets: list[Path], root: Path,
-                    removed_dirs: set[Path]) -> None:
-        """优化前的实现，仅用于行为对照，不要在生产代码中复活。"""
+                    removed_dirs: set[Path], resolve=None) -> None:
+        """优化前的实现，仅用于行为对照，不要在生产代码中复活。
+
+        resolve 是 P0-3 注入的同语义记忆化解析，与 scanned.resolve() 结果一致；
+        接受它是为了兼容 build_plan 的新签名，对照的仍是残留目录判定算法。
+        """
+        if resolve is None:
+            resolve = lambda path: path.resolve()
         for scanned in scanned_dirs:
-            resolved = scanned.resolve()
+            resolved = resolve(scanned)
             if resolved == root or resolved in removed_dirs:
                 continue
             if not any(resolved in target.parents for target in local_targets):

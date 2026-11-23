@@ -66,7 +66,7 @@ def detect_duplicates(
     base = Path(root).resolve()
     if not base.is_dir():
         raise ValueError(f"目录不存在或不是文件夹: {base}")
-    files = collect_files(base)
+    files = collect_files(base, progress)
     by_size: dict[int, list[Path]] = {}
     for path in files:
         try:
@@ -107,7 +107,7 @@ def detect_duplicates(
     return rows
 
 
-def collect_files(base: Path) -> list[Path]:
+def collect_files(base: Path, progress=None) -> list[Path]:
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames.sort(key=str.casefold)
@@ -119,6 +119,8 @@ def collect_files(base: Path) -> list[Path]:
             try:
                 if path.is_file():
                     files.append(path)
+                    if progress:
+                        progress(len(files), 0, name, "去重")
             except OSError:
                 continue
     return files

@@ -17,7 +17,7 @@
 | 代码规模 | 用 `wc -l nesttidy/*.py tests/*.py` 与 `python -m unittest discover -s tests` 复算，不写死快照 |
 | 技术栈 | Python 3.11+，**零第三方依赖**（纯标准库） |
 | 形态 | 本地 Web UI（绑 127.0.0.1）+ CLI，SQLite 存历史 |
-| 版本 | `1.5.2`，规则版本 `P0-R0-R5-v3`（以 `nesttidy/config.py` 的 `APP_VERSION` 为唯一来源） |
+| 版本 | `1.7.0`，规则版本 `P0-R0-R5-v3`（以 `nesttidy/config.py` 的 `APP_VERSION` 为唯一来源） |
 | 唯一交付平台 | Windows |
 
 ### 开工必读（三份，不要多读）
@@ -298,9 +298,12 @@ python -m unittest discover -s tests        # ① Windows 全绿
 | undo | 已实现 | ⚠️ 回滚 move（含 `done` 缺失兜底）；v1.3.0 起重复副本走 Windows 回收站，`undo` 对 recycle 行报「已移入回收站：在回收站里右键还原」，对 purge 报`彻底删除无法撤销`；空目录删除不重建；v1.5.2 起撤销会删掉整理时新建的文件夹（非空不动）、退役本次事务日志，`理巢报告` 空了才连带删除，有失败行则保留日志 |
 | **重复副本删除** | v0.6.0 新增 | ✅ 走 `executor.delete_duplicates`，唯一结构写入入口；默认 `recycle`（`send_to_recycle_bin`：`SHFileOperationW` + `FOF_ALLOWUNDO/SILENT/NOCONFIRMATION/NOERRORUI`，删完复查文件已不在），purge 需 `confirm=true` 二次确认；删除前逐项硬校验（保留项在、源在、非同一文件、全文哈希与保留项一致、与诊断时哈希一致），任一不满足即 skip 并留痕；每个副本一条 tx 记录；带 `progress` 回调 |
 | **大目录分页** | v1.5.1 新增 | ✅ `/api/plan` 不再下发 `mappings`（28 万条约 206 MB JSON），只给 `mapping_count` 与截断后的 `operations`/`issues`；`display.readable` 每包最多 `ROW_LIMIT=80` 行、合计最多 `ROW_TOTAL=1500` 行，余下由 `POST /api/plan/rows`（`limit` 上限 1000）按页取；试运行期间 `progress` 按已扫文件数上报（`total=0` 表示总量未知，页面显示已处理个数） |
+| **进度契约** | v1.6.0 新增 | ✅ `GET /api/progress?key=` 返回 `{phase,status,done,total,label,note,updated_at}`，服务端在响应前写 `ok` / `failed` + 原因，六处等待环节埋点齐全；`total=0` 走流动条，等待时常驻「请勿重复操作」。规则语义与计划输出未变 |
+| **遍历与解析优化** | v1.7.0 新增 | ✅ `build_tree`/`resource_roots`/`snapshot_digest` 用 `os.scandir` 的 `DirEntry` 复用枚举元数据（符号链接 / junction 口径与 `os.walk` 一致）；`build_plan` 内 `resolve()` 改为单次规划内记忆化（键为原始路径字符串，resolved 语义保留，缓存随规划丢弃）。两项均有改造前后逐字节一致对照；`test_scandir_equivalence.py` 另含一个手写 mutant 守卫（只证明 digest 对字段变化敏感，不是全量变异测试）。规则语义、计划输出与 `RULE_VERSION` 未变 |
+| **执行锁与幂等** | v1.7.0 新增 | ✅ `web.ExecutionGuard` 两层防护：同一 `plan_id` 并发执行第二个请求 **409**（不排队、不合并，per-plan 锁仅覆盖 `execute-copy` / `execute-move`）；同一 `progress_key` 重复提交 409，不产生第二份事务日志 / 报告（报告、撤销、重复副本删除仅 per-key 幂等，不共享 per-plan 锁）。完成态幂等按 64 条有界淘汰，且优先淘汰已完成键、不淘汰仍在运行的键；`finally` 保证释放，被拒请求不释放他人锁（见 `tests/test_execution_guard.py`） |
 | **两阶段重复比对** | v0.6.0 新增 | ✅ 诊断过程带 `progress` 回调（按大小分组上报）；第一遍按 `fast`/`standard`/`deep` 初筛，自动第二遍全文件 SHA-256 复核；复核后最大组只剩 1 个成员 → 判为误判，组 id 加 `-recheck`、`verified=false`、`conflict_note` 标明「首尾相同但全文哈希不同」，**永不进可删集合**；`--no-verify` 可显式跳过复核（可删集合保留，删除时仍重算全文哈希），行内标「未做第二遍复核」 |
 | 文件名清洗后再冲突 | 审计曾标"已验证" | ✅ M0 已修，虚拟树用例覆盖；截断撞名 0.5.1 起有短码兜底 |
-| 并发（Web） | — | ✅ v0.5.2 起按 `plan_id` 索引冻结计划（`PlanRegistry`），多标签页各执行各的；此前模块级 `LAST_PLAN` 会被后一次预览覆盖 |
+| 并发（Web） | — | ✅ v0.5.2 起按 `plan_id` 索引冻结计划（`PlanRegistry`），多标签页各执行各的；此前模块级 `LAST_PLAN` 会被后一次预览覆盖。v1.7.0 起同一 `plan_id` 并发执行以 409 拒绝，避免两份事务日志 |
 | 跨平台 | — | ❌ 仅 Windows，其他平台从未验证 |
 
 **这张表是规范的锚点。任何人声称某项"已完成"，以这张表为准。**

@@ -28,10 +28,10 @@ def repair_permissions(
 ) -> list[RepairResult]:
     base = Path(root).resolve()
     rows: list[RepairResult] = []
-    paths = sorted(iter_paths(base), key=lambda p: (str(p).casefold(), str(p)))
+    paths = sorted(iter_paths(base, progress), key=lambda p: (str(p).casefold(), str(p)))
     for index, path in enumerate(paths, 1):
         if progress:
-            progress(index, len(paths), path.name)
+            progress(index, len(paths), path.name, "修复")
         skip = should_skip_path(path)
         if skip and skip.startswith("SKIPPED_SYSTEM"):
             rows.append(RepairResult(str(path), "skip", "skipped", skip))
@@ -49,15 +49,24 @@ def repair_permissions(
     return rows
 
 
-def iter_paths(base: Path):
-    yield base
+def iter_paths(base: Path, progress=None):
+    seen = 0
+
+    def report(path: Path) -> Path:
+        nonlocal seen
+        seen += 1
+        if progress:
+            progress(seen, 0, path.name, "扫描")
+        return path
+
+    yield report(base)
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames.sort(key=str.casefold)
         filenames.sort(key=str.casefold)
         for name in dirnames:
-            yield Path(dirpath) / name
+            yield report(Path(dirpath) / name)
         for name in filenames:
-            yield Path(dirpath) / name
+            yield report(Path(dirpath) / name)
 
 
 def clear_readonly_attr(path: Path) -> RepairResult:

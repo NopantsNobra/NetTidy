@@ -99,26 +99,42 @@ def clean_name(name: str) -> tuple[str, list[str]]:
     return cleaned, traces
 
 
-def build_tree(root: Path, should_skip) -> tuple[VDir, list[dict]]:
+def build_tree(root: Path, should_skip, progress=None) -> tuple[VDir, list[dict]]:
     issues: list[dict] = []
+    seen = 0
+
+    def report(path: Path) -> None:
+        nonlocal seen
+        seen += 1
+        if progress:
+            progress(seen, 0, path.name, "扫描")
 
     def walk(path: Path) -> VDir:
+        report(path)
         node = VDir(name=path.name, original_path=path)
         try:
-            children = sorted(path.iterdir(), key=lambda p: stable_key(p, "dir" if p.is_dir() else "file"))
+            # DirEntry 复用枚举时取到的元数据：目录判定不再逐项重复 stat。
+            with os.scandir(path) as iterator:
+                entries = list(iterator)
+            children = sorted(
+                entries,
+                key=lambda e: stable_key(Path(e.path), "dir" if e.is_dir() else "file"),
+            )
         except OSError as exc:
             issues.append({"path": str(path), "code": "PERMISSION_DENIED", "message": str(exc)})
             return node
-        for child in children:
+        for entry in children:
+            child = Path(entry.path)
             skip = should_skip(child)
             if skip:
                 issues.append({"path": str(child), "code": skip, "message": "已按扫描排除规则跳过"})
                 continue
             try:
-                if child.is_dir():
+                if entry.is_dir():
                     node.dirs.append(walk(child))
-                elif child.is_file():
-                    stat = child.stat()
+                elif entry.is_file():
+                    stat = entry.stat()
+                    report(child)
                     cleaned, clean_trace = clean_name(child.name)
                     node.files.append(
                         VFile(
