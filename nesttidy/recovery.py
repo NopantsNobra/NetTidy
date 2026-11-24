@@ -81,6 +81,25 @@ def _verify_undo_scope(item: dict, recreated: dict, allow_missing_root: bool = F
         raise ValueError(f"资源根身份已变化: {root}")
 
 
+def _verify_file_fingerprint(path: Path, item: dict) -> None:
+    if "file_identity" not in item:
+        return  # 旧日志缺少文件身份，仅执行既有路径与冲突保护。
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise ValueError(f"不是普通文件: {path}")
+    if ([info.st_dev, info.st_ino] != list(_identity_pair(item["file_identity"]))
+            or info.st_size != item.get("file_size")
+            or info.st_mtime_ns != item.get("file_mtime_ns")):
+        raise ValueError(f"文件身份、大小或修改时间已变化: {path}")
+
+
+def _verify_created_directory(folder: Path, item: dict) -> None:
+    if item.get("status") == "started":
+        raise ValueError("只有 mkdir started 记录，不能确认目录由本次整理创建")
+    if "directory_identity" in item and _directory_identity(folder) != list(_identity_pair(item["directory_identity"])):
+        raise ValueError(f"新建目录身份已变化: {folder}")
+
+
 def _record_recreated_root(log: Path, item: dict, folder: Path, recreated: dict) -> None:
     if "resource_identity" not in item or folder != Path(item["resource_root"]):
         return
@@ -93,6 +112,8 @@ def _record_recreated_root(log: Path, item: dict, folder: Path, recreated: dict)
     # 若后续撤销失败保留日志，下次仍能识别本次明确重建的目录。
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     recreated[(folder, original)] = tuple(actual)
 
 
@@ -105,24 +126,32 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
     collected: dict[tuple, dict] = {}
     order: list[tuple] = []
     recreated: dict[tuple[Path, tuple[int, int]], tuple[int, int]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    invalid_rows = 0
+    for line in path.read_bytes().splitlines():
         if not line.strip():
             continue
         try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            # 末行截断（写一半崩溃）恰是 undo 最需要的场景：跳过该行，其余完整行照常回收；只捕获解析错误，不吞其他异常。
+            item = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            invalid_rows += 1
+            continue  # 恢复可确认的完整行，但保留含截断/损坏的原日志。
+        if not isinstance(item, dict):
+            invalid_rows += 1
             continue
         if item.get("action") == "undo_root_recreated":
             try:
                 root = Path(item["resource_root"])
                 recreated[(root, _identity_pair(item["original_identity"]))] = _identity_pair(item["restored_identity"])
             except (KeyError, TypeError, ValueError):
-                continue  # 无效标记不提供身份豁免
+                invalid_rows += 1
             continue
         if item.get("status") not in {"started", "done"}:
+            invalid_rows += 1
             continue
         key = (item.get("action"), item.get("source"), item.get("target"))
+        if not isinstance(key[0], str) or any(value is not None and not isinstance(value, str) for value in key[1:]):
+            invalid_rows += 1
+            continue
         if key not in collected:
             collected[key] = item
             order.append(key)
@@ -154,13 +183,16 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             try:
                 if not folder.exists():
                     results.append(UndoResult(action, str(folder), "", "skipped", "目录已不存在"))
-                elif any(folder.iterdir()):
-                    results.append(UndoResult(action, str(folder), "", "skipped", "目录里还有别的内容，未删除"))
                 else:
-                    _undo_path(str(folder), scope)
-                    _verify_undo_scope(item, recreated)
-                    folder.rmdir()
-                    results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
+                    _verify_created_directory(folder, item)
+                    if any(folder.iterdir()):
+                        results.append(UndoResult(action, str(folder), "", "skipped", "目录里还有别的内容，未删除"))
+                    else:
+                        _undo_path(str(folder), scope)
+                        _verify_undo_scope(item, recreated)
+                        _verify_created_directory(folder, item)
+                        folder.rmdir()
+                        results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
             except (OSError, ValueError, RuntimeError) as exc:
                 results.append(UndoResult(action, str(folder), "", "failed", f"撤销目录失败: {exc}"))
             continue
@@ -186,8 +218,8 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             continue
         if action not in {"move", "quarantine"}:
             # delete（彻底删除）没有现场可回收，必须显式说清，不能让它静默混在 skipped 里。
-            note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "该操作不支持自动撤销"
-            results.append(UndoResult(action, item.get("source", ""), item.get("target") or "", "skipped", note))
+            note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "未知操作，无法确认恢复"
+            results.append(UndoResult(action, item.get("source", ""), item.get("target") or "", "skipped" if action == "delete" else "failed", note))
             continue
         source = source_path
         target = target_path
@@ -197,16 +229,25 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             results.append(UndoResult(action, str(source), str(target), "failed", "原路径与隔离副本同时存在，需人工确认"))
             continue
         if not target_exists:
-            results.append(UndoResult(action, str(source), str(target), "skipped", "现场未见隔离副本，跳过"))
+            if not source_exists:
+                results.append(UndoResult(action, str(source), str(target), "failed", "原路径和目标均不存在，无法确认恢复"))
+            else:
+                try:
+                    _verify_file_fingerprint(source, item)
+                    results.append(UndoResult(action, str(source), str(target), "skipped", "原路径仍在或已恢复，目标不存在"))
+                except (OSError, ValueError, RuntimeError) as exc:
+                    results.append(UndoResult(action, str(source), str(target), "failed", f"无法确认原文件: {exc}"))
             continue
         try:
             _undo_path(str(source), scope)
             _undo_path(str(target), scope if action == "move" else None)
             _verify_undo_scope(item, recreated)
+            _verify_file_fingerprint(target, item)
             source.parent.mkdir(parents=True, exist_ok=True)
             _undo_path(str(source), scope)
             _undo_path(str(target), scope if action == "move" else None)
             _verify_undo_scope(item, recreated)
+            _verify_file_fingerprint(target, item)
             if source.exists() or source.is_symlink():
                 raise FileExistsError(f"原路径已存在: {source}")
             if action == "move" and os.name == "nt":
@@ -221,6 +262,8 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
         else:
             message = "已移动回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态回收"
         results.append(UndoResult(action, str(source), str(target), "ok", message))
+    if invalid_rows:
+        results.append(UndoResult("journal", str(path), "", "failed", f"日志含 {invalid_rows} 条无法确认的记录，已保留原日志"))
     _retire_log(path, results)
     return results
 
