@@ -23,10 +23,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Run synthetic Windows baseline
+      - name: Compare same-tab 200k-file plan replacement
         shell: pwsh
         run: |
-          python -m benchmarks.plan_bench --fixture-files $env:BENCH_FILES --shape multi --repeat 3 --pages 20 --disk "GitHub-hosted Windows (virtual storage, not physical SSD/HDD)" --profile --memory --execute-fixture-files 1000 > benchmark.json
+          python -m benchmarks.plan_bench --fixture-files 200000 --shape multi --repeat 1 --pages 0 --disk "GitHub-hosted Windows virtual storage" --resident-rounds 4 --resident-budget 600000 --replace-resident > benchmark.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Content benchmark.json
       - uses: actions/upload-artifact@v4
