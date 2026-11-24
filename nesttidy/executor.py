@@ -293,9 +293,24 @@ def _move_without_replace(source: Path, target: Path) -> None:
     shutil.move(str(source), str(target))
 
 
+def transaction_scope(plan: OperationPlan | None, root: Path | None) -> dict:
+    if root is None:
+        return {}
+    scope = {"resource_root": str(root)}
+    if plan is not None:
+        identities = plan.config_snapshot.get("root_identities")
+        if identities is not None:
+            scope.update(
+                resource_identity=identities.get(str(root)),
+                selected_root=plan.selected_root,
+                selected_identity=identities.get(plan.selected_root),
+            )
+    return scope
+
+
 def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan: OperationPlan | None = None) -> None:
     assert op.source_path and op.target_path
-    scope = {"resource_root": str(root)} if root is not None else {}
+    scope = transaction_scope(plan, root)
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
@@ -321,7 +336,7 @@ def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan:
 def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None, plan: OperationPlan | None = None) -> bool:
     """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
     assert op.source_path
-    scope = {"resource_root": str(root)} if root is not None else {}
+    scope = transaction_scope(plan, root)
     path = Path(op.source_path)
     if not path.exists():
         return True
@@ -385,6 +400,7 @@ def sweep_empty_dirs(
             continue
         if not eligible(base, base) or not base.is_dir():
             continue
+        scope = transaction_scope(plan, base)
         dirs: list[Path] = []
         # topdown 剪枝：Windows junction 也必须按扫描排除规则处理，
         # 不能只依靠 os.walk 的 followlinks=False。
@@ -402,12 +418,12 @@ def sweep_empty_dirs(
             try:
                 if any(path.iterdir()):
                     continue
-                write_tx(tx_path, {"resource_root": str(base), "action": "rmdir", "source": str(path), "status": "started"})
+                write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "started"})
                 path.rmdir()
             except OSError as exc:
                 report(path, "R6_ACCESS_ERROR", str(exc))
                 continue
-            write_tx(tx_path, {"resource_root": str(base), "action": "rmdir", "source": str(path), "status": "done"})
+            write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "done"})
             removed += 1
     return removed
 
