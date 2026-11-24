@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -191,6 +192,14 @@ def scan_residual_dirs(
             removed_dirs.add(resolved)
 
 
+def directory_identity(path: Path) -> list[int]:
+    """冻结目录对象身份；不跟随最终分量的链接或重解析点。"""
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise ValueError(f"资源根不是普通目录: {path}")
+    return [info.st_dev, info.st_ino]
+
+
 def build_plan(
     selected_root: str,
     mode: str = "batch",
@@ -201,6 +210,7 @@ def build_plan(
     resolve = _path_resolver()
     selected = resolve(Path(selected_root))
     roots, root_issues = resource_roots(selected, mode)
+    root_identities = {str(root): directory_identity(root) for root in dict.fromkeys([selected, *roots])}
     operations: list[Operation] = []
     mappings: list[MappingEntry] = []
     issues: list[ExecutionIssue] = list(root_issues)
@@ -303,7 +313,7 @@ def build_plan(
         mode=mode,
         selected_root=str(selected),
         output_root=str(resolve(Path(output_root))) if output_root else None,
-        config_snapshot={"mode": mode, "output_root": output_root},
+        config_snapshot={"mode": mode, "output_root": output_root, "root_identities": root_identities},
         source_snapshot_digest=snapshot_digest(roots, progress),
         resource_roots=[str(root) for root in roots],
         operations=operations,
