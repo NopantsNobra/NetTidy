@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import REPORT_DIR_NAME
 from .duplicate import full_sha256
 from .model import ExecutionIssue, Operation, OperationPlan
-from .planner import issue, validate_copy_output
+from .planner import issue, should_skip_path, validate_copy_output
 from .rules import stable_key
 
 
@@ -141,7 +141,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
             skipped += 1
         else:
             failed += 1
-    swept = sweep_empty_dirs(plan, tx_path) if mode == "move" else 0
+    swept = sweep_empty_dirs(plan, tx_path, issues) if mode == "move" else 0
     apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None, swept=swept)
 
@@ -247,29 +247,71 @@ def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
     return True
 
 
-def sweep_empty_dirs(plan: OperationPlan, tx_path: Path | None) -> int:
-    """R6：move 收尾清扫。空目录（含整理后变空的资源根）一并删除，逐条写 rmdir 事务行，撤销可原样重建。"""
-    # 选中根本身不删：单包模式下它就是资源根，而包内文件只会在根内移动，正常整理不会让它变空。
-    keep = str(Path(plan.selected_root).resolve())
+def sweep_empty_dirs(
+    plan: OperationPlan, tx_path: Path | None, issues: list[ExecutionIssue] | None = None
+) -> int:
+    """R6：只清扫资源根内未排除的空目录；不跟随重新定向的目录。"""
+    selected = Path(plan.selected_root)
     removed = 0
-    for root in sorted({str(Path(item).resolve()) for item in plan.resource_roots}):
-        base = Path(root)
-        if not base.is_dir():
-            continue
+
+    def report(path: Path, code: str, message: str) -> None:
+        if issues is not None:
+            issues.append(issue(str(path), "execute", code, message))
+
+    def excluded(path: Path) -> bool:
+        reason = should_skip_path(path)
+        if reason and reason.startswith("ACCESS_ERROR"):
+            report(path, "R6_ACCESS_ERROR", reason)
+        return reason is not None
+
+    def eligible(path: Path, base: Path) -> bool:
+        # 比较冻结计划中的原路径，绝不把新 resolve 的结果当成新的资源根。
         try:
-            dirs = [path for path in base.rglob("*") if path.is_dir()]
-        except OSError:
+            if not path.is_relative_to(base) or path.resolve() != path:
+                report(path, "R6_PATH_REFUSED", "清扫路径已重定向或越过资源根，拒绝删除")
+                return False
+            # 删除前复查祖先：目录可能在枚举后被替换，或被设置为排除属性。
+            current = path
+            while current != selected:
+                if excluded(current):
+                    return False
+                current = current.parent
+            return True
+        except (OSError, RuntimeError) as exc:
+            report(path, "R6_ACCESS_ERROR", str(exc))
+            return False
+
+    def walk_error(exc: OSError) -> None:
+        report(Path(exc.filename or str(selected)), "R6_ACCESS_ERROR", str(exc))
+
+    for root in sorted(set(plan.resource_roots), key=lambda value: stable_key(Path(value), "dir")):
+        base = Path(root)
+        if base != selected and base.parent != selected:
+            report(base, "R6_PATH_REFUSED", "资源根不在选中根的直接边界内")
             continue
-        if root != keep:
-            dirs.append(base)
-        # 深 → 浅：先收掉最里层，父目录才可能跟着变空；资源根本身排在最后。
+        if not eligible(base, base) or not base.is_dir():
+            continue
+        dirs: list[Path] = []
+        # topdown 剪枝：Windows junction 也必须按扫描排除规则处理，
+        # 不能只依靠 os.walk 的 followlinks=False。
+        for current, dirnames, _ in os.walk(base, topdown=True, followlinks=False, onerror=walk_error):
+            folder = Path(current)
+            if not eligible(folder, base):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [name for name in dirnames if not excluded(folder / name)]
+            if folder != selected:
+                dirs.append(folder)
         for path in sorted(dirs, key=lambda item: (-len(item.parts), stable_key(item, "dir"))):
+            if not eligible(path, base):
+                continue
             try:
                 if any(path.iterdir()):
                     continue
                 write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
                 path.rmdir()
-            except OSError:
+            except OSError as exc:
+                report(path, "R6_ACCESS_ERROR", str(exc))
                 continue
             write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
             removed += 1
