@@ -132,6 +132,7 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
     return {
         "version": plan.app_version, "rule_version": plan.rule_version,
         "mapping_count": len(plan.mappings), "resource_count": len(plan.resource_roots),
+        "planned_directory_removals": sum(op.op_type == "rmdir" for op in plan.operations),
         "operation_counts": dict(Counter(op.op_type for op in plan.operations)),
         "issue_counts": dict(Counter(issue.code for issue in plan.issues)),
         "plan_seconds": plan_seconds, "first_screen_seconds": first_screen_seconds,
@@ -201,10 +202,12 @@ def main(argv=None):
             root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nesttidy-bench-", dir=args.fixture_parent)))
             make_fixture(root, args.fixture_files, args.shape)
             source_kind = "synthetic"
+        directory_count = sum(len(dirs) for _, dirs, _ in os.walk(root, followlinks=False)) if source_kind == "synthetic" else None
         results = [run_once(root, args.mode, args.pages) for _ in range(args.repeat)]
         result = {"source": source_kind, "shape": args.shape if source_kind == "synthetic" else "operator directory",
+                  "directory_count": directory_count, "fixture_files_requested": args.fixture_files,
                   "disk_note": args.disk, "platform": platform.platform(), "python": platform.python_version(),
-                  "cache_note": "first run not guaranteed cold; subsequent runs potentially warm",
+                  "cache_note": "directory count prepass and fixture creation may warm metadata cache; subsequent runs potentially warm",
                   "runs": results, "median_plan_seconds": statistics.median(r["plan_seconds"] for r in results),
                   "median_first_screen_seconds": statistics.median(r["first_screen_seconds"] for r in results),
                   "semantic_stable": len({r["semantic_digest"] for r in results}) == 1,
