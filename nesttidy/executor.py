@@ -264,6 +264,10 @@ def precheck(op: Operation) -> None:
         raise RuntimeError(f"源文件修改时间已变化: {source}")
     if not op.target_path:
         raise ValueError("缺少目标路径")
+    # keep 不产生写入；源和目标文本完全一致时，重复解析不会提供额外的目标边界信息。
+    # 仍执行上方源文件存在、大小、mtime 复核。不同路径及所有写操作保留原检查。
+    if op.op_type == "keep" and op.source_path == op.target_path:
+        return
     target = Path(op.target_path)
     if target.exists() and target.resolve() != source.resolve():
         raise FileExistsError(f"目标已存在，禁止覆盖: {target}")
