@@ -278,5 +278,100 @@ class PlanLifecycleTests(_ServerMixin):
             registry.get(plan.plan_id)
 
 
+
+class DirectoryScopeGuardTests(_ServerMixin):
+    def test_different_plans_with_overlapping_root_are_rejected(self) -> None:
+        first = self._plan()
+        second = self._plan()
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake_execute(plan, mode, **kwargs):
+            calls.append(plan.plan_id)
+            entered.set()
+            release.wait(timeout=10)
+            return SimpleNamespace(completed=1, skipped=0, failed=0, issues=[])
+
+        with mock.patch("nesttidy.web.execute_plan", side_effect=fake_execute):
+            t = threading.Thread(target=lambda: _post(self.port, "/api/execute-copy", {"plan_id": first}))
+            t.start()
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                status, body = _post(self.port, "/api/execute-copy", {"plan_id": second})
+                self.assertEqual(status, 409)
+                self.assertIn("重叠", body["error"])
+            finally:
+                release.set()
+                t.join(timeout=10)
+        self.assertEqual(calls, [first])
+
+    def test_nonoverlapping_plans_can_execute_concurrently(self) -> None:
+        first = self._plan()
+        src = self.base / "srcB"
+        src.mkdir()
+        (src / "b.txt").write_text("b", encoding="utf-8")
+        status, payload = _post(self.port, "/api/plan", {"selected_root": str(src), "mode": "single", "output_root": str(self.base / "outB")})
+        self.assertEqual(status, 200)
+        second = payload["plan_id"]
+        entered = threading.Event()
+        release = threading.Event()
+
+        def fake_execute(plan, mode, **kwargs):
+            if plan.plan_id == first:
+                entered.set()
+                release.wait(timeout=10)
+            return SimpleNamespace(completed=1, skipped=0, failed=0, issues=[])
+
+        with mock.patch("nesttidy.web.execute_plan", side_effect=fake_execute):
+            t = threading.Thread(target=lambda: _post(self.port, "/api/execute-copy", {"plan_id": first}))
+            t.start()
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                status, _ = _post(self.port, "/api/execute-copy", {"plan_id": second})
+                self.assertEqual(status, 200)
+            finally:
+                release.set()
+                t.join(timeout=10)
+
+    def test_move_conflicts_with_repair_delete_and_undo(self) -> None:
+        pid = self._plan(output=False)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def fake_execute(plan, mode, **kwargs):
+            entered.set()
+            release.wait(timeout=10)
+            return SimpleNamespace(completed=1, skipped=0, failed=0, issues=[], transaction_log="")
+
+        with mock.patch("nesttidy.web.execute_plan", side_effect=fake_execute):
+            t = threading.Thread(target=lambda: _post(self.port, "/api/execute-move", {"plan_id": pid, "confirm": True}))
+            t.start()
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                for endpoint, body in [
+                    ("/api/repair", {"selected_root": str(self.base / "srcA"), "clear_readonly": True}),
+                    ("/api/duplicates/delete", {"selected_root": str(self.base / "srcA"), "confirm": True}),
+                    ("/api/undo", {"transaction_log": str(self.base / "tx.jsonl")}),
+                ]:
+                    with self.subTest(endpoint=endpoint):
+                        status, _ = _post(self.port, endpoint, body)
+                        self.assertEqual(status, 409)
+            finally:
+                release.set()
+                t.join(timeout=10)
+
+    def test_scope_parent_child_conflict_and_release(self) -> None:
+        guard = web.ExecutionGuard()
+        parent = self.base / "srcA"
+        a, b = object(), object()
+        self.assertIsNone(guard.acquire("a", "a", (parent,), token=a))
+        self.assertIn("重叠", guard.acquire("b", "b", (parent / "child",), token=b) or "")
+        guard.release("a", "a", token=a, ok=False)
+        self.assertIsNone(guard.acquire("b", "b", (parent / "child",), token=b))
+        guard.release("b", "b", token=b)
+
+
+
 if __name__ == "__main__":
     unittest.main()
