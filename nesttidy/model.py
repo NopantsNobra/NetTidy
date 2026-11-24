@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
-@dataclass
+@dataclass(slots=True)
 class Operation:
     op_id: str
     resource_root_id: str
@@ -21,7 +21,7 @@ class Operation:
         return asdict(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class ExecutionIssue:
     issue_id: str
     path: str
@@ -36,7 +36,7 @@ class ExecutionIssue:
         return asdict(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class MappingEntry:
     entry_id: str
     resource_root_id: str
@@ -58,7 +58,7 @@ class MappingEntry:
         return asdict(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class OperationPlan:
     plan_id: str
     app_version: str

@@ -48,3 +48,35 @@ class BenchmarkSmokeTests(unittest.TestCase):
             self.assertTrue(data["execution_fixture"]["runs"][0]["restored"])
             self.assertGreater(data["execution_fixture"]["median_files_per_second"], 0)
             self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_compact_records_preserve_serialization_and_reuse_path_strings(self):
+        from nesttidy.planner import build_plan
+        from nesttidy.reports import readable_plan_view
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            p = root / "pkg" / "a.txt"
+            p.parent.mkdir()
+            p.write_text("x", encoding="utf-8")
+            plan = build_plan(str(root), mode="batch")
+            mapping = plan.mappings[0]
+            op = next(op for op in plan.operations if op.op_id == mapping.entry_id)
+            self.assertIs(mapping.original_path, mapping.current_path)
+            self.assertIs(mapping.original_path, op.source_path)
+            self.assertIs(mapping.planned_target_path, op.target_path)
+            self.assertFalse(hasattr(mapping, "__dict__"))
+            self.assertFalse(hasattr(op, "__dict__"))
+            mapping.status = "completed"
+            self.assertEqual(mapping.to_dict()["status"], "completed")
+            self.assertEqual(plan.to_dict()["mappings"][0], mapping.to_dict())
+            self.assertEqual(readable_plan_view(plan)["counts"]["total"], 1)
+
+    def test_resident_memory_probe_reports_cache_and_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                main(["--fixture-files", "6", "--fixture-parent", tmp, "--repeat", "1",
+                      "--resident-rounds", "2"])
+            data = json.loads(output.getvalue())["resident_memory"]
+            self.assertEqual([r["retained_plans"] for r in data["rounds"]], [1, 2])
+            self.assertGreater(data["rounds"][1]["traced_current"], data["traced_after_clear"])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
