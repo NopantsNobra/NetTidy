@@ -177,7 +177,12 @@ def collect_parent_paths(targets: list[Path]) -> set[Path]:
     """一次性收集所有目标路径的祖先目录。"""
     parents: set[Path] = set()
     for target in targets:
-        parents.update(target.parents)
+        # 先前加入的每个父目录已经具有完整祖先闭包；命中即停止。
+        # 保持 pathlib 的路径相等语义、首次插入顺序与原始拼写。
+        for parent in target.parents:
+            if parent in parents:
+                break
+            parents.add(parent)
     return parents
 
 
