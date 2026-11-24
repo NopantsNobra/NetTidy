@@ -640,5 +640,77 @@ class MoveResourceBoundaryTests(unittest.TestCase):
             self.assertTrue(any(row.code == "R6_PATH_REFUSED" for row in result.issues))
 
 
+
+class JournalDurabilityTests(unittest.TestCase):
+    def test_failed_intent_fsync_prevents_move_and_r6(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            empty = root / "原本为空"
+            empty.mkdir()
+            plan = build_plan(str(root), "single")
+            with mock.patch("nesttidy.executor.os.fsync", side_effect=OSError("磁盘满")):
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+            self.assertTrue(source.exists())
+            self.assertFalse((root / "文件.txt").exists())
+            self.assertTrue(empty.is_dir(), "日志不可用后不能继续执行清理")
+            self.assertTrue(any(row.code == "TRANSACTION_LOG_FAILED" for row in result.issues))
+
+    def test_mkdir_intent_precedes_directory_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            target = root / "新目录" / "文件.txt"
+            plan = UndoCreatedFolderTests._plan(root, source, target)
+            real_write = executor.write_tx
+            seen = []
+
+            def fail_mkdir_intent(tx_path, row):
+                if row.get("action") == "mkdir" and row.get("status") == "started":
+                    seen.append(not target.parent.exists())
+                    raise executor.TransactionLogError("磁盘满")
+                return real_write(tx_path, row)
+
+            with mock.patch("nesttidy.executor.write_tx", side_effect=fail_mkdir_intent):
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+            self.assertEqual(seen, [True])
+            self.assertTrue(source.exists())
+            self.assertFalse(target.parent.exists())
+            self.assertTrue(any(row.code == "TRANSACTION_LOG_FAILED" for row in result.issues))
+
+    def test_done_log_failure_stops_remaining_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "源"
+            first = root / "甲" / "壳" / "一.txt"
+            second = root / "乙" / "壳" / "二.txt"
+            touch(first, "first")
+            touch(second, "second")
+            plan = build_plan(str(root), "batch")
+            tx = base / "tx.jsonl"
+            real_write = executor.write_tx
+
+            def fail_done(tx_path, row):
+                if row.get("action") == "move" and row.get("status") == "done":
+                    raise executor.TransactionLogError("done 写入失败")
+                return real_write(tx_path, row)
+
+            with mock.patch("nesttidy.executor.write_tx", side_effect=fail_done):
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+            self.assertEqual(result.failed, 1)
+            self.assertEqual(sum(path.exists() for path in (first, second)), 1)
+            self.assertTrue(any(op.status == "not_run" for op in plan.operations))
+            self.assertTrue(any(row.code == "TRANSACTION_LOG_FAILED" for row in result.issues))
+            rows = undo_transaction(str(tx))
+            self.assertTrue(any(row.status == "ok" for row in rows))
+            self.assertTrue(first.exists())
+            self.assertTrue(second.exists())
+
+
+
 if __name__ == "__main__":
     unittest.main()

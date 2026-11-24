@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import shutil
+import stat as statmod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +73,10 @@ def ensure_target_within_output(target: Path, output_root: Path) -> None:
     resolved_parent = target.parent.resolve()
     if not resolved_parent.is_relative_to(root_abs):
         raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
+
+
+class TransactionLogError(OSError):
+    """事务记录无法可靠写入，必须停止进一步修改磁盘。"""
 
 
 class MoveBoundaryError(ValueError):
@@ -156,6 +161,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     skipped = 0
     failed = 0
     statuses: dict[str, str] = {}
+    journal_failed = False
     output_root_path: Path | None = Path(plan.output_root) if (mode == "copy" and plan.output_root) else None
     tx_path: Path | None = Path(transaction_log).resolve() if transaction_log else None
     if mode == "move" and tx_path is None:
@@ -197,6 +203,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
         except Exception as exc:
             status = "failed"
             issues.append(issue(op.source_path or op.target_path or "", "execute", classify_exception(exc), str(exc)))
+            journal_failed = isinstance(exc, TransactionLogError)
         statuses[op.op_id] = status
         if status == "completed":
             completed += 1
@@ -204,7 +211,13 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
             skipped += 1
         else:
             failed += 1
-    swept = sweep_empty_dirs(plan, tx_path, issues) if mode == "move" else 0
+        if journal_failed:
+            break
+    swept = 0
+    if mode == "move" and not journal_failed:
+        swept = sweep_empty_dirs(plan, tx_path, issues)
+        if any(row.code == "TRANSACTION_LOG_FAILED" for row in issues):
+            failed += 1
     apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None, swept=swept)
 
@@ -293,6 +306,13 @@ def _move_without_replace(source: Path, target: Path) -> None:
     shutil.move(str(source), str(target))
 
 
+def file_fingerprint(path: Path) -> dict:
+    info = path.lstat()
+    if not statmod.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400 or not info.st_ino:
+        raise MoveBoundaryError(f"文件身份不可验证: {path}")
+    return {"file_identity": [info.st_dev, info.st_ino], "file_size": info.st_size, "file_mtime_ns": info.st_mtime_ns}
+
+
 def transaction_scope(plan: OperationPlan | None, root: Path | None) -> dict:
     if root is None:
         return {}
@@ -320,17 +340,22 @@ def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan:
             if plan is not None:
                 verify_root_identity(plan, root)
             ensure_move_path(created, root)
+        write_tx(tx_path, {**scope, "action": "mkdir", "source": str(created), "status": "started"})
         created.mkdir()
-        write_tx(tx_path, {**scope, "action": "mkdir", "source": str(created), "status": "done"})
+        write_tx(tx_path, {**scope, "action": "mkdir", "source": str(created), "directory_identity": directory_identity(created), "status": "done"})
     if root is not None:
         if plan is not None:
             verify_root_identity(plan, root)
         ensure_move_path(source, root)
         ensure_move_path(target, root)
         precheck(op)
-    write_tx(tx_path, {**scope, "action": "move", "source": str(source), "target": str(target), "status": "started"})
+    fingerprint = file_fingerprint(source)
+    if op.precheck.get("size", fingerprint["file_size"]) != fingerprint["file_size"] or op.precheck.get("mtime_ns", fingerprint["file_mtime_ns"]) != fingerprint["file_mtime_ns"]:
+        raise RuntimeError(f"源文件状态在移动前已变化: {source}")
+    record = {**scope, **fingerprint, "action": "move", "source": str(source), "target": str(target)}
+    write_tx(tx_path, {**record, "status": "started"})
     _move_without_replace(source, target)
-    write_tx(tx_path, {**scope, "action": "move", "source": str(source), "target": str(target), "status": "done"})
+    write_tx(tx_path, {**record, "status": "done"})
 
 
 def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None, plan: OperationPlan | None = None) -> bool:
@@ -420,22 +445,34 @@ def sweep_empty_dirs(
                     continue
                 write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "started"})
                 path.rmdir()
+                removed += 1
+                write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "done"})
+            except TransactionLogError as exc:
+                report(path, "TRANSACTION_LOG_FAILED", str(exc))
+                return removed
             except OSError as exc:
                 report(path, "R6_ACCESS_ERROR", str(exc))
                 continue
-            write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "done"})
-            removed += 1
     return removed
 
 
 def write_tx(tx_path: Path | None, row: dict) -> None:
     if not tx_path:
         return
-    with tx_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    try:
+        with tx_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            # 每次副作用前将 intent 持久化；mkdir done 是安全撤销的唯一所有权证据。
+            if row.get("status") == "started" or (row.get("action") == "mkdir" and row.get("status") == "done"):
+                f.flush()
+                os.fsync(f.fileno())
+    except OSError as exc:
+        raise TransactionLogError(f"事务日志写入失败，停止进一步修改: {tx_path}: {exc}") from exc
 
 
 def classify_exception(exc: Exception) -> str:
+    if isinstance(exc, TransactionLogError):
+        return "TRANSACTION_LOG_FAILED"
     if isinstance(exc, MoveBoundaryError):
         return "MOVE_BOUNDARY_REFUSED"
     if isinstance(exc, OutputBoundaryError):

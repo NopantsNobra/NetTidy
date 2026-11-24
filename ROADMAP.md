@@ -261,6 +261,7 @@ M0–M1.6 已完成（2026-10-26 ~ 10-27）：可信基线、规则接缝、剥�
 - [x] A2 并发及计划生命周期：在既有 per-plan 锁基础上处理不同计划及去重/修复/撤销的重叠目录写操作；服务端明确未执行、执行中、终态，防止更换 progress_key 重放；区分冻结操作意图与执行结果，明确预览后新增文件策略。验收：确定性并发、重放、异常释放锁及不重叠任务测试。
   - A2 第一切片（Windows CI #45373212821：3.11/3.13 各 247 例，OK (skipped=1)）：PlanRegistry 原子 claim/finish，ready/running/finished/failed 独立生命周期；终态拒绝新 progress_key 重放，异常也消耗已开始的计划；未确认及模式不符不消耗；运行中计划不被淘汰。新增 4 项端到端及缓存回归。第二切片：按规范化 selected/output root 互斥，重叠父子目录返回 409，repair/去重删除共享保护，撤销暂时独占写任务（A3 后再细化日志作用域）；不重叠计划可并行，异常释放。Windows CI #45373340688：3.11/3.13 各 251 例，OK (skipped=1)。冻结路径、规则与操作意图不变，执行状态/结果单独维护；预览后新增文件不纳入已冻结操作，R6 仍按现行空目录规则。A2 完成。
 - [ ] A3 JSONL 恢复：副作用前登记意图（含 mkdir），评估 flush/fsync 持久化策略及吞吐；恢复时校验目标身份与文件状态，逐项隔离异常，未确认恢复不得销毁日志。注入磁盘满、日志写失败、move 后缺 done、目标被替换等故障；不宣称 ACID，不引入数据库。
+  - A3 第一切片（待 Windows CI）：mkdir 先记 started 再创建，done 记录目录身份；move started/done 记录文件身份、大小、mtime；started 及 mkdir done 用 flush+fsync，其他 done 关闭文件时 flush，降低但不消除断电风险；事务写失败停止后续操作和 R6，报告 TRANSACTION_LOG_FAILED；新增 3 项故障注入，fsync 真实盘吞吐由 B2 测量。
 - [ ] A4 去重正确性：修复 duplicate._verify_cluster 仅保留最大全文哈希组导致的漏检；所有成员数≥2的真实子组均独立输出，单例剔除。测试 A=B、C=D、A≠C 的同初筛签名场景；核实硬链接实际释放空间估算与保留项校验。Fast 明确异名漏检限制；deep 复用现有哈希，size+content 签名如实标注，若变更格式另行兼容裁决。
 
 #### B · Windows 实机性能基线
