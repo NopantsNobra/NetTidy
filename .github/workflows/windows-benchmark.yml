@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 45
     env:
       PYTHONUTF8: '1'
-      BENCH_FILES: ${{ inputs.files || '20000' }}
+      BENCH_FILES: ${{ inputs.files || '200000' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
