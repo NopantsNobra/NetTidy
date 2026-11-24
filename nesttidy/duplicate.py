@@ -78,35 +78,36 @@ def detect_duplicates(
     rows: list[DuplicateRow] = []
     group_index = 1
     sizes = sorted(by_size)
-    for number, size in enumerate(sizes, 1):
-        if progress:
-            progress(number, len(sizes), f"{size} 字节这一组")
-        group = sorted(by_size[size], key=lambda p: stable_key(p, "file"))
-        if len(group) < 2:
-            if size == 0:
-                rows.append(_singleton_row(group[0], group_index))
-                group_index += 1
-            continue
-        for initial_hash, cluster in _clusters(group, level, workers):
-            if len(cluster) < 2:
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for number, size in enumerate(sizes, 1):
+            if progress:
+                progress(number, len(sizes), f"{size} 字节这一组")
+            group = sorted(by_size[size], key=lambda p: stable_key(p, "file"))
+            if len(group) < 2:
+                if size == 0:
+                    rows.append(_singleton_row(group[0], group_index))
+                    group_index += 1
                 continue
-            confirmed, rejected, verified = _verify_cluster(cluster, level, workers, verify, initial_hash)
-            for verify_hash, members in confirmed:
-                rows.extend(_group_rows(members, size, level, f"dup-{group_index}", verify_hash, verified, ""))
-                group_index += 1
-            if rejected:
-                rows.extend(
-                    _group_rows(
-                        rejected,
-                        size,
-                        level,
-                        f"dup-{group_index}-recheck",
-                        "",
-                        False,
-                        "复核剔除：初筛相同但全文哈希未形成重复组",
+            for initial_hash, cluster in _clusters(group, level, workers, pool):
+                if len(cluster) < 2:
+                    continue
+                confirmed, rejected, verified = _verify_cluster(cluster, level, workers, verify, initial_hash, pool)
+                for verify_hash, members in confirmed:
+                    rows.extend(_group_rows(members, size, level, f"dup-{group_index}", verify_hash, verified, ""))
+                    group_index += 1
+                if rejected:
+                    rows.extend(
+                        _group_rows(
+                            rejected,
+                            size,
+                            level,
+                            f"dup-{group_index}-recheck",
+                            "",
+                            False,
+                            "复核剔除：初筛相同但全文哈希未形成重复组",
+                        )
                     )
-                )
-                group_index += 1
+                    group_index += 1
     return rows
 
 
@@ -152,15 +153,17 @@ def _singleton_row(path: Path, index: int) -> DuplicateRow:
     )
 
 
-def _clusters(group: list[Path], level: str, workers: int) -> list[tuple[str, list[Path]]]:
+def _clusters(group: list[Path], level: str, workers: int,
+              pool: ThreadPoolExecutor | None = None) -> list[tuple[str, list[Path]]]:
     signatures: dict[str, list[Path]] = {}
-    for path, value in _hash_map(group, level, workers):
+    for path, value in _hash_map(group, level, workers, pool):
         signatures.setdefault(value, []).append(path)
     return [(value, sorted(paths, key=lambda p: stable_key(p, "file"))) for value, paths in sorted(signatures.items())]
 
 
 def _verify_cluster(
-    cluster: list[Path], level: str, workers: int, verify: bool, initial_hash: str
+    cluster: list[Path], level: str, workers: int, verify: bool, initial_hash: str,
+    pool: ThreadPoolExecutor | None = None
 ) -> tuple[list[tuple[str, list[Path]]], list[Path], bool]:
     """保留每个独立的全文哈希重复组；仅剔除单例和读取失败项。"""
     if not verify:
@@ -168,7 +171,7 @@ def _verify_cluster(
     if level == "deep":
         return [(initial_hash, cluster)], [], True
     hashes: dict[str, list[Path]] = {}
-    for path, value in _hash_map(cluster, "deep", workers):
+    for path, value in _hash_map(cluster, "deep", workers, pool):
         hashes.setdefault(value, []).append(path)
     ordered = sorted(hashes.items(), key=lambda item: (-len(item[1]), min(stable_key(p, "file") for p in item[1])))
     confirmed = [(value, sorted(paths, key=lambda p: stable_key(p, "file")))
@@ -227,15 +230,26 @@ def _group_rows(
     return rows
 
 
-def _hash_map(paths: list[Path], level: str, workers: int) -> list[tuple[Path, str]]:
+def _hash_map(paths: list[Path], level: str, workers: int,
+              pool: ThreadPoolExecutor | None = None) -> list[tuple[Path, str]]:
+    """复用诊断级线程池，分批提交以限制 Future 数量；仍按原输入顺序返回。"""
     def one(path: Path) -> tuple[Path, str]:
         try:
             return path, file_signature(path, level)
         except OSError:
             return path, f"__error__{path}"
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        return list(pool.map(one, paths))
+    def run(executor: ThreadPoolExecutor) -> list[tuple[Path, str]]:
+        batch = max(16, min(512, max(1, workers) * 16))
+        rows = []
+        for start in range(0, len(paths), batch):
+            rows.extend(executor.map(one, paths[start:start + batch]))
+        return rows
+
+    if pool is not None:
+        return run(pool)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as owned:
+        return run(owned)
 
 
 def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
