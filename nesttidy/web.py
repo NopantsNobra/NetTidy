@@ -22,7 +22,7 @@ from .model import MappingEntry, OperationPlan
 from .planner import build_plan
 from .recovery import rows_as_dicts, undo_transaction
 from .repair import repair_permissions
-from .reports import build_mapping_index, plan_display_stats, readable_group_rows, write_plan_report
+from .reports import _row_flags, build_mapping_index, plan_display_stats, readable_group_rows, write_plan_report
 from .storage import list_history
 from .ui import INDEX_HTML
 
@@ -37,12 +37,31 @@ class _PlanPageIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._index: dict[str, list[MappingEntry]] | None = None
+        self._filtered: dict[tuple[str, str], list[MappingEntry]] = {}
 
     def get(self, plan: OperationPlan) -> dict[str, list[MappingEntry]]:
         with self._lock:
             if self._index is None:
                 self._index = build_mapping_index(plan)
             return self._index
+
+    def filtered(self, plan: OperationPlan, root: str, kind: str) -> dict[str, list[MappingEntry]]:
+        if kind not in {'all', 'changed', 'renamed', 'same'}:
+            raise ValueError('未知筛选条件')
+        index = self.get(plan)
+        if kind == 'all':
+            return index
+        with self._lock:
+            key = (root, kind)
+            if key not in self._filtered:
+                rows = []
+                for mapping in index.get(root, []):
+                    moved, renamed, _ = _row_flags(plan, mapping, root)
+                    if (kind == 'changed' and (moved or renamed) or kind == 'renamed' and renamed
+                            or kind == 'same' and not (moved or renamed)):
+                        rows.append(mapping)
+                self._filtered[key] = rows
+            return {root: self._filtered[key]}
 
 
 class PlanRegistry:
@@ -93,13 +112,13 @@ class PlanRegistry:
             raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
         return plan
 
-    def page(self, plan_id: str, root: str, offset: int, limit: int) -> dict:
+    def page(self, plan_id: str, root: str, offset: int, limit: int, kind: str = 'all') -> dict:
         with self._lock:
             plan = self._plans.get(plan_id)
             holder = self._pages.get(plan_id)
         if plan is None or holder is None:
             raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
-        return readable_group_rows(plan, root, offset, limit, index=holder.get(plan))
+        return readable_group_rows(plan, root, offset, limit, index=holder.filtered(plan, root, kind))
 
     def claim(self, plan_id: str) -> OperationPlan:
         """首次实际执行前原子消耗计划；终态不随 progress_key 淘汰重置。"""
@@ -198,7 +217,7 @@ DUPLICATE_ROW_LIMIT = 400
 ROW_TOTAL = 1500        # 所有资源包合计下发行数上限：280 个包各 80 行也有 2 万行，浏览器照样卡
 
 
-def _plan_payload(plan: OperationPlan) -> dict:
+def _plan_payload(plan: OperationPlan, summary_only: bool = False) -> dict:
     """下发精简计划：mappings 一条不下发（28 万条就是上百 MB JSON），operations/issues 截断，明细走 /api/plan/rows 分页。"""
     return {
         "plan_id": plan.plan_id,
@@ -210,7 +229,7 @@ def _plan_payload(plan: OperationPlan) -> dict:
         "config_snapshot": plan.config_snapshot,
         "source_snapshot_digest": plan.source_snapshot_digest,
         "resource_roots": plan.resource_roots,
-        "operations": [op.to_dict() for op in plan.operations[:ROW_LIMIT]],
+        "operations": [] if summary_only else [op.to_dict() for op in plan.operations[:ROW_LIMIT]],
         "operation_count": len(plan.operations),
         "issues": [issue.to_dict() for issue in plan.issues[:ISSUE_LIMIT]],
         "issue_total": len(plan.issues),
@@ -218,7 +237,7 @@ def _plan_payload(plan: OperationPlan) -> dict:
         "created_at": plan.created_at,
         "frozen": plan.frozen,
         "estimated_space": plan.estimated_space,
-        "display": plan_display_stats(plan, ROW_LIMIT, FOLDER_LIMIT, ROW_TOTAL),
+        "display": plan_display_stats(plan, ROW_LIMIT, FOLDER_LIMIT, ROW_TOTAL, summary_only=summary_only),
     }
 
 
@@ -516,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 PLANS.put(plan)
                 _remember_root_quietly(plan.selected_root)
-                self.send_tracked(key, _plan_payload(plan))
+                self.send_tracked(key, _plan_payload(plan, summary_only=body.get('view') == 'summary'))
             elif self.path == "/api/plan/rows":
                 self.send_json(
                     PLANS.page(
@@ -524,6 +543,7 @@ class Handler(BaseHTTPRequestHandler):
                         str(body.get("root") or ""),
                         int(body.get("offset") or 0),
                         min(int(body.get("limit") or ROW_PAGE), 1000),
+                        str(body.get("filter") or "all"),
                     )
                 )
             elif self.path == "/api/report":

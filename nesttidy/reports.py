@@ -101,7 +101,7 @@ def _inside(path: str, roots: list[str], lookup: dict[str, str] | None = None,
 
 
 def plan_display_stats(plan: OperationPlan, row_limit: int = 0, folder_limit: int = 0,
-                       total_row_limit: int = 0) -> dict:
+                       total_row_limit: int = 0, *, summary_only: bool = False) -> dict:
     """从冻结计划派生展示统计：只读、不写盘、不改计划字段与顺序。"""
     counts: dict[str, int] = {code: 0 for code in _RULE_CODES}
     counts["R0"] = sum(1 for op in plan.operations if op.op_type == "rmdir")
@@ -123,13 +123,13 @@ def plan_display_stats(plan: OperationPlan, row_limit: int = 0, folder_limit: in
     label = "output_root（copy 模式）" if plan.output_root else "resource_roots（资源根内）"
     file_ops = [op for op in plan.operations if op.op_type in {"move", "copy", "keep"} and op.target_path]
     lookup = _root_lookup(roots)
-    escaped = [op for op in file_ops if not _inside(op.target_path, roots, lookup, {})]
+    escaped = sum(not _inside(op.target_path, roots, lookup, {}) for op in file_ops)
     return {
         "rule_counts": counts,
         "rule_rows": [{"rule": c, "name": _RULE_NAMES[c], "count": counts[c]} for c in _RULE_CODES],
         "r5_samples": samples,
-        "boundary": {"checked": len(file_ops), "out_of_bound": len(escaped), "label": label},
-        "readable": readable_plan_view(plan, row_limit, folder_limit, total_row_limit),
+        "boundary": {"checked": len(file_ops), "out_of_bound": escaped, "label": label},
+        "readable": readable_plan_view(plan, row_limit, folder_limit, total_row_limit, summary_only=summary_only),
     }
 
 
@@ -298,6 +298,8 @@ def _readable_row(plan: OperationPlan, mapping: MappingEntry, root: str) -> dict
 
 def _row_flags(plan: OperationPlan, mapping: MappingEntry, root: str) -> tuple[bool, bool, int]:
     """只算「换位置 / 改名 / 体积」这三个标记，不构造整行——几十万条里绝大多数不显示。"""
+    if not plan.output_root and mapping.original_path == mapping.planned_target_path:
+        return False, False, mapping.source_size or 0
     before = _rel(mapping.original_path, root) if root else mapping.original_path
     base_after = root
     if plan.output_root and root:
@@ -309,7 +311,7 @@ def _row_flags(plan: OperationPlan, mapping: MappingEntry, root: str) -> tuple[b
 
 
 def readable_plan_view(plan: OperationPlan, row_limit: int = 0, folder_limit: int = 0,
-                       total_row_limit: int = 0) -> dict:
+                       total_row_limit: int = 0, *, summary_only: bool = False) -> dict:
     """把冻结计划翻译成人能读的「整理前 → 整理后」清单：纯派生视图，不读盘、不改计划字段。
 
     `row_limit > 0` 时每个资源包只带前 row_limit 行——28 万个文件一次塞进浏览器会把页面卡死，
@@ -324,14 +326,13 @@ def readable_plan_view(plan: OperationPlan, row_limit: int = 0, folder_limit: in
     total_bytes = 0
     for mapping in plan.mappings:
         root = _root_for(mapping.original_path, roots, lookup, root_cache)
-        bucket = groups.setdefault(
-            root,
-            {"root_path": root, "root_name": Path(root).name if root else "（资源根之外）",
-             "rows": [], "moved": 0, "renamed": 0, "changed": 0, "row_total": 0, "rows_shown": 0},
-        )
+        bucket = groups.get(root)
+        if bucket is None:
+            bucket = groups[root] = {"root_path": root, "root_name": Path(root).name if root else "（资源根之外）",
+                                     "rows": [], "moved": 0, "renamed": 0, "changed": 0, "row_total": 0, "rows_shown": 0}
         bucket["row_total"] += 1
         # 28 万条里绝大多数不会显示（每包只发前几十行），先算轻量标记，确实要显示才造整行 dict。
-        emit = (row_limit <= 0 or bucket["rows_shown"] < row_limit) and (
+        emit = not summary_only and (row_limit <= 0 or bucket["rows_shown"] < row_limit) and (
             total_row_limit <= 0 or rows_emitted < total_row_limit
         )
         if emit:
