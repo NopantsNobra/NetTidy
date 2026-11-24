@@ -67,13 +67,14 @@ class _PlanPageIndex:
 class PlanRegistry:
     """冻结计划的身份与执行生命周期分离；执行结果只更新状态元数据。"""
 
-    def __init__(self, max_plans: int = 16, max_entries: int = 1_200_000) -> None:
+    def __init__(self, max_plans: int = 16, max_entries: int = 600_000) -> None:
         self._plans: dict[str, OperationPlan] = {}
         self._states: dict[str, str] = {}
         self._pages: dict[str, _PlanPageIndex] = {}
         self._lock = threading.Lock()
         self._max = max(1, max_plans)
         # 条目数是内存压力代理指标，不是精确字节限制。20 万文件通常约 40 万条。
+        # 四轮 20 万文件实测三份驻留压力偏高：默认保留一份此规模计划；小计划仍可共存。
         self._entry_budget = max(1, max_entries)
 
     @staticmethod

@@ -159,6 +159,28 @@ class PlanRegistryTests(unittest.TestCase):
 
 
 
+    def test_default_budget_retains_only_one_200k_scale_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            a, b = [_plan(_make_run_root(base, str(n))) for n in range(2)]
+            # 用重复引用模拟条目数量，不构造 40 万个实际文件。
+            for plan in (a, b):
+                plan.operations[:] = [plan.operations[0]] * 200_000
+                plan.mappings[:] = [plan.mappings[0]] * 200_000
+            registry = web.PlanRegistry()
+            registry.put(a)
+            registry.put(b)
+            self.assertEqual(list(registry._plans), [b.plan_id])
+            self.assertNotIn(a.plan_id, registry._pages)
+            registry.claim(b.plan_id)
+            with self.assertRaises(web.PlanConflictError):
+                registry.put(a)
+            self.assertIs(registry.get(b.plan_id), b)
+            registry.finish(b.plan_id, True)
+            registry.put(a)
+            self.assertEqual(list(registry._plans), [a.plan_id])
+
+
 class PortBindingTests(unittest.TestCase):
     def test_occupied_port_is_classified_with_port_number(self) -> None:
         """真实占用一个临时端口，再让服务绑定它：必须得到可判定的占用错误。"""
