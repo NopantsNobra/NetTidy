@@ -58,6 +58,33 @@ def should_skip_path(path: Path) -> str | None:
     return None
 
 
+def should_skip_entry(entry: os.DirEntry, path: Path) -> str | None:
+    """只读规划阶段复用普通 Windows 枚举元数据；异常/重解析点走原 Path 检查。
+
+    不改变排除优先级，不将枚举缓存带到执行阶段。非 Windows 保持旧路径检查。
+    """
+    if os.name != "nt":
+        return should_skip_path(path)
+    try:
+        if entry.is_symlink():
+            return "SKIPPED_SYMLINK"
+        attrs = entry.stat(follow_symlinks=False).st_file_attributes
+        if attrs & 0x400:
+            return should_skip_path(path)
+        lower = path.name.lower()
+        if lower == REPORT_DIR_NAME.lower() or lower.startswith(OUTPUT_DIR_PREFIX.lower()) or lower.startswith(
+            QUARANTINE_DIR_PREFIX.lower()
+        ):
+            return "SKIPPED_NESTTIDY_OUTPUT"
+        if path.suffix.lower() in INCOMPLETE_SUFFIXES or lower.endswith(".!qb"):
+            return "DOWNLOAD_IN_PROGRESS"
+        if attrs & 0x4:
+            return "SKIPPED_SYSTEM_FILE"
+        return None
+    except (OSError, AttributeError):
+        return should_skip_path(path)
+
+
 def resource_roots(selected_root: Path, mode: str) -> tuple[list[Path], list[ExecutionIssue]]:
     selected_root = selected_root.resolve()
     issues: list[ExecutionIssue] = []
@@ -72,7 +99,7 @@ def resource_roots(selected_root: Path, mode: str) -> tuple[list[Path], list[Exe
         entries = list(iterator)
     for entry in sorted(entries, key=lambda e: (str(Path(e.path)).casefold(), str(Path(e.path)))):
         child = Path(entry.path)
-        skip = should_skip_path(child)
+        skip = should_skip_entry(entry, child)
         if skip:
             issues.append(issue(str(child), "scan", skip.split(":", 1)[0], skip))
             continue
@@ -220,7 +247,7 @@ def build_plan(
 
     for root in roots:
         resource_id = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
-        tree, scan_issues = build_tree(root, should_skip_path, progress)
+        tree, scan_issues = build_tree(root, should_skip_path, progress, should_skip_entry=should_skip_entry)
         scanned_dirs = collect_dir_paths(tree)
         for raw in scan_issues:
             code = str(raw["code"]).split(":", 1)[0]
