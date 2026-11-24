@@ -357,9 +357,9 @@ class UndoCreatedFolderTests(unittest.TestCase):
     def _plan(root: Path, source: Path, target: Path) -> OperationPlan:
         return OperationPlan(
             plan_id="p", app_version="t", rule_version="r", mode="move",
-            selected_root=str(root), output_root=None, config_snapshot={},
-            source_snapshot_digest="d", resource_roots=[str(root)],
-            operations=[Operation("o1", "rid", "move", str(source), str(target), ["R4 单文件提级"])],
+            selected_root=str(root.resolve()), output_root=None, config_snapshot={},
+            source_snapshot_digest="d", resource_roots=[str(root.resolve())],
+            operations=[Operation("o1", "rid", "move", str(source.resolve()), str(target.resolve()), ["R4 单文件提级"])],
             issues=[], mappings=[], created_at="t",
         )
 

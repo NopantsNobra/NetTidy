@@ -129,7 +129,7 @@ class EmptyShellSweepTests(unittest.TestCase):
     def test_sweep_preserves_excluded_subtrees(self) -> None:
         """R6 不得进入扫描时排除的目录，连其中的空壳也不能删。"""
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
+            base = Path(tmp).resolve()
             package = base / "源" / "资源包"
             package.mkdir(parents=True)
             plan = build_plan(str(base / "源"), "batch")
