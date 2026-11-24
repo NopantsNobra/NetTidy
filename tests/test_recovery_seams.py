@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from nesttidy.executor import execute_plan
+from nesttidy.planner import build_plan
 from nesttidy.recovery import undo_transaction
 
 
@@ -163,6 +165,61 @@ class UndoBoundaryTests(unittest.TestCase):
                     link.rmdir()
                 else:
                     link.unlink()
+
+
+
+
+    def test_undo_refuses_replaced_root_from_real_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            selected = base / "源"
+            root = selected / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            plan = build_plan(str(selected), "batch")
+            tx = base / "tx.jsonl"
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+            self.assertEqual(result.failed, 0)
+            target = root / "文件.txt"
+            self.assertTrue(target.is_file())
+            old = base / "原资源包"
+            root.rename(old)
+            touch(target, "替换文件")
+
+            rows = undo_transaction(str(tx))
+
+            self.assertTrue(any(row.status == "failed" for row in rows))
+            self.assertTrue(tx.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "替换文件")
+            self.assertEqual((old / "文件.txt").read_text(encoding="utf-8"), "payload")
+            self.assertFalse((root / "壳").exists())
+
+    def test_undo_recreated_root_identity_survives_partial_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            selected = base / "源"
+            root = selected / "资源包"
+            root.mkdir(parents=True)
+            plan = build_plan(str(selected), "batch")
+            tx = base / "tx.jsonl"
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+            self.assertFalse(root.exists())
+            self.assertEqual(result.failed, 0)
+            # 添加一个先于根清理的坏行，确保逆序撤销先重建根、再失败并保留日志。
+            original = tx.read_text(encoding="utf-8")
+            bad = {"action": "move", "source": str(base / "越界.txt"), "target": str(root / "文件.txt"), "resource_root": str(root), "status": "done"}
+            tx.write_text(json.dumps(bad, ensure_ascii=False) + "\n" + original, encoding="utf-8")
+
+            first = undo_transaction(str(tx))
+
+            self.assertTrue(root.is_dir())
+            self.assertTrue(tx.exists())
+            self.assertTrue(any(row.action == "rmdir" and row.status == "ok" for row in first))
+            self.assertTrue(any(row.status == "failed" for row in first))
+            self.assertIn("undo_root_recreated", tx.read_text(encoding="utf-8"))
+            second = undo_transaction(str(tx))
+            self.assertTrue(any(row.action == "rmdir" and row.status == "ok" for row in second))
+            self.assertTrue(tx.exists())
 
 
 

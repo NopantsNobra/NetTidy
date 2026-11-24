@@ -251,6 +251,7 @@ python -m unittest discover -s tests        # ① Windows 全绿
 5. 没有联网代码、没有语义判断、没有数字后缀
 6. 推送前 `git fetch` + `git log HEAD..origin/main`；有分叉先查内容再 rebase，禁止 force；push 后 `ls-remote` 核对 + 干净克隆复跑
 
+   - 管理员裁决（2026-11-24）：小步独立提交直接推 main，不创建 PR；一般技术判断自行完成，必要时用临时分支运行 Windows CI，验证后非强制更新 main。每个提交可独立追溯；不绕过安全验收。
 7. 本地钩子：新克隆需执行 `git config core.hooksPath .githooks` 启用 pre-commit 测试闸门（提交前自动跑全套测试，失败即拒绝提交）
 
 ### 6.3 禁止的改法

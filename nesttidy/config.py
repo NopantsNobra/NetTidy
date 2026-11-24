@@ -18,7 +18,8 @@ APP_NAME = "理巢 NestTidy"
 # 非 Windows 回收站逐行失败，复制方式未填输出目录前置提示，--host 非本机一行报错。规则语义与 RULE_VERSION 未变。
 # 1.7.0：P0-2 scandir 元数据复用 / P0-3 单次规划内 resolve 记忆化（规则语义与计划输出不变）；
 # P1-2 服务端 per-plan 执行锁 + progress_key 幂等（同 plan 并发执行 409）。历次版本明细见 ROADMAP。
-APP_VERSION = "1.8.1"
+# 1.8.2：A1 执行及撤销边界保护；Windows CI 243 例，规则语义不变。
+APP_VERSION = "1.8.2"
 # v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
 # undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
