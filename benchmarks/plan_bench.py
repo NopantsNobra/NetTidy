@@ -120,6 +120,15 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
     payload = _plan_payload(plan)
     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     first_screen_seconds = time.perf_counter() - start
+    legacy_counts = payload["display"]["readable"]["counts"]
+    del payload
+    start = time.perf_counter()
+    summary = _plan_payload(plan, summary_only=True)
+    summary_payload_bytes = len(json.dumps(summary, ensure_ascii=False).encode("utf-8"))
+    summary_seconds = time.perf_counter() - start
+    if summary["display"]["readable"]["counts"] != legacy_counts:
+        raise RuntimeError("summary counts differ from legacy")
+    del summary
     samples = []
     indexed_samples = []
     registry = PlanRegistry()
@@ -137,6 +146,21 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
         indexed_samples.append(time.perf_counter() - start)
         if indexed != legacy:
             raise RuntimeError("indexed page differs from legacy")
+    # Current UI requests 80 rows. A fresh index isolates its first-page cost
+    # from the legacy 200-row comparison above.
+    registry.clear()
+    registry.put(plan)
+    ui_samples = []
+    for i in range(min(pages, 20)):
+        if not plan.resource_roots:
+            break
+        resource = plan.resource_roots[i % len(plan.resource_roots)]
+        start = time.perf_counter()
+        page = registry.page(plan.plan_id, resource, (i // len(plan.resource_roots)) * 80, 80)
+        json.dumps(page, ensure_ascii=False).encode("utf-8")
+        ui_samples.append(time.perf_counter() - start)
+        if len(page["rows"]) > 80:
+            raise RuntimeError("UI page exceeds bound")
     sorted_samples = sorted(samples)
     p95 = sorted_samples[max(0, (95 * len(samples) + 99) // 100 - 1)] if samples else None
     return {
@@ -145,7 +169,11 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
         "operation_counts": dict(Counter(op.op_type for op in plan.operations)),
         "issue_counts": dict(Counter(issue.code for issue in plan.issues)),
         "plan_seconds": plan_seconds, "first_screen_seconds": first_screen_seconds,
-        "payload_bytes": payload_bytes, "page_p50_seconds": statistics.median(samples) if samples else None,
+        "payload_bytes": payload_bytes, "summary_seconds": summary_seconds,
+        "summary_payload_bytes": summary_payload_bytes,
+        "ui_first_page_seconds": ui_samples[0] if ui_samples else None,
+        "ui_warm_page_p50_seconds": statistics.median(ui_samples[1:]) if len(ui_samples) > 1 else None,
+        "page_p50_seconds": statistics.median(samples) if samples else None,
         "page_p95_seconds": p95, "page_samples": len(samples),
         "indexed_first_page_seconds": indexed_samples[0] if indexed_samples else None,
         "indexed_warm_page_p50_seconds": statistics.median(indexed_samples[1:]) if len(indexed_samples) > 1 else None,
@@ -284,6 +312,7 @@ def main(argv=None):
                   "cache_note": "first run not guaranteed cold; subsequent runs potentially warm",
                   "runs": results, "median_plan_seconds": statistics.median(r["plan_seconds"] for r in results),
                   "median_first_screen_seconds": statistics.median(r["first_screen_seconds"] for r in results),
+                  "median_summary_seconds": statistics.median(r["summary_seconds"] for r in results),
                   "semantic_stable": len({r["semantic_digest"] for r in results}) == 1,
                   "snapshot_stable": len({r["snapshot_digest"] for r in results}) == 1,
                   "progress_overhead": progress_overhead()}
