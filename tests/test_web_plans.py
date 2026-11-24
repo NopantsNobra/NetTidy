@@ -313,6 +313,26 @@ class WebEndpointTests(unittest.TestCase):
         self.assertEqual(self._files("outA"), ["a.txt"])
         self.assertEqual(self._files("outB"), ["b.txt"])
 
+    def test_explicit_replacement_preserves_other_tab_and_rejects_running(self) -> None:
+        body_a = {"selected_root": str(self.base / "srcA"), "mode": "batch", "view": "summary"}
+        body_b = {"selected_root": str(self.base / "srcB"), "mode": "batch", "view": "summary"}
+        sa, a = _post(self.port, "/api/plan", body_a)
+        sb, b = _post(self.port, "/api/plan", body_b)
+        self.assertEqual((sa, sb), (200, 200))
+        status, fresh = _post(self.port, "/api/plan", dict(body_a, replace_plan_id=a["plan_id"]))
+        self.assertEqual(status, 200)
+        self.assertNotEqual(a["plan_id"], fresh["plan_id"])
+        self.assertEqual(_post(self.port, "/api/plan/rows", {"plan_id": a["plan_id"], "root": a["resource_roots"][0]})[0], 400)
+        self.assertEqual(_post(self.port, "/api/plan/rows", {"plan_id": b["plan_id"], "root": b["resource_roots"][0]})[0], 200)
+        web.PLANS.claim(b["plan_id"])
+        try:
+            status, _ = _post(self.port, "/api/plan", dict(body_b, replace_plan_id=b["plan_id"]))
+            self.assertEqual(status, 409)
+            self.assertIsNotNone(web.PLANS.get(b["plan_id"]))
+            self.assertIsNotNone(web.PLANS.get(fresh["plan_id"]))
+        finally:
+            web.PLANS.finish(b["plan_id"], False)
+
     def test_execute_without_plan_id_is_rejected(self) -> None:
         _post(self.port, "/api/plan", {"selected_root": str(self.base / "srcA"), "mode": "batch", "output_root": str(self.base / "outA")})
         status, body = _post(self.port, "/api/execute-copy", {})

@@ -90,10 +90,18 @@ server.serve_forever()
   await evaluate("root.value="+JSON.stringify(data.root)+"; output.value="+JSON.stringify(path.join(temp,'output'))+"; execMode.value='copy'; makePlan()");
   assert.equal(await evaluate("!!lastPlan && !!lastPlan.output_root"),true);
   assert.equal(await evaluate("document.getElementById('execBtn').classList.contains('danger')"),false);
+  const oldPlan=await evaluate("({id:currentPlanId,root:lastPlan.resource_roots[0]})");
+  const otherPlan=await evaluate("api('/api/plan',{selected_root:root.value,mode:mode.value,view:'summary'})");
   await evaluate("execMode.value='move';execMode.dispatchEvent(new Event('change'));true");
   assert.equal(await evaluate("document.getElementById('execBtn').disabled"),true);
   await evaluate("makePlan()");
   await waitFor(()=>evaluate("!!lastPlan && !busy && !document.getElementById('previewSection').classList.contains('hidden')"));
+  assert.notEqual(await evaluate("currentPlanId"),oldPlan.id);
+  const oldGone=await evaluate("api('/api/plan/rows',"+JSON.stringify({plan_id:oldPlan.id,root:oldPlan.root})+").then(()=>false,()=>true)");
+  assert.equal(oldGone,true);
+  const otherStill=await evaluate("api('/api/plan/rows',"+JSON.stringify({plan_id:otherPlan.plan_id,root:otherPlan.resource_roots[0],limit:1})+").then(x=>x.total>0,()=>false)");
+  assert.equal(otherStill,true);
+  console.log('Replan released previous ID and preserved independent tab plan');
   assert.equal(await evaluate("lastPlan.mapping_count"),126);
   assert.equal(await evaluate("document.querySelectorAll('#cards .card').length"),7);
   assert.equal(await evaluate("document.getElementById('execBtn').classList.contains('danger')"),true);
