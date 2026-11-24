@@ -545,8 +545,8 @@ def delete_duplicates(
 
     handled: set[str] = set()
     for index, entry in enumerate(entries, 1):
-        victim = Path(entry.path).resolve()
-        keep = Path(entry.keep_path).resolve()
+        victim = Path(os.path.abspath(entry.path))
+        keep = Path(os.path.abspath(entry.keep_path))
         key = str(victim)
         if progress:
             progress(index, len(entries), victim.name)
@@ -555,33 +555,45 @@ def delete_duplicates(
             result.rows.append(_delete_row(victim, "skipped", "DUPLICATE_REQUEST", "同一文件在本批请求里出现多次", 0))
             continue
         handled.add(key)
-        code, message = _delete_precheck(victim, keep, base, entry.expected_sha256)
-        if code:
-            result.skipped += 1
-            result.issues.append(issue(key, "delete", code, message))
-            result.rows.append(_delete_row(victim, "skipped", code, message, 0))
-            continue
-        size = victim.stat().st_size
         try:
-            if mode == "purge":
-                write_tx(tx_path, {"action": "delete", "source": str(victim), "mode": "purge", "status": "started"})
-                victim.unlink()
-                write_tx(tx_path, {"action": "delete", "source": str(victim), "mode": "purge", "status": "done"})
-                result.deleted += 1
-                result.freed_bytes += size
-                result.rows.append(_delete_row(victim, "deleted", "OK", "已彻底删除", size))
-            elif send_to_recycle_bin(victim):
-                write_tx(tx_path, {"action": "recycle", "source": str(victim), "status": "done"})
-                result.recycled += 1
-                result.recycled_bytes += size
-                result.rows.append(_delete_row(victim, "recycled", "OK", "已移入回收站（可在回收站还原；清空回收站才真正释放空间）", size))
-            else:
-                raise OSError("回收站操作未生效")
+            code, message = _delete_precheck(victim, keep, base, entry.expected_sha256)
         except OSError as exc:
             result.failed += 1
             code = classify_exception(exc)
             result.issues.append(issue(key, "delete", code, str(exc)))
             result.rows.append(_delete_row(victim, "failed", code, str(exc), 0))
+            continue
+        if code:
+            result.skipped += 1
+            result.issues.append(issue(key, "delete", code, message))
+            result.rows.append(_delete_row(victim, "skipped", code, message, 0))
+            continue
+        try:
+            info = victim.stat()
+            size = info.st_size
+            reclaimable = size if info.st_nlink == 1 else 0
+            if mode == "purge":
+                write_tx(tx_path, {"action": "delete", "source": str(victim), "mode": "purge", "status": "started"})
+                victim.unlink()
+                write_tx(tx_path, {"action": "delete", "source": str(victim), "mode": "purge", "status": "done"})
+                result.deleted += 1
+                result.freed_bytes += reclaimable
+                result.rows.append(_delete_row(victim, "deleted", "OK", "已彻底删除", size))
+            else:
+                write_tx(tx_path, {"action": "recycle", "source": str(victim), "status": "started"})
+                if not send_to_recycle_bin(victim):
+                    raise OSError("回收站操作未生效")
+                write_tx(tx_path, {"action": "recycle", "source": str(victim), "status": "done"})
+                result.recycled += 1
+                result.recycled_bytes += size
+                result.rows.append(_delete_row(victim, "recycled", "OK", "已移入回收站（可在回收站还原；清空回收站才真正释放空间）", size))
+        except OSError as exc:
+            result.failed += 1
+            code = classify_exception(exc)
+            result.issues.append(issue(key, "delete", code, str(exc)))
+            result.rows.append(_delete_row(victim, "failed", code, str(exc), 0))
+            if isinstance(exc, TransactionLogError):
+                break
     return result
 
 
@@ -589,10 +601,19 @@ def _delete_precheck(victim: Path, keep: Path, base: Path, expected_sha256: str)
     """返回 (错误码, 说明)；空字符串表示通过。"""
     if str(victim) == str(keep):
         return "KEEP_IS_VICTIM", "保留项不能同时是删除目标"
-    if not victim.is_relative_to(base):
-        return "OUT_OF_ROOT", f"不在选定目录内，拒绝删除: {victim}"
-    if victim.is_symlink():
-        return "SYMLINK_REFUSED", "符号链接不参与删除"
+    if not victim.is_relative_to(base) or not keep.is_relative_to(base):
+        return "OUT_OF_ROOT", f"待删或保留项不在选定目录内: {victim}, {keep}"
+    for path in (victim, keep):
+        try:
+            ensure_move_path(path, base)
+        except MoveBoundaryError as exc:
+            return "SYMLINK_REFUSED", str(exc)
+        for part in (path, *path.parents):
+            if part == base:
+                break
+            reason = should_skip_path(part)
+            if reason and reason != "ACCESS_ERROR:" and not reason.startswith("ACCESS_ERROR:"):
+                return "EXCLUDED_PATH", f"排除项不参与删除: {part}"
     if not keep.is_file():
         return "KEEP_MISSING", f"保留副本已不存在，拒绝删除: {keep}"
     if not victim.is_file():

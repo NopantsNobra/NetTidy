@@ -80,7 +80,7 @@ pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-
 <div class="panel hidden" id="panel-dup"><section><h2>重复文件</h2>
   <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准（推荐）</option><option value="fast">快速</option><option value="deep">深度</option></select></label><label>删除方式<select id="delMode"><option value="recycle">移入回收站</option><option value="purge">彻底删除</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
   <p class="muted" id="dupLevelHint"></p>
-  <p class="muted">第一遍按你选的级别初筛，程序自动对每组候选再跑一遍「全文件 SHA-256」复核：首尾相同但中段不同的文件标成「复核剔除」，永不进入可删名单。逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。<b>右键任意一行</b>可在资源管理器里定位到那个文件。</p>
+  <p class="muted">第一遍按你选的级别初筛，程序按大小和全文件内容的 SHA-256 内部签名复核（深度模式直接复用签名）：各真实重复子组独立显示，单例标成「复核剔除」，永不进入可删名单。逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。<b>右键任意一行</b>可在资源管理器里定位到那个文件。</p>
   <div class="pbar"><div class="pfill" id="dupFill"></div></div><p class="muted" id="dupProg">尚未诊断。</p>
   <div id="dupResult" class="scrollbox"><p class="muted">尚未诊断。</p></div></section></div>
 <div class="panel hidden" id="panel-repair"><section><h2>权限修复</h2>
@@ -240,7 +240,7 @@ const MODE_HINTS = {
 };
 const DUP_LEVEL_HINTS = {
   standard: '标准：大小 + 首尾各 1MB 哈希初筛，再自动全文件 SHA-256 复核（推荐）。',
-  fast: '快速：大小 + 文件名初筛，误判最多，靠第二遍全量哈希兜底。',
+  fast: '快速：大小 + 文件名初筛，同内容异名可能漏检；候选由第二遍全量哈希复核。',
   deep: '深度：直接全文件 SHA-256，最慢但一步到位，不再复核。'
 };
 const DEL_MODE_HINTS = {

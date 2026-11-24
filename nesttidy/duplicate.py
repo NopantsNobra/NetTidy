@@ -15,7 +15,7 @@ LEVELS = ("fast", "standard", "deep")
 # 第一遍只做初筛；standard/fast 都会漏掉「首尾相同、中段不同」的文件，
 # 所以默认再跑一遍全文件哈希复核（两阶段），把误判组剔出去。
 PHASE1_METHOD = {"fast": "大小 + 文件名", "standard": "大小 + 首尾各 1MB 哈希", "deep": "大小 + 全文件 SHA-256"}
-VERIFY_METHOD = "全文件 SHA-256"
+VERIFY_METHOD = "大小 + 全文件 SHA-256（内部签名）"
 
 
 @dataclass
@@ -34,6 +34,8 @@ class DuplicateRow:
     verify_value: str = ""
     verified: bool = False
     conflict_note: str = ""
+    file_identity: tuple[int, int] | None = None
+    link_count: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -85,12 +87,13 @@ def detect_duplicates(
                 rows.append(_singleton_row(group[0], group_index))
                 group_index += 1
             continue
-        for cluster in _clusters(group, level, workers):
+        for initial_hash, cluster in _clusters(group, level, workers):
             if len(cluster) < 2:
                 continue
-            confirmed, rejected, verify_hash, verified = _verify_cluster(cluster, level, workers, verify)
-            if confirmed:
-                rows.extend(_group_rows(confirmed, size, level, f"dup-{group_index}", verify_hash, verified, ""))
+            confirmed, rejected, verified = _verify_cluster(cluster, level, workers, verify, initial_hash)
+            for verify_hash, members in confirmed:
+                rows.extend(_group_rows(members, size, level, f"dup-{group_index}", verify_hash, verified, ""))
+                group_index += 1
             if rejected:
                 rows.extend(
                     _group_rows(
@@ -98,19 +101,19 @@ def detect_duplicates(
                         size,
                         level,
                         f"dup-{group_index}-recheck",
-                        verify_hash,
+                        "",
                         False,
-                        "复核剔除：首尾相同但全文哈希不同，不是重复文件",
+                        "复核剔除：初筛相同但全文哈希未形成重复组",
                     )
                 )
-            group_index += 1
+                group_index += 1
     return rows
 
 
 def collect_files(base: Path, progress=None) -> list[Path]:
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(base):
-        dirnames.sort(key=str.casefold)
+        dirnames[:] = sorted((name for name in dirnames if not should_skip_path(Path(dirpath) / name)), key=str.casefold)
         filenames.sort(key=str.casefold)
         for name in filenames:
             path = Path(dirpath) / name
@@ -149,34 +152,30 @@ def _singleton_row(path: Path, index: int) -> DuplicateRow:
     )
 
 
-def _clusters(group: list[Path], level: str, workers: int) -> list[list[Path]]:
+def _clusters(group: list[Path], level: str, workers: int) -> list[tuple[str, list[Path]]]:
     signatures: dict[str, list[Path]] = {}
     for path, value in _hash_map(group, level, workers):
         signatures.setdefault(value, []).append(path)
-    return [sorted(paths, key=lambda p: stable_key(p, "file")) for _, paths in sorted(signatures.items())]
+    return [(value, sorted(paths, key=lambda p: stable_key(p, "file"))) for value, paths in sorted(signatures.items())]
 
 
 def _verify_cluster(
-    cluster: list[Path], level: str, workers: int, verify: bool
-) -> tuple[list[Path], list[Path], str, bool]:
-    """第二遍复核：返回（确认重复的成员、复核剔除的成员、确认哈希、是否已复核确认）。"""
+    cluster: list[Path], level: str, workers: int, verify: bool, initial_hash: str
+) -> tuple[list[tuple[str, list[Path]]], list[Path], bool]:
+    """保留每个独立的全文哈希重复组；仅剔除单例和读取失败项。"""
     if not verify:
-        return cluster, [], "", False
+        return [("", cluster)], [], False
     if level == "deep":
-        # 第一遍已全量哈希，直接采信，避免对同一批大文件重复读盘。
-        return cluster, [], file_signature(cluster[0], "deep"), True
+        return [(initial_hash, cluster)], [], True
     hashes: dict[str, list[Path]] = {}
     for path, value in _hash_map(cluster, "deep", workers):
         hashes.setdefault(value, []).append(path)
     ordered = sorted(hashes.items(), key=lambda item: (-len(item[1]), min(stable_key(p, "file") for p in item[1])))
-    confirmed_hash, best = ordered[0]
-    best = sorted(best, key=lambda p: stable_key(p, "file"))
-    if len(best) < 2:
-        # 每个哈希都是独一份：初筛整体误判。
-        rejected = sorted([p for _, paths in ordered for p in paths], key=lambda p: stable_key(p, "file"))
-        return [], rejected, confirmed_hash, False
-    rejected = sorted([p for _, paths in ordered[1:] for p in paths], key=lambda p: stable_key(p, "file"))
-    return best, rejected, confirmed_hash, True
+    confirmed = [(value, sorted(paths, key=lambda p: stable_key(p, "file")))
+                 for value, paths in ordered if len(paths) >= 2 and not value.startswith("__error__")]
+    rejected = sorted([p for value, paths in ordered if len(paths) < 2 or value.startswith("__error__")
+                       for p in paths], key=lambda p: stable_key(p, "file"))
+    return confirmed, rejected, True
 
 
 def _group_rows(
@@ -201,8 +200,10 @@ def _group_rows(
         try:
             stat = path.stat()
             mtime = stat.st_mtime
+            identity = (stat.st_dev, stat.st_ino) if stat.st_ino else None
+            link_count = stat.st_nlink
         except OSError:
-            mtime = 0.0
+            mtime, identity, link_count = 0.0, None, 0
         rows.append(
             DuplicateRow(
                 duplicate_group_id=group_id,
@@ -211,7 +212,9 @@ def _group_rows(
                 mtime=mtime,
                 hash_method=level,
                 hash_value=verify_hash,
-                is_hardlink=is_hardlink(path),
+                is_hardlink=link_count > 1,
+                file_identity=identity,
+                link_count=link_count,
                 suggested_keep=path == keep,
                 reason=reason,
                 phase1_method=PHASE1_METHOD[level],
@@ -247,7 +250,9 @@ def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
         rejected = not usable
         verified = bool(usable) and all(row.verified for row in usable)
         keep_row = usable[0] if usable else items[0]
-        deletable = [row.path for row in usable if row is not keep_row]
+        candidates = [row for row in usable if row is not keep_row and row.file_identity is not None
+                      and keep_row.file_identity is not None and row.file_identity != keep_row.file_identity]
+        deletable = [row.path for row in candidates]
         if rejected:
             # 复核剔除的组不是重复组：不标保留项，避免界面暗示「留住这个、删那个」
             for row in items:
@@ -269,7 +274,7 @@ def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
                 keep_path=keep_row.path,
                 deletable_paths=deletable,
                 verified_hash=keep_row.verify_value,
-                reclaimable_bytes=keep_row.size * len(deletable),
+                reclaimable_bytes=sum(row.size for row in candidates if row.link_count == 1),
                 note=note,
             )
         )
@@ -310,7 +315,7 @@ def file_signature(path: Path, level: str) -> str:
 
 
 def full_sha256(path: Path) -> str:
-    """全文件 SHA-256：删除前的最后一道校验，与 file_signature(level="deep") 同口径。"""
+    """内部 SHA-256(size 十进制字符串 + 全文件字节)，与 deep 同口径。"""
     h = hashlib.sha256()
     size = path.stat().st_size
     h.update(str(size).encode())
