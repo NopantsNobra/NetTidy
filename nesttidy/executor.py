@@ -74,6 +74,51 @@ def ensure_target_within_output(target: Path, output_root: Path) -> None:
         raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
 
 
+class MoveBoundaryError(ValueError):
+    """原地执行的路径已偏离冻结计划的资源根。"""
+
+
+def ensure_move_path(path: Path, root: Path) -> None:
+    """拒绝越界和重解析点，允许尚不存在的目标目录；不消除 TOCTOU。"""
+    if not path.is_absolute() or not path.is_relative_to(root) or path == root:
+        raise MoveBoundaryError(f"路径越过资源根或指向资源根本身: {path}")
+    try:
+        if path.resolve() != path or root.resolve() != root:
+            raise MoveBoundaryError(f"路径已被重定向: {path}")
+        for current in (path, *path.parents):
+            try:
+                attrs = current.lstat()
+            except FileNotFoundError:
+                continue
+            if current.is_symlink() or getattr(attrs, "st_file_attributes", 0) & 0x400:
+                raise MoveBoundaryError(f"拒绝符号链接或重解析点: {current}")
+            if current == root:
+                break
+    except (OSError, RuntimeError) as exc:
+        raise MoveBoundaryError(f"无法安全复核路径: {path}: {exc}") from exc
+
+
+def move_resource_root(plan: OperationPlan, op: Operation, roots: set[Path]) -> Path:
+    if not op.source_path:
+        raise MoveBoundaryError("缺少源路径")
+    selected = Path(plan.selected_root)
+    source = Path(op.source_path)
+    if not source.is_absolute() or not source.is_relative_to(selected) or source == selected:
+        raise MoveBoundaryError(f"源路径越过选中根: {source}")
+    if selected in roots:
+        root = selected
+    else:
+        root = selected / source.relative_to(selected).parts[0]
+    if root not in roots:
+        raise MoveBoundaryError(f"源路径不属于冻结资源根: {source}")
+    ensure_move_path(source, root)
+    if op.op_type in {"move", "copy"}:
+        if not op.target_path:
+            raise MoveBoundaryError("缺少目标路径")
+        ensure_move_path(Path(op.target_path), root)
+    return root
+
+
 def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None) -> ExecutionResult:
     if not plan.frozen:
         raise ValueError("OperationPlan 未冻结，禁止执行")
@@ -102,12 +147,14 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     if tx_path:
         tx_path.parent.mkdir(parents=True, exist_ok=True)
 
+    roots = {Path(root) for root in plan.resource_roots}
     ops = deterministic_ops(plan.operations)
     for index, op in enumerate(ops, 1):
         if progress:
             progress(index, len(ops), op.op_type)
         status = "failed"
         try:
+            move_root = move_resource_root(plan, op, roots) if mode == "move" and op.op_type in {"move", "copy", "rmdir"} else None
             precheck(op)
             if op.op_type == "keep":
                 status = "skipped"
@@ -119,10 +166,10 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
                     status = "skipped"
             else:  # move
                 if op.op_type in {"move", "copy"}:
-                    do_move(op, tx_path)
+                    do_move(op, tx_path, move_root)
                     status = "completed"
                 elif op.op_type == "rmdir":
-                    if do_rmdir(op, tx_path):
+                    if do_rmdir(op, tx_path, move_root):
                         status = "completed"
                     else:
                         status = "skipped"
@@ -219,21 +266,27 @@ def missing_dirs(path: Path) -> list[Path]:
     return list(reversed(missing))
 
 
-def do_move(op: Operation, tx_path: Path | None) -> None:
+def do_move(op: Operation, tx_path: Path | None, root: Path | None = None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
         return
     for created in missing_dirs(target.parent):
+        if root is not None:
+            ensure_move_path(created, root)
         created.mkdir()
         write_tx(tx_path, {"action": "mkdir", "source": str(created), "status": "done"})
+    if root is not None:
+        ensure_move_path(source, root)
+        ensure_move_path(target, root)
+        precheck(op)
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
     shutil.move(str(source), str(target))
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
 
 
-def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
+def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None) -> bool:
     """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
     assert op.source_path
     path = Path(op.source_path)
@@ -241,6 +294,8 @@ def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
         return True
     if any(path.iterdir()):
         return False
+    if root is not None:
+        ensure_move_path(path, root)
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
     path.rmdir()
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
@@ -326,6 +381,8 @@ def write_tx(tx_path: Path | None, row: dict) -> None:
 
 
 def classify_exception(exc: Exception) -> str:
+    if isinstance(exc, MoveBoundaryError):
+        return "MOVE_BOUNDARY_REFUSED"
     if isinstance(exc, OutputBoundaryError):
         return "OUTPUT_BOUNDARY_ESCAPED"
     if isinstance(exc, PermissionError):
