@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -15,6 +17,32 @@ class UndoResult:
     target: str
     status: str
     message: str
+
+
+def _undo_path(raw: object, scope: object = None, allow_root: bool = False) -> Path:
+    """撤销不得通过链接或重解析点写入；旧日志仍接受绝对路径。"""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("日志路径为空或无效")
+    path = Path(raw)
+    if not path.is_absolute() or ".." in path.parts or path == path.parent:
+        raise ValueError(f"日志路径不是安全的绝对路径: {path}")
+    if scope is not None:
+        if not isinstance(scope, str) or not scope.strip():
+            raise ValueError("日志资源根无效")
+        root = Path(scope)
+        if not root.is_absolute() or ".." in root.parts or not path.is_relative_to(root):
+            raise ValueError(f"撤销路径越过记录的资源根: {path}")
+        if path == root and not allow_root:
+            raise ValueError(f"拒绝对资源根本身执行此撤销动作: {path}")
+    # 从祖先到叶子复核，避免穿过重解析点后才发现路径被替换。
+    for component in reversed((path, *path.parents)):
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise ValueError(f"拒绝符号链接或重解析点: {component}")
+    return path
 
 
 def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
@@ -47,19 +75,32 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             progress(index, len(order), str(key[1] or ""), "撤销")
         item = collected[key]
         action = item.get("action", "")
+        scope = item.get("resource_root")
+        if action in {"mkdir", "rmdir", "move", "quarantine"}:
+            try:
+                source_path = _undo_path(item.get("source"), scope, allow_root=action == "rmdir")
+                if action in {"move", "quarantine"}:
+                    target_path = _undo_path(item.get("target"), scope if action == "move" else None)
+            except (OSError, ValueError, RuntimeError) as exc:
+                results.append(UndoResult(action, str(item.get("source", "")), str(item.get("target", "")), "failed", f"拒绝不安全的撤销路径: {exc}"))
+                continue
         if action == "recycle":
             results.append(UndoResult(action, str(item.get("source", "")), "", "skipped", "已移入回收站：在回收站里右键「还原」即可放回原位置"))
             continue
         if action == "mkdir":
             # 整理时新建的空文件夹：文件都已搬回原处后再收掉，非空则一律不动（里面还有别人的东西）。
-            folder = Path(str(item.get("source", "")))
-            if not folder.exists():
-                results.append(UndoResult(action, str(folder), "", "skipped", "目录已不存在"))
-            elif any(folder.iterdir()):
-                results.append(UndoResult(action, str(folder), "", "skipped", "目录里还有别的内容，未删除"))
-            else:
-                folder.rmdir()
-                results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
+            folder = source_path
+            try:
+                if not folder.exists():
+                    results.append(UndoResult(action, str(folder), "", "skipped", "目录已不存在"))
+                elif any(folder.iterdir()):
+                    results.append(UndoResult(action, str(folder), "", "skipped", "目录里还有别的内容，未删除"))
+                else:
+                    _undo_path(str(folder), scope)
+                    folder.rmdir()
+                    results.append(UndoResult(action, str(folder), "", "ok", "已删除整理时新建的空文件夹"))
+            except (OSError, ValueError, RuntimeError) as exc:
+                results.append(UndoResult(action, str(folder), "", "failed", f"撤销目录失败: {exc}"))
             continue
         if action == "rmdir":
             # v1.8.0（R6）起空目录删除改为可还原：重建目录本身，文件早已各自搬回原路径。
@@ -68,14 +109,15 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             if not raw:
                 results.append(UndoResult(action, "", "", "skipped", "日志缺少目录路径，未重建"))
                 continue
-            folder = Path(raw)
+            folder = source_path
             try:
+                _undo_path(raw, scope, allow_root=True)
                 if folder.is_dir():
                     results.append(UndoResult(action, raw, "", "ok", "目录本来就在，无需重建"))
                 else:
                     folder.mkdir(parents=True)
                     results.append(UndoResult(action, raw, "", "ok", "已重建被删除的空目录"))
-            except OSError as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 results.append(UndoResult(action, raw, "", "failed", f"重建目录失败：{exc}"))
             continue
         if action not in {"move", "quarantine"}:
@@ -83,8 +125,8 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
             note = "彻底删除无法撤销（未进入隔离区）" if action == "delete" else "该操作不支持自动撤销"
             results.append(UndoResult(action, item.get("source", ""), item.get("target") or "", "skipped", note))
             continue
-        source = Path(item["source"])
-        target = Path(item["target"])
+        source = source_path
+        target = target_path
         source_exists = source.exists()
         target_exists = target.exists()
         if source_exists and target_exists:
@@ -93,8 +135,21 @@ def undo_transaction(transaction_log: str, progress=None) -> list[UndoResult]:
         if not target_exists:
             results.append(UndoResult(action, str(source), str(target), "skipped", "现场未见隔离副本，跳过"))
             continue
-        source.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target), str(source))
+        try:
+            _undo_path(str(source), scope)
+            _undo_path(str(target), scope if action == "move" else None)
+            source.parent.mkdir(parents=True, exist_ok=True)
+            _undo_path(str(source), scope)
+            _undo_path(str(target), scope if action == "move" else None)
+            if source.exists() or source.is_symlink():
+                raise FileExistsError(f"原路径已存在: {source}")
+            if action == "move" and os.name == "nt":
+                os.rename(target, source)
+            else:
+                shutil.move(str(target), str(source))
+        except (OSError, ValueError, RuntimeError) as exc:
+            results.append(UndoResult(action, str(source), str(target), "failed", f"撤销移动失败: {exc}"))
+            continue
         if action == "quarantine":
             message = "已从隔离区放回原路径" if item.get("status") == "done" else "日志缺 done，按现场状态放回"
         else:
