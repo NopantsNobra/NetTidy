@@ -113,6 +113,7 @@ details summary{cursor:pointer;font-weight:600;padding:4px 0}
 .scrollbox:empty{display:none}
 .scrollbox th{position:sticky;top:0;z-index:2}
 .scrollbox>p{margin:12px}
+.preview-nav{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:8px 0}.preview-nav label{margin:0}.preview-nav select{flex:1 1 220px;width:auto;min-width:0;max-width:100%}.preview-nav button{margin:0}.preview-nav input{width:70px;padding:7px;border:1px solid var(--line);border-radius:6px}.preview-nav #pageCount{flex:1 1 120px}
 #preview .gblock{border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;margin:0}
 #preview .gblock:last-of-type{border-bottom:0}
 #preview .gblock h3{margin:0;padding:10px 12px;background:#f6f9f7;border-bottom:1px solid var(--line)}
@@ -180,7 +181,7 @@ pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);bor
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
     <div class="task-progress idle" id="execProgress"><div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p></div><div id="execResult" class="scrollbox"></div>
     <div class="task-progress idle" id="undoProgress"><div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">尚未撤销。</p></div>
-    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div></section>
+    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div class="preview-nav"><label for="groupSelect">资源包</label><select id="groupSelect"></select><button class="secondary" id="groupPrev">上一包</button><button class="secondary" id="groupNext">下一包</button><label for="groupJump">包序号</label><input type="number" id="groupJump" min="1" value="1"><button class="secondary" id="groupGo">跳转</button><span id="groupCount" class="muted"></span></div><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div><div class="preview-nav" id="pageNav"><button class="secondary" id="pagePrev">上一页</button><button class="secondary" id="pageNext">下一页</button><span class="muted" id="pageCount" role="status"></span><label for="pageJump">跳至</label><input type="number" id="pageJump" min="1" value="1"><button class="secondary" id="pageGo">跳转</button></div></section>
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox" tabindex="0" role="region" aria-label="空目录清单"></div></section>
 </section></div>
 <div class="panel hidden" id="panel-dup" role="tabpanel" aria-labelledby="tab-dup"><section><h2>重复文件</h2>
@@ -241,6 +242,7 @@ function setBusy(on){
   busy = on;
   document.querySelectorAll('button').forEach(b=>{ if(!b.classList.contains('dok') && !b.classList.contains('dno')) b.disabled = on; });
   if(!on){
+    if(lastPlan){refreshGroupNav();pageControls(previewTotal,previewOffset,previewLoading);}
     const btn = document.getElementById('execBtn');
     if(btn && lastPlan && !planExecuted && planMode !== execMode.value) btn.disabled = true;  // 执行方式漂移后保持禁用
   }
@@ -379,9 +381,10 @@ async function makePlanInner(stay){
   const isCopy = execMode.value === 'copy';
   if(isCopy && !cleanPath(output.value)){ say('复制方式要先填输出目录，再点试运行。',true); return; }
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
+  previewRequest++;
   const prog = trackProgress('planFill','planProg');
   try{
-    const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,progress_key:prog.key});
+    const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,view:'summary',progress_key:prog.key});
     currentPlanId = data.plan_id; lastPlan = data; planExecuted = false; planMode = isCopy ? 'copy' : 'move';
     ['execProgress','undoProgress'].forEach(id=>document.getElementById(id).classList.add('idle'));
     renderPlan(data); if(!stay){setTab('preview');}
@@ -397,10 +400,12 @@ async function makePlanInner(stay){
 }
 const makePlan = guard(makePlanInner);
 function invalidatePlan(){
+  previewRequest++; previewGroups=[]; previewGroup=-1; previewOffset=0;
   currentPlanId = null; lastPlan = null; planExecuted = false; planMode = null;
   ['summarySection','previewSection','foldersSection'].forEach(id=>document.getElementById(id).classList.add('hidden'));
 }
 function renderPlan(plan){
+  filterMode='all';
   const v = plan.display.readable;
   document.getElementById('summarySection').classList.remove('hidden');
   document.getElementById('headline').innerHTML = esc(v.headline);
@@ -410,20 +415,11 @@ function renderPlan(plan){
     ['all','全部 '+v.counts.total],
     ['changed','只看会变的 '+v.counts.changed],
     ['renamed','只看改名 '+v.counts.renamed],
-    ['same','只看原地不动 '+v.counts.in_place]
+    ['same','只看原地不动 '+(v.counts.total-v.counts.changed)]
   ].map(x=>'<button type="button" class="chip'+(x[0]===filterMode?' active':'')+'" aria-pressed="'+(x[0]===filterMode)+'" data-f="'+x[0]+'">'+esc(x[1])+'</button>').join('');
   document.querySelectorAll('#filters .chip').forEach(el=>el.addEventListener('click',()=>setFilter(el.dataset.f)));
-  // 大目录（几十万文件）不能一次渲染：每个资源包先给前若干行，余下点「显示更多」按页取。
-  let html = '';
-  v.groups.forEach((g,gi)=>{
-    html += '<section class="gblock" id="gb-'+gi+'" data-changed="'+(g.changed?1:0)+'" data-renamed="'+(g.renamed?1:0)+'" data-same="'+(g.row_total-g.changed?1:0)+'">'
-      + '<h3>'+esc(g.root_name)+' <span class="muted">（'+g.row_total+' 个文件'+(g.renamed?('，改名 '+g.renamed+' 个'):'')+'，会换位置 '+g.moved+' 个）</span></h3>'
-      + '<table><thead><tr><th style="width:26%">现在在哪</th><th style="width:26%">整理后在哪</th><th>动作</th><th>规则</th><th>为什么要这样</th><th style="width:8%">大小</th></tr></thead>'
-      + '<tbody id="tb-'+gi+'">'+g.rows.map(r=>rowHtml(g,r)).join('')+'</tbody></table>'
-      + '<p class="muted" id="more-'+gi+'">'+(g.rows.length < g.row_total ? rowMoreHint(gi,g) : '')+'</p></section>';
-  });
-  html += '<p id="previewEmpty" class="muted" style="display:none">当前筛选下，这些资源包都不受这次整理影响——切回「全部」可以看完整对照。</p>';
-  document.getElementById('preview').innerHTML = html || '<p class="muted">没有需要整理的文件。</p>';
+  initPreviewGroups();
+  document.getElementById('foldersSection').classList.add('hidden');
   if(v.folders.length){
     document.getElementById('foldersSection').classList.remove('hidden');
     document.getElementById('folders').innerHTML = '<table><thead><tr><th>资源包</th><th>会被清掉的文件夹</th><th>层级</th></tr></thead><tbody>'
@@ -441,9 +437,7 @@ function renderPlan(plan){
     ? '<table><thead><tr><th>文件</th><th>为什么跳过</th><th>代码</th><th>状态</th></tr></thead><tbody>'
       + plan.issues.map(i=>'<tr><td>'+pathCell(i.path)+'</td><td>'+esc(issueText(i.code,i.message))+'</td><td class="muted">'+esc(i.code)+'</td><td>'+esc(i.final_status)+'</td></tr>').join('')+'</tbody></table>'
     : '<p class="muted">没有异常项。</p>';
-  applyFilter();
   updateExecPanel(v);
-  document.querySelectorAll('#preview [data-more]').forEach(b=>b.addEventListener('click',()=>loadMore(Number(b.dataset.more))));
 }
 function rowHtml(g,r){
   const tag = r.renamed ? ' <span class="badge warn">改名</span>' : '';
@@ -454,25 +448,78 @@ function rowHtml(g,r){
     + '<td>'+pathCell(r.before)+depth+'</td><td>'+pathCell(r.after)+tag+'</td><td>'+esc(r.action)+'</td>'
     + '<td>'+esc(r.rules.join('；')||'—')+'</td><td>'+esc(r.why)+'</td><td>'+esc(r.size)+'</td></tr>';
 }
-function rowMoreHint(gi,g){
-  return '这里只显示前 '+g.rows.length+' 行（共 '+g.row_total+' 行）。<button class="secondary" data-more="'+gi+'">显示更多</button>';
+// 固定页大小，不累计 DOM 或历史文件行；资源包导航仅保留当前一段选项。
+const PREVIEW_PAGE = 80, GROUP_OPTIONS = 100;
+let previewGroups=[], previewGroup=-1, previewOffset=0, previewTotal=0, previewRequest=0, previewLoading=false;
+const groupSelect=document.getElementById('groupSelect');
+const groupPrev=document.getElementById('groupPrev'), groupNext=document.getElementById('groupNext');
+const groupJump=document.getElementById('groupJump'), groupGo=document.getElementById('groupGo');
+const pagePrev=document.getElementById('pagePrev'), pageNext=document.getElementById('pageNext');
+const pageJump=document.getElementById('pageJump'), pageGo=document.getElementById('pageGo');
+function groupMatches(g){
+  return filterMode==='all'||(filterMode==='changed'&&g.changed>0)
+    ||(filterMode==='renamed'&&g.renamed>0)||(filterMode==='same'&&g.row_total>g.changed);
 }
-async function loadMore(gi){
-  const g = lastPlan.display.readable.groups[gi], btn = document.querySelector('[data-more="'+gi+'"]');
-  if(btn){ btn.disabled = true; btn.textContent = '正在取…'; }
+function initPreviewGroups(){
+  previewRequest++;
+  previewGroups=lastPlan.display.readable.groups.filter(groupMatches);
+  previewGroup=previewGroups.length?0:-1;
+  refreshGroupNav();
+  return showPreviewPage(0);
+}
+function refreshGroupNav(){
+  const start=Math.max(0,Math.floor(previewGroup/GROUP_OPTIONS)*GROUP_OPTIONS);
+  groupSelect.innerHTML=previewGroups.slice(start,start+GROUP_OPTIONS).map((g,i)=>
+    '<option value="'+(start+i)+'">'+esc(g.root_name)+' · '+g.row_total+' 文件</option>').join('');
+  if(previewGroup>=0)groupSelect.value=String(previewGroup);
+  document.getElementById('groupCount').textContent=previewGroups.length?'资源包 '+(previewGroup+1)+' / '+previewGroups.length:'无匹配资源包';
+  groupJump.max=String(Math.max(1,previewGroups.length));groupJump.value=String(Math.max(1,previewGroup+1));
+  groupJump.disabled=groupGo.disabled=previewGroup<0;
+  groupSelect.disabled=previewGroup<0;
+  groupPrev.disabled=previewGroup<=0;
+  groupNext.disabled=previewGroup<0||previewGroup>=previewGroups.length-1;
+}
+function chooseGroup(n){
+  if(n<0||n>=previewGroups.length)return;
+  previewGroup=n;refreshGroupNav();return showPreviewPage(0);
+}
+function pageControls(total,offset,loading){
+  previewTotal=total;previewOffset=offset;previewLoading=loading;
+  const pages=Math.max(1,Math.ceil(total/PREVIEW_PAGE)), page=Math.floor(offset/PREVIEW_PAGE)+1;
+  pagePrev.disabled=loading||offset<=0;
+  pageNext.disabled=loading||offset+PREVIEW_PAGE>=total;
+  pageJump.disabled=pageGo.disabled=loading||total===0;
+  pageJump.max=String(pages);pageJump.value=String(page);
+  document.getElementById('pageCount').textContent=loading?'正在加载…':total?'第 '+page+' / '+pages+' 页 · '+(offset+1)+'–'+Math.min(offset+PREVIEW_PAGE,total)+' / '+total+' 文件':'没有匹配文件';
+}
+async function showPreviewPage(offset){
+  const request=++previewRequest, planId=currentPlanId, g=previewGroups[previewGroup], kind=filterMode;
+  const box=document.getElementById('preview');
+  if(!g){box.innerHTML='<p class="muted">当前筛选没有匹配文件。</p>';pageControls(0,0,false);return;}
+  pageControls(0,offset,true);
+  box.innerHTML='<p class="muted">正在加载文件明细…</p>';
   try{
-    const data = await api('/api/plan/rows',{plan_id:currentPlanId,root:g.root_path,offset:g.rows.length,limit:200});
-    document.getElementById('tb-'+gi).insertAdjacentHTML('beforeend', data.rows.map(r=>rowHtml(g,r)).join(''));
-    g.rows = g.rows.concat(data.rows);
-    document.getElementById('more-'+gi).innerHTML = g.rows.length < g.row_total ? rowMoreHint(gi,g) : '';
-    const next = document.querySelector('[data-more="'+gi+'"]');
-    if(next){ next.addEventListener('click',()=>loadMore(gi)); }
-    applyFilter();
+    const data=await api('/api/plan/rows',{plan_id:planId,root:g.root_path,offset:offset,limit:PREVIEW_PAGE,filter:kind});
+    if(request!==previewRequest||planId!==currentPlanId)return;
+    box.innerHTML='<section class="gblock"><h3>'+esc(g.root_name)+' <span class="muted">（'+g.row_total+' 个文件）</span></h3>'
+      +'<table><thead><tr><th style="width:26%">现在在哪</th><th style="width:26%">整理后在哪</th><th>动作</th><th>规则</th><th>为什么要这样</th><th style="width:8%">大小</th></tr></thead><tbody>'
+      +data.rows.map(r=>rowHtml(g,r)).join('')+'</tbody></table></section>';
+    box.scrollTop=0;pageControls(data.total,offset,false);
   }catch(e){
-    say('取更多行失败：'+e.message,true);
-    if(btn){ btn.disabled = false; btn.textContent = '显示更多'; }
+    if(request!==previewRequest||planId!==currentPlanId)return;
+    box.innerHTML='<p class="error">'+esc(e.message)+'</p>';pageControls(0,0,false);say('取文件明细失败：'+e.message,true);
   }
 }
+groupSelect.addEventListener('change',()=>chooseGroup(Number(groupSelect.value)));
+groupPrev.addEventListener('click',()=>chooseGroup(previewGroup-1));
+groupNext.addEventListener('click',()=>chooseGroup(previewGroup+1));
+function jumpGroup(){return chooseGroup(Math.min(previewGroups.length,Math.max(1,Math.floor(Number(groupJump.value)||1)))-1);}
+groupGo.addEventListener('click',jumpGroup);groupJump.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();jumpGroup();}});
+pagePrev.addEventListener('click',()=>showPreviewPage(Math.max(0,previewOffset-PREVIEW_PAGE)));
+pageNext.addEventListener('click',()=>showPreviewPage(previewOffset+PREVIEW_PAGE));
+function jumpPage(){const n=Math.min(Math.max(1,Number(pageJump.value)||1),Math.max(1,Math.ceil(previewTotal/PREVIEW_PAGE)));return showPreviewPage((Math.floor(n)-1)*PREVIEW_PAGE);}
+pageGo.addEventListener('click',jumpPage);
+pageJump.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();jumpPage();}});
 function updateExecPanel(v){
   const isCopy = execMode.value === 'copy';
   document.getElementById('execModeSummary').textContent = isCopy ? '复制到输出目录' : '原地整理 · 将修改源目录';
@@ -497,24 +544,7 @@ function updateExecPanel(v){
   }
   document.getElementById('execResult').innerHTML = '';
 }
-function setFilter(f){filterMode=f;document.querySelectorAll('#filters .chip').forEach(c=>{const on=c.dataset.f===f;c.classList.toggle('active',on);c.setAttribute('aria-pressed',String(on));});applyFilter();}
-function applyFilter(){
-  document.querySelectorAll('#preview tr[data-row]').forEach(tr=>{
-    const show = filterMode==='all'
-      || (filterMode==='changed' && tr.dataset.changed==='1')
-      || (filterMode==='renamed' && tr.dataset.renamed==='1')
-      || (filterMode==='same' && tr.dataset.changed==='0');
-    tr.style.display = show ? '' : 'none';
-  });
-  let anyVisible = false;
-  document.querySelectorAll('#preview .gblock').forEach(block=>{
-    const keepBlock = filterMode==='all' || block.dataset[filterMode]==='1';
-    block.style.display = keepBlock ? '' : 'none';
-    if(keepBlock) anyVisible = true;
-  });
-  const empty = document.getElementById('previewEmpty');
-  if(empty) empty.style.display = (filterMode!=='all' && !anyVisible) ? '' : 'none';
-}
+function setFilter(f){filterMode=f;document.querySelectorAll('#filters .chip').forEach(c=>{const on=c.dataset.f===f;c.classList.toggle('active',on);c.setAttribute('aria-pressed',String(on));});return initPreviewGroups();}
 const runDuplicate = guard(async function runDuplicate(){
   document.getElementById('dupResult').innerHTML = '<p class="muted">正在第一遍初筛并自动复核（大文件会比较久）...</p>';
   document.getElementById('dupTools').innerHTML = '';

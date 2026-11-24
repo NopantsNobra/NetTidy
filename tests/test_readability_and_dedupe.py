@@ -408,8 +408,8 @@ class BlockFilterTests(unittest.TestCase):
         self.assertIn('class="gblock"', INDEX_HTML)
         self.assertIn('data-changed="', INDEX_HTML)
         self.assertIn('data-renamed="', INDEX_HTML)
-        self.assertIn("block.dataset[filterMode]", INDEX_HTML)
-        self.assertIn("previewEmpty", INDEX_HTML)
+        self.assertIn("groups.filter(groupMatches)", INDEX_HTML)
+        self.assertIn("当前筛选没有匹配文件", INDEX_HTML)
 
 
 class ScriptHygieneTests(unittest.TestCase):
@@ -739,8 +739,8 @@ class LargePlanPagingTests(unittest.TestCase):
     def test_page_template_renders_groups_lazily(self) -> None:
         from nesttidy.ui import INDEX_HTML
 
-        self.assertIn("function loadMore(", INDEX_HTML)
-        self.assertIn("data-more=", INDEX_HTML)
-        self.assertIn("rowMoreHint(", INDEX_HTML)
-        self.assertIn("id=\"more-", INDEX_HTML.replace("'", '"'))
+        self.assertIn("function showPreviewPage(", INDEX_HTML)
+        self.assertIn('id="pageNext"', INDEX_HTML)
+        self.assertIn("pageControls(", INDEX_HTML)
+        self.assertIn('id="pageJump"', INDEX_HTML)
         self.assertIn("trackProgress('planFill'", INDEX_HTML.replace('"', "'"))

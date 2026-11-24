@@ -102,14 +102,55 @@ server.serve_forever()
   await evaluate("window.smokeProgress=trackProgress('execFill','execProg');true");
   assert.equal(await evaluate("document.getElementById('execProgress').offsetHeight > 0"),true);
   await evaluate("window.smokeProgress.stop();document.getElementById('execProgress').classList.add('idle');true");
-  assert.equal(await evaluate("document.querySelectorAll('#preview [data-row]').length")<126,true);
-  const before=await evaluate("document.querySelectorAll('#preview [data-row]').length");
-  await evaluate("loadMore(Number(document.querySelector('[data-more]').dataset.more))");
-  assert.equal(await evaluate("document.querySelectorAll('#preview [data-row]').length")>before,true);
-  await evaluate("document.querySelector('[data-f=changed]').click()");
+  await waitFor(()=>evaluate("document.querySelectorAll('#preview [data-row]').length>0"));
+  await evaluate("chooseGroup(previewGroups.findIndex(g=>g.row_total===125))");
+  assert.equal(await evaluate("document.querySelectorAll('#preview [data-row]').length"),80);
+  await evaluate("showPreviewPage(80)");
+  assert.equal(await evaluate("document.querySelectorAll('#preview [data-row]').length"),45);
+  await evaluate("showPreviewPage(0)");
+  assert.equal(await evaluate("document.querySelectorAll('#preview [data-row]').length"),80);
+  await evaluate("setFilter('changed')");
   assert.equal(await evaluate("document.querySelector('[data-f=changed]').getAttribute('aria-pressed')"),'true');
-  await evaluate("document.querySelector('[data-f=all]').click(); document.getElementById('summarySection').scrollIntoView()");
+  await evaluate("setFilter('all')");
+  await evaluate("document.getElementById('summarySection').scrollIntoView()");
   await screenshot('desktop-preview');
+  const perf = await evaluate(`(async()=>{
+    const savedPlan=lastPlan, savedId=currentPlanId, realApi=api;
+    const original=JSON.parse(JSON.stringify(lastPlan));
+    const realRows=await realApi('/api/plan/rows',{plan_id:currentPlanId,root:previewGroups[previewGroup].root_path,offset:0,limit:80});
+    const template=realRows.rows[0];
+    original.mapping_count=200000;
+    original.display.readable.groups=Array.from({length:1000},(_,i)=>({root_path:'root-'+i,root_name:'资源包 '+i,row_total:200,changed:1,renamed:0,moved:1,rows:[]}));
+    original.display.readable.counts={total:200000,changed:1000,renamed:0,in_place:199000,moved:1000,folders:0};
+    api=async (url,body)=>({root_path:body.root,offset:body.offset,total:body.filter==='changed'?1:200,
+      rows:Array.from({length:Math.min(body.limit,Math.max(0,(body.filter==='changed'?1:200)-body.offset))},(_,i)=>({...template,before:'文件 '+(body.offset+i),after:'文件 '+(body.offset+i)}))});
+    try{
+      lastPlan=original;
+      const start=performance.now();
+      renderPlan(original);
+      await showPreviewPage(0);
+      document.getElementById('preview').getBoundingClientRect();
+      const first=performance.now()-start;
+      let maxRows=0,maxNodes=0,latencies=[];
+      for(let i=0;i<25;i++){
+        const t=performance.now();
+        await chooseGroup(i*39);
+        await showPreviewPage(80);
+        document.getElementById('preview').getBoundingClientRect();
+        latencies.push(performance.now()-t);
+        maxRows=Math.max(maxRows,document.querySelectorAll('#preview [data-row]').length);
+        maxNodes=Math.max(maxNodes,document.querySelectorAll('#preview *').length);
+      }
+      await setFilter('changed');
+      const filtered=document.querySelectorAll('#preview [data-row]').length;
+      return {first_ms:first,max_rows:maxRows,max_nodes:maxNodes,group_options:groupSelect.options.length,filtered,transition_ms:latencies};
+    }finally{api=realApi;lastPlan=savedPlan;currentPlanId=savedId;renderPlan(savedPlan);await showPreviewPage(0);}
+  })()`);
+  assert.equal(perf.max_rows,80);
+  assert.equal(perf.group_options,100);
+  assert.equal(perf.filtered,1);
+  assert.ok(perf.max_nodes<1000);
+  console.log('200k simulated browser display benchmark (no disk/network): '+JSON.stringify(perf));
   await evaluate("window.uiModal=showModal({title:'确认原地整理',body:'仅验证取消操作',danger:true}); true");
   assert.equal(await evaluate("document.activeElement.classList.contains('dno')"),true);
   await screenshot('desktop-confirm');

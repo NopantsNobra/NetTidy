@@ -21,8 +21,8 @@ class WorkspaceVisualContractTests(unittest.TestCase):
 
     def test_large_preview_keeps_bounded_scroll_and_pagination(self):
         for marker in ('max-height:60vh', 'overflow:auto', '.scrollbox th{position:sticky',
-                       'min-width:800px;table-layout:fixed', '/api/plan/rows', 'data-more=',
-                       'limit:200'):
+                       'min-width:800px;table-layout:fixed', '/api/plan/rows', 'PREVIEW_PAGE = 80',
+                       'limit:PREVIEW_PAGE'):
             self.assertIn(marker, INDEX_HTML)
 
     def test_execution_choice_precedes_first_plan_and_idle_progress_is_compact(self):
@@ -35,3 +35,9 @@ class WorkspaceVisualContractTests(unittest.TestCase):
         self.assertIn('const rowsByGroup = new Map()', INDEX_HTML)
         self.assertIn('const deletableSet = new Set(g.deletable_paths || [])', INDEX_HTML)
         self.assertNotIn('data.rows.filter(r=>r.duplicate_group_id===g.duplicate_group_id)', INDEX_HTML)
+
+    def test_preview_has_bounded_pages_and_stale_request_guard(self):
+        for marker in ('GROUP_OPTIONS = 100', "view:'summary'", 'filter:kind',
+                       'request!==previewRequest', 'id="pageNext"', 'id="groupSelect"'):
+            self.assertIn(marker, INDEX_HTML)
+        self.assertNotIn('g.rows = g.rows.concat', INDEX_HTML)
