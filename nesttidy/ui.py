@@ -59,6 +59,15 @@ code{font-family:Consolas,"Courier New",monospace;font-size:12px;overflow-wrap:a
 .row>div{flex:1 1 240px;min-width:0}
 .workspace-fields>div:first-child{flex:2 1 440px}
 .workspace-fields>div:last-child{flex:1 1 240px}
+.output-fields>div:first-child{flex:0 1 240px}
+.output-fields>div:last-child{flex:1 1 440px}
+.task-progress.idle{display:none}
+#panel-preview>section>.bar{position:static}
+#previewSection{scroll-margin-top:14px}
+#previewSection>.bar{padding-top:6px}
+#modeHint{font-size:12px;margin:4px 0 8px}
+#execHint{font-size:12px;padding:6px 0}
+#previewSection>p{margin:8px 0}
 .workspace-heading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .workspace-heading h2{margin-bottom:0}
 .workspace-heading small{color:var(--mute);font-size:12px}
@@ -130,7 +139,7 @@ pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);bor
 .dialog .dactions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .dialog .dactions button{margin:0}
 @media (max-width:900px){
-  .row>div,.workspace-fields>div:first-child,.workspace-fields>div:last-child{flex:1 1 100%}
+  .row>div,.workspace-fields>div:first-child,.workspace-fields>div:last-child,.output-fields>div:first-child,.output-fields>div:last-child{flex:1 1 100%}
   .bar select{max-width:100%} .bar label{flex:1 1 100%}
   main,.masthead{padding-left:16px;padding-right:16px}
   section{padding:15px}
@@ -161,16 +170,16 @@ pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);bor
 <section aria-labelledby="workspaceTitle"><div class="workspace-heading"><h2 id="workspaceTitle">工作目录</h2><small>四个功能页共享源目录</small></div><div class="row workspace-fields"><div><label for="root">源目录</label><input type="text" id="root" placeholder="把文件夹路径粘贴到这里，例如 F:\\私人定制\\【系列作品】" autocomplete="off" spellcheck="false"><p class="roothint" id="rootHint"></p></div><div><label for="mode">整理单位（仅整理预览）</label><select id="mode"><option value="batch">批量：子文件夹各自成包</option><option value="single">单个：整个文件夹算一包</option></select></div></div>
   <p class="steps" id="steps">三步上手：<b>①</b> 粘贴或拖入源目录路径 → <b>②</b> 点「试运行」看对照表 → <b>③</b> 确认执行（原地整理可撤销，复制模式不动源目录）。</p>
   <p class="muted" id="modeHint"></p>
-  <label for="output">输出目录（复制模式使用，原地整理留空）</label><input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118" spellcheck="false"></section>
+  <div class="row output-fields"><div><label for="execMode">执行方式</label><select id="execMode"><option value="move">原地整理</option><option value="copy">复制到输出目录</option></select></div><div><label for="output">输出目录（复制模式使用）</label><input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118" spellcheck="false"></div></div></section>
 <div class="msgbar" id="msgbar" role="status" aria-live="polite"><span class="muted" id="msg">粘贴源目录路径后点「试运行」——试运行只读，不会改动磁盘上的任何东西。</span></div>
 <div class="panel" id="panel-preview" role="tabpanel" aria-labelledby="tab-preview"><section><h2>整理预览</h2>
   <div class="bar"><button onclick="makePlan()">试运行</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button><span class="sp"></span></div>
   <div class="pbar"><div class="pfill" id="planFill"></div></div><p class="muted" id="planProg">尚未试运行。扫描时显示已处理的文件数量。</p>
   <section id="summarySection" class="hidden"><div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
-  <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理</option><option value="copy">复制到输出目录</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
+  <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><span class="muted" id="execModeSummary"></span><button id="execBtn" onclick="executePlan()">确认执行</button></div>
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
-    <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult" class="scrollbox"></div>
-    <div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">撤销事务日志时会在这里显示阶段与进度。</p>
+    <div class="task-progress idle" id="execProgress"><div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p></div><div id="execResult" class="scrollbox"></div>
+    <div class="task-progress idle" id="undoProgress"><div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">尚未撤销。</p></div>
     <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div></section>
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox" tabindex="0" role="region" aria-label="空目录清单"></div></section>
 </section></div>
@@ -269,6 +278,8 @@ function renderProgress(d, fill, text){
 }
 function trackProgress(fillId, textId){
   const key = 'p' + Math.random().toString(36).slice(2), fill = document.getElementById(fillId), text = document.getElementById(textId);
+  const region = fill.closest('.task-progress');
+  if(region) region.classList.remove('idle');
   fill.classList.remove('failed','indeterminate'); fill.style.width = '0';
   let transportFailed = false;
   const tick = () => fetch('/api/progress?key=' + key).then(r => r.json()).then(d => {
@@ -371,7 +382,9 @@ async function makePlanInner(stay){
   const prog = trackProgress('planFill','planProg');
   try{
     const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,progress_key:prog.key});
-    currentPlanId = data.plan_id; lastPlan = data; planExecuted = false; planMode = isCopy ? 'copy' : 'move'; renderPlan(data); if(!stay){setTab('preview');}
+    currentPlanId = data.plan_id; lastPlan = data; planExecuted = false; planMode = isCopy ? 'copy' : 'move';
+    ['execProgress','undoProgress'].forEach(id=>document.getElementById(id).classList.add('idle'));
+    renderPlan(data); if(!stay){setTab('preview');}
     document.getElementById('steps').classList.add('hidden');
     say('计划已生成：文件 '+data.mapping_count+' 个，操作 '+data.operation_count+' 个，异常 '+(data.issue_total||0)+' 个。磁盘上还没有任何改动。');
   }catch(e){
@@ -461,7 +474,8 @@ async function loadMore(gi){
   }
 }
 function updateExecPanel(v){
-  const isCopy = (execMode.value === 'copy') || !!(v && v.output_root);
+  const isCopy = execMode.value === 'copy';
+  document.getElementById('execModeSummary').textContent = isCopy ? '复制到输出目录' : '原地整理 · 将修改源目录';
   const c = (v && v.counts) || {};
   const hintEl = document.getElementById('execHint'), btn = document.getElementById('execBtn');
   const modeDrifted = !!lastPlan && (planMode !== execMode.value);
@@ -522,6 +536,11 @@ function renderDup(data){
   html += dupTruncNote(data.rows.length, data.row_total, '重复明细');
   document.getElementById('dupTools').innerHTML = '<button class="ghost" onclick="checkAll(true)">全选可删副本</button><button class="ghost" onclick="checkAll(false)">取消全选</button><button class="danger" onclick="deleteSelected()">删除所选副本</button>';
   const groups = data.groups || [];
+  const rowsByGroup = new Map();
+  for(const row of data.rows){
+    if(!rowsByGroup.has(row.duplicate_group_id)) rowsByGroup.set(row.duplicate_group_id, []);
+    rowsByGroup.get(row.duplicate_group_id).push(row);
+  }
   if(!groups.length) html += '<p class="muted">没有发现重复文件。</p>';
   groups.forEach(g=>{
     const deletable = g.deletable_paths.length;
@@ -531,11 +550,12 @@ function renderDup(data){
     html += dupTruncNote(g.deletable_paths.length, g.deletable_total, '可删副本');
     html += '<table><thead><tr><th style="width:34px">删</th><th>文件</th><th>相对资源包</th><th>大小</th></tr></thead><tbody>';
     const rootPath = data.selected_root || '';
-    const rows = data.rows.filter(r=>r.duplicate_group_id===g.duplicate_group_id);
+    const rows = rowsByGroup.get(g.duplicate_group_id) || [];
+    const deletableSet = new Set(g.deletable_paths || []);
     rows.forEach(r=>{
       const rel = rootPath && String(r.path).startsWith(rootPath) ? String(r.path).slice(rootPath.length).replace(/^[\\\\/]+/,'') : r.path;
       const isKeep = r.suggested_keep;
-      const canDel = (g.deletable_paths||[]).indexOf(r.path) >= 0;
+      const canDel = deletableSet.has(r.path);
       const box = canDel
         ? '<input type="checkbox" class="delbox" data-path="'+esc(r.path)+'" data-keep="'+esc(g.keep_path)+'" data-hash="'+esc(g.verified_hash)+'" data-bytes="'+r.size+'">'
         : (isKeep ? '<span class="badge ok">保留</span>' : '<span class="muted">—</span>');
