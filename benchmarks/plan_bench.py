@@ -23,6 +23,7 @@ from nesttidy import planner, executor
 from nesttidy.recovery import undo_transaction
 from nesttidy.reports import readable_group_rows
 from nesttidy.web import PlanRegistry, _plan_payload
+from nesttidy import web
 
 
 def working_set_bytes():
@@ -156,6 +157,34 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
     }
 
 
+def progress_overhead(samples: int = 200000):
+    from datetime import UTC, datetime
+    import threading
+    lock = threading.Lock()
+    legacy = {}
+    def old(done, total, label):
+        with lock:
+            legacy.update({"phase": "扫描", "status": "running", "done": done, "total": total,
+                           "label": label, "note": "", "updated_at": datetime.now(UTC).isoformat()})
+    start = time.perf_counter()
+    for n in range(samples):
+        old(n, 0, "file")
+    old_seconds = time.perf_counter() - start
+    key, report = web._track({"progress_key": "benchmark-progress"}, "扫描")
+    try:
+        start = time.perf_counter()
+        for n in range(samples):
+            report(n, 0, "file")
+        web._finish_progress(key, True)
+        new_seconds = time.perf_counter() - start
+        if web._progress_slot(key)["done"] != samples - 1:
+            raise RuntimeError("throttled progress lost final count")
+    finally:
+        with web._PROGRESS_LOCK:
+            web.PROGRESS.pop(key, None)
+    return {"callbacks": samples, "legacy_seconds": old_seconds, "throttled_seconds": new_seconds}
+
+
 def run_execution_fixture(count: int, parent: Path | None, repeat: int):
     """Only generated files are ever mutated; every round has a fresh fixture."""
     results = []
@@ -221,7 +250,8 @@ def main(argv=None):
                   "runs": results, "median_plan_seconds": statistics.median(r["plan_seconds"] for r in results),
                   "median_first_screen_seconds": statistics.median(r["first_screen_seconds"] for r in results),
                   "semantic_stable": len({r["semantic_digest"] for r in results}) == 1,
-                  "snapshot_stable": len({r["snapshot_digest"] for r in results}) == 1}
+                  "snapshot_stable": len({r["snapshot_digest"] for r in results}) == 1,
+                  "progress_overhead": progress_overhead()}
         if args.profile:
             profiler = cProfile.Profile()
             result["profile_run"] = profiler.runcall(run_once, root, args.mode, args.pages, True)

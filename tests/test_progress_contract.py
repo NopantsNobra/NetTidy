@@ -106,6 +106,51 @@ class ProgressSlotTests(unittest.TestCase):
         self.assertEqual(set(web._progress_slot("never-used")), FIELDS)
 
 
+    def test_throttled_unknown_total_flushes_exact_last_frame(self) -> None:
+        from unittest.mock import patch
+        with patch("nesttidy.web.monotonic", return_value=10.0):
+            key, report = web._track({"progress_key": "throttle-unknown"}, "扫描")
+            for n in range(1, 101):
+                report(n, 0, str(n))
+            self.assertEqual(web._progress_slot(key)["done"], 0)
+            web._finish_progress(key, False, "中断")
+            final = web._progress_slot(key)
+            self.assertEqual((final["done"], final["label"], final["status"]), (100, "100", "failed"))
+            self.assertEqual(set(final), FIELDS)
+            report(101, 0)
+            self.assertEqual(web._progress_slot(key), final)
+
+    def test_stage_total_and_completion_publish_without_wait(self) -> None:
+        from unittest.mock import patch
+        with patch("nesttidy.web.monotonic", return_value=10.0):
+            key, report = web._track({"progress_key": "throttle-stages"}, "扫描")
+            report(9, 0)
+            report(1, 0, step="计划")
+            self.assertEqual((web._progress_slot(key)["phase"], web._progress_slot(key)["done"]), ("计划", 1))
+            report(1, 10, step="计划")
+            self.assertEqual(web._progress_slot(key)["total"], 10)
+            report(10, 10, step="计划")
+            self.assertEqual(web._progress_slot(key)["done"], 10)
+            self.assertEqual(web._progress_slot(key)["status"], "running")
+            web._finish_progress(key, True)
+            self.assertEqual(web._progress_slot(key)["status"], "ok")
+
+    def test_interval_and_keys_are_independent(self) -> None:
+        from unittest.mock import patch
+        with patch("nesttidy.web.monotonic", return_value=10.0) as clock:
+            a, first = web._track({"progress_key": "throttle-a"})
+            b, second = web._track({"progress_key": "throttle-b"})
+            first(3, 0)
+            second(7, 0)
+            clock.return_value = 10.2
+            first(4, 0)
+            self.assertEqual(web._progress_slot(a)["done"], 4)
+            self.assertEqual(web._progress_slot(b)["done"], 0)
+            web._finish_progress(b, True)
+            self.assertEqual(web._progress_slot(b)["done"], 7)
+            web._finish_progress(a, True)
+
+
 class ProgressConcurrencyTests(unittest.TestCase):
     """多标签页同时写/读/淘汰进度槽：不许 KeyError / RuntimeError，有界不泄漏。"""
 
