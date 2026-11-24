@@ -266,6 +266,17 @@ def missing_dirs(path: Path) -> list[Path]:
     return list(reversed(missing))
 
 
+def _move_without_replace(source: Path, target: Path) -> None:
+    """Windows 同卷原生 rename：目标存在就失败，不做 shutil.move 的复制/删除回退。"""
+    if os.name == "nt":
+        os.rename(source, target)
+        return
+    # 非交付平台仅供开发测试；仍保留显式冲突检查，不宣称竞态安全。
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"目标已存在，禁止覆盖: {target}")
+    shutil.move(str(source), str(target))
+
+
 def do_move(op: Operation, tx_path: Path | None, root: Path | None = None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
@@ -282,7 +293,7 @@ def do_move(op: Operation, tx_path: Path | None, root: Path | None = None) -> No
         ensure_move_path(target, root)
         precheck(op)
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
-    shutil.move(str(source), str(target))
+    _move_without_replace(source, target)
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
 
 

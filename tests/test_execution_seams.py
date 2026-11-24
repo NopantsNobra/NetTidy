@@ -335,7 +335,7 @@ class ExecutorFailureTests(unittest.TestCase):
             self.assertGreater(len(plan.operations), 0, "夹具未生成任何操作，用例会假绿")
             move_op = next(op for op in plan.operations if op.op_type == "move")
 
-            with mock.patch("nesttidy.executor.shutil.move", side_effect=PermissionError("拒绝访问")):
+            with mock.patch("nesttidy.executor._move_without_replace", side_effect=PermissionError("拒绝访问")):
                 result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
 
             self.assertGreaterEqual(result.failed, 1)
@@ -560,6 +560,44 @@ class MoveResourceBoundaryTests(unittest.TestCase):
                 else:
                     empty.unlink()
 
+
+
+
+    @unittest.skipUnless(os.name == "nt", "Windows 原生 rename 的不覆盖语义")
+    def test_windows_move_refuses_target_created_after_precheck(self) -> None:
+        """在 started 日志写完后制造真实竞争，不让 shutil.move 覆盖或移入新目录。"""
+        for kind in ("file", "directory"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp).resolve()
+                root = base / "资源包"
+                source = root / "壳" / "文件.txt"
+                touch(source, "payload")
+                plan = build_plan(str(root), "single")
+                op = next(op for op in plan.operations if op.op_type == "move")
+                target = Path(op.target_path)
+                original_write = executor.write_tx
+
+                def write_then_race(tx_path, row):
+                    original_write(tx_path, row)
+                    if row.get("action") == "move" and row.get("status") == "started":
+                        if kind == "file":
+                            target.write_text("竞争文件", encoding="utf-8")
+                        else:
+                            target.mkdir()
+                            (target / "竞争者.txt").write_text("保留", encoding="utf-8")
+
+                with mock.patch("nesttidy.executor.write_tx", side_effect=write_then_race):
+                    result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+                self.assertEqual(op.status, "failed")
+                self.assertGreaterEqual(result.failed, 1)
+                self.assertEqual(source.read_text(encoding="utf-8"), "payload")
+                if kind == "file":
+                    self.assertEqual(target.read_text(encoding="utf-8"), "竞争文件")
+                else:
+                    self.assertTrue(target.is_dir())
+                    self.assertEqual((target / "竞争者.txt").read_text(encoding="utf-8"), "保留")
+                    self.assertFalse((target / source.name).exists())
 
 
 if __name__ == "__main__":
