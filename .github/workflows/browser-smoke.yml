@@ -1,0 +1,30 @@
+name: Browser workspace smoke
+on:
+  push:
+    branches: ['main', 'fix/ui-**']
+    paths: ['nesttidy/ui.py', 'benchmarks/ui_smoke.mjs', '.github/workflows/browser-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test the local Web workspace in Chromium
+        run: node benchmarks/ui_smoke.mjs ui-screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-screenshots
+          path: ui-screenshots/
+          if-no-files-found: ignore
