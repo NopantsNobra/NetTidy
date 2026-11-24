@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +80,90 @@ class UndoRmdirPolicyTests(unittest.TestCase):
 
             self.assertEqual(rows[0].status, "skipped")
             self.assertIn("彻底删除无法撤销", rows[0].message)
+
+
+
+class UndoBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _link(link: Path, target: Path) -> bool:
+        if os.name == "nt":
+            return subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True).returncode == 0
+        try:
+            link.symlink_to(target, target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+    def test_undo_refuses_redirected_original_parent_and_retains_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            root.mkdir()
+            outside = base / "外部"
+            outside.mkdir()
+            link = root / "原位置"
+            if not self._link(link, outside):
+                self.skipTest("本机无法创建目录链接")
+            try:
+                source = link / "文件.txt"
+                target = root / "文件.txt"
+                touch(target, "payload")
+                tx = base / "tx.jsonl"
+                tx.write_text(json.dumps({"action": "move", "source": str(source), "target": str(target), "resource_root": str(root), "status": "done"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+                rows = undo_transaction(str(tx))
+
+                self.assertEqual(rows[0].status, "failed")
+                self.assertTrue(tx.exists(), "失败后不得退役日志")
+                self.assertEqual(target.read_text(encoding="utf-8"), "payload")
+                self.assertFalse((outside / "文件.txt").exists())
+            finally:
+                if os.name == "nt":
+                    link.rmdir()
+                else:
+                    link.unlink()
+
+    def test_undo_refuses_recorded_root_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            root.mkdir()
+            target = root / "文件.txt"
+            touch(target, "payload")
+            outside = base / "外部" / "文件.txt"
+            tx = base / "tx.jsonl"
+            tx.write_text(json.dumps({"action": "move", "source": str(outside), "target": str(target), "resource_root": str(root), "status": "done"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(rows[0].status, "failed")
+            self.assertTrue(tx.exists())
+            self.assertFalse(outside.parent.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "payload")
+
+    def test_undo_refuses_legacy_rmdir_through_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            outside = base / "外部"
+            outside.mkdir()
+            link = base / "链接"
+            if not self._link(link, outside):
+                self.skipTest("本机无法创建目录链接")
+            try:
+                tx = base / "tx.jsonl"
+                tx.write_text(json.dumps({"action": "rmdir", "source": str(link / "空壳"), "status": "done"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+                rows = undo_transaction(str(tx))
+
+                self.assertEqual(rows[0].status, "failed")
+                self.assertTrue(tx.exists())
+                self.assertFalse((outside / "空壳").exists())
+            finally:
+                if os.name == "nt":
+                    link.rmdir()
+                else:
+                    link.unlink()
+
 
 
 if __name__ == "__main__":

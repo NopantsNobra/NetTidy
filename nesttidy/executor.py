@@ -295,6 +295,7 @@ def _move_without_replace(source: Path, target: Path) -> None:
 
 def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan: OperationPlan | None = None) -> None:
     assert op.source_path and op.target_path
+    scope = {"resource_root": str(root)} if root is not None else {}
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
@@ -305,21 +306,22 @@ def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan:
                 verify_root_identity(plan, root)
             ensure_move_path(created, root)
         created.mkdir()
-        write_tx(tx_path, {"action": "mkdir", "source": str(created), "status": "done"})
+        write_tx(tx_path, {**scope, "action": "mkdir", "source": str(created), "status": "done"})
     if root is not None:
         if plan is not None:
             verify_root_identity(plan, root)
         ensure_move_path(source, root)
         ensure_move_path(target, root)
         precheck(op)
-    write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
+    write_tx(tx_path, {**scope, "action": "move", "source": str(source), "target": str(target), "status": "started"})
     _move_without_replace(source, target)
-    write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
+    write_tx(tx_path, {**scope, "action": "move", "source": str(source), "target": str(target), "status": "done"})
 
 
 def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None, plan: OperationPlan | None = None) -> bool:
     """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
     assert op.source_path
+    scope = {"resource_root": str(root)} if root is not None else {}
     path = Path(op.source_path)
     if not path.exists():
         return True
@@ -329,9 +331,9 @@ def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None, plan
         if plan is not None:
             verify_root_identity(plan, root)
         ensure_move_path(path, root)
-    write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
+    write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "started"})
     path.rmdir()
-    write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
+    write_tx(tx_path, {**scope, "action": "rmdir", "source": str(path), "status": "done"})
     return True
 
 
@@ -400,12 +402,12 @@ def sweep_empty_dirs(
             try:
                 if any(path.iterdir()):
                     continue
-                write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
+                write_tx(tx_path, {"resource_root": str(base), "action": "rmdir", "source": str(path), "status": "started"})
                 path.rmdir()
             except OSError as exc:
                 report(path, "R6_ACCESS_ERROR", str(exc))
                 continue
-            write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
+            write_tx(tx_path, {"resource_root": str(base), "action": "rmdir", "source": str(path), "status": "done"})
             removed += 1
     return removed
 
