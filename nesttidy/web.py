@@ -104,15 +104,23 @@ class ExecutionGuard:
         self._lock = threading.Lock()
         self._inflight: dict[str, str] = {}
         self._locked_plans: set[str] = set()
+        self._active_scopes: dict[object, tuple[tuple[Path, ...], bool]] = {}
         self._max_keys = max(1, max_keys)
 
-    def acquire(self, plan_id: str, progress_key: str) -> str | None:
+    def acquire(self, plan_id: str, progress_key: str, scopes: tuple[Path, ...] = (),
+                exclusive: bool = False, token: object | None = None) -> str | None:
         """返回 None 表示获得执行权；否则返回应展示给用户的冲突原因。"""
         with self._lock:
             if progress_key and progress_key in self._inflight:
                 return "任务进行中或已提交，请勿重复操作"
             if plan_id and plan_id in self._locked_plans:
                 return "该计划正在执行中，请勿重复提交"
+            if scopes or exclusive:
+                if token is None:
+                    raise ValueError("目录锁需要请求标识")
+                for active, active_exclusive in self._active_scopes.values():
+                    if exclusive or active_exclusive or any(a.is_relative_to(b) or b.is_relative_to(a) for a in scopes for b in active):
+                        return "所选目录与正在执行的任务重叠，请等待该任务结束"
             if progress_key:
                 # 只淘汰已完成的幂等键；仍在运行的键被淘汰会让同一 key 再次进入，
                 # 形成“看起来幂等、实际并发”的漏洞。全部在跑时宁可拒绝新任务。
@@ -124,10 +132,14 @@ class ExecutionGuard:
                 self._inflight[progress_key] = "running"
             if plan_id:
                 self._locked_plans.add(plan_id)
+            if scopes or exclusive:
+                self._active_scopes[token] = (scopes, exclusive)
         return None
 
-    def release(self, plan_id: str, progress_key: str, ok: bool = True) -> None:
+    def release(self, plan_id: str, progress_key: str, ok: bool = True, token: object | None = None) -> None:
         with self._lock:
+            if token is not None:
+                self._active_scopes.pop(token, None)
             if plan_id:
                 self._locked_plans.discard(plan_id)
             if progress_key and progress_key in self._inflight:
@@ -374,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
     _GUARD_PATHS = frozenset(
         {
             "/api/report", "/api/duplicates/delete", "/api/undo-delete", "/api/undo",
-            "/api/execute-copy", "/api/execute-move",
+            "/api/execute-copy", "/api/execute-move", "/api/repair",
         }
     )
     _PLAN_LOCK_PATHS = frozenset({"/api/execute-copy", "/api/execute-move"})
@@ -392,6 +404,7 @@ class Handler(BaseHTTPRequestHandler):
         key = ""
         guard_plan = ""
         guard_key = ""
+        guard_token = object()
         acquired = False
         claimed = False
         execution_ok = False
@@ -401,9 +414,22 @@ class Handler(BaseHTTPRequestHandler):
             # 在 _track 之前 acquire：被拒请求不得重置正在执行请求的进度槽。
             if self.path in self._GUARD_PATHS:
                 guard_key = str(body.get("progress_key") or "")
+                scopes: tuple[Path, ...] = ()
+                exclusive = False
                 if self.path in self._PLAN_LOCK_PATHS:
                     guard_plan = _plan_id(body)
-                conflict = EXECUTION_GUARD.acquire(guard_plan, guard_key)
+                    guarded_plan = PLANS.get(guard_plan)
+                    paths = [guarded_plan.selected_root]
+                    if guarded_plan.output_root:
+                        paths.append(guarded_plan.output_root)
+                    scopes = tuple(dict.fromkeys(Path(path).resolve() for path in paths))
+                elif self.path in {"/api/duplicates/delete", "/api/repair"}:
+                    scopes = (Path(_existing_root(body)).resolve(),)
+                elif self.path in {"/api/undo", "/api/undo-delete"}:
+                    # 日志可能来自旧版本，且可能跨资源根；不能从任意一条日志安全推断作用域。
+                    # A3 固化事务级元数据前，撤销保守独占写任务，不影响普通只读请求。
+                    exclusive = True
+                conflict = EXECUTION_GUARD.acquire(guard_plan, guard_key, scopes, exclusive, guard_token)
                 if conflict:
                     self.send_json({"error": conflict}, status=409)
                     return
@@ -521,7 +547,7 @@ class Handler(BaseHTTPRequestHandler):
             if claimed:
                 PLANS.finish(guard_plan, execution_ok and not failed)
             if acquired:
-                EXECUTION_GUARD.release(guard_plan, guard_key, ok=not failed)
+                EXECUTION_GUARD.release(guard_plan, guard_key, ok=not failed, token=guard_token)
 
     def validate_root_payload(self, body: dict) -> dict:
         """输入框失焦预检：只判存在性，不扫描；空路径返回 ok=false 而非异常。"""
