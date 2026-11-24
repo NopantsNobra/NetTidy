@@ -26,7 +26,7 @@ def touch(path: Path, text: str = "x") -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def legacy_build_tree(root: Path, should_skip, progress=None):
+def legacy_build_tree(root: Path, should_skip, progress=None, **_ignored):
     """改造前实现：Path.iterdir + 逐项 is_dir/stat。仅用于对照，不要在生产线复活。"""
     issues: list[dict] = []
 

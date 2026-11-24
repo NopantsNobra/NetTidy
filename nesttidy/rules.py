@@ -99,7 +99,7 @@ def clean_name(name: str) -> tuple[str, list[str]]:
     return cleaned, traces
 
 
-def build_tree(root: Path, should_skip, progress=None) -> tuple[VDir, list[dict]]:
+def build_tree(root: Path, should_skip, progress=None, *, should_skip_entry=None) -> tuple[VDir, list[dict]]:
     issues: list[dict] = []
     seen = 0
 
@@ -125,7 +125,7 @@ def build_tree(root: Path, should_skip, progress=None) -> tuple[VDir, list[dict]
             return node
         for entry in children:
             child = Path(entry.path)
-            skip = should_skip(child)
+            skip = should_skip_entry(entry, child) if should_skip_entry is not None else should_skip(child)
             if skip:
                 issues.append({"path": str(child), "code": skip, "message": "已按扫描排除规则跳过"})
                 continue
