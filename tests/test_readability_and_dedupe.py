@@ -408,8 +408,8 @@ class BlockFilterTests(unittest.TestCase):
         self.assertIn('class="gblock"', INDEX_HTML)
         self.assertIn('data-changed="', INDEX_HTML)
         self.assertIn('data-renamed="', INDEX_HTML)
-        self.assertIn("block.dataset[filterMode]", INDEX_HTML)
-        self.assertIn("previewEmpty", INDEX_HTML)
+        self.assertIn("groups.filter(groupMatches)", INDEX_HTML)
+        self.assertIn("当前筛选没有匹配文件", INDEX_HTML)
 
 
 class ScriptHygieneTests(unittest.TestCase):
@@ -742,5 +742,5 @@ class LargePlanPagingTests(unittest.TestCase):
         self.assertIn("function showPreviewPage(", INDEX_HTML)
         self.assertIn('id="pageNext"', INDEX_HTML)
         self.assertIn("pageControls(", INDEX_HTML)
-        self.assertIn("id=\"more-", INDEX_HTML.replace("'", '"'))
+        self.assertIn('id="pageJump"', INDEX_HTML)
         self.assertIn("trackProgress('planFill'", INDEX_HTML.replace('"', "'"))
