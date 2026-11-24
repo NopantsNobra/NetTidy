@@ -37,3 +37,14 @@ class BenchmarkSmokeTests(unittest.TestCase):
                 main(["--fixture-files", "12", "--fixture-parent", tmp, "--shape", "conflict", "--repeat", "1"])
             self.assertEqual(json.loads(output.getvalue())["runs"][0]["mapping_count"], 12)
             self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_execution_fixture_round_trips_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                main(["--fixture-files", "6", "--fixture-parent", tmp, "--repeat", "1",
+                      "--execute-fixture-files", "4"])
+            data = json.loads(output.getvalue())
+            self.assertTrue(data["execution_fixture"]["runs"][0]["restored"])
+            self.assertGreater(data["execution_fixture"]["median_files_per_second"], 0)
+            self.assertEqual(list(Path(tmp).iterdir()), [])

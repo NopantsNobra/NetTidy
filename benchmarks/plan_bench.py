@@ -19,7 +19,8 @@ import time
 import tracemalloc
 from unittest.mock import patch
 
-from nesttidy import planner
+from nesttidy import planner, executor
+from nesttidy.recovery import undo_transaction
 from nesttidy.reports import readable_group_rows
 from nesttidy.web import _plan_payload
 
@@ -142,6 +143,33 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
     }
 
 
+def run_execution_fixture(count: int, parent: Path | None, repeat: int):
+    """Only generated files are ever mutated; every round has a fresh fixture."""
+    results = []
+    for _ in range(repeat):
+        with tempfile.TemporaryDirectory(prefix="nesttidy-exec-bench-", dir=parent) as tmp:
+            base = Path(tmp).resolve()
+            root = base / "input"
+            make_fixture(root, count, "move")
+            before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            plan = planner.build_plan(str(root), mode="batch")
+            journal = base / "move.jsonl"
+            start = time.perf_counter()
+            outcome = executor.execute_plan(plan, "move", confirm_move=True, transaction_log=str(journal))
+            elapsed = time.perf_counter() - start
+            start = time.perf_counter()
+            restored = undo_transaction(str(journal)) if journal.exists() else []
+            undo_seconds = time.perf_counter() - start
+            after = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            if outcome.failed or any(row.status == "failed" for row in restored) or before != after:
+                raise RuntimeError("隔离执行基准未能完整恢复")
+            results.append({"files": count, "move_seconds": elapsed, "undo_seconds": undo_seconds,
+                            "completed": outcome.completed, "skipped": outcome.skipped,
+                            "swept": outcome.swept, "files_per_second": count / max(elapsed, 1e-9),
+                            "restored": True})
+    return {"runs": results, "median_files_per_second": statistics.median(r["files_per_second"] for r in results)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -154,10 +182,13 @@ def main(argv=None):
     parser.add_argument("--pages", type=int, default=10)
     parser.add_argument("--disk", default="unspecified", help="Operator-supplied SSD/HDD/filesystem note")
     parser.add_argument("--profile", action="store_true", help="Extra instrumented cProfile run (not included in median)")
+    parser.add_argument("--execute-fixture-files", type=int, default=0, help="Opt-in extra isolated move/undo benchmark; never mutates --root")
     parser.add_argument("--memory", action="store_true", help="Extra tracemalloc run (not included in median)")
     args = parser.parse_args(argv)
     if args.repeat < 1 or args.pages < 0 or (args.fixture_files is not None and args.fixture_files < 1):
         parser.error("repeat/fixture-files must be positive; pages nonnegative")
+    if args.execute_fixture_files < 0:
+        parser.error("--execute-fixture-files must be nonnegative")
     with ExitStack() as stack:
         if args.root is not None:
             if args.fixture_parent is not None:
@@ -190,6 +221,8 @@ def main(argv=None):
                 result["tracemalloc_bytes"] = {"current": current, "peak": peak}
             finally:
                 tracemalloc.stop()
+        if args.execute_fixture_files:
+            result["execution_fixture"] = run_execution_fixture(args.execute_fixture_files, args.fixture_parent, args.repeat)
         print(json.dumps(result, ensure_ascii=True, indent=2))
 
 

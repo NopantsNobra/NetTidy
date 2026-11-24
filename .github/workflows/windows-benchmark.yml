@@ -1,0 +1,35 @@
+name: Windows performance benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "Synthetic file count"
+        type: choice
+        options: ['20000', '200000', '500000', '1000000']
+        default: '200000'
+  push:
+    branches: ['benchmark/**']
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+      BENCH_FILES: ${{ inputs.files || '20000' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run synthetic Windows baseline
+        shell: pwsh
+        run: |
+          python -m benchmarks.plan_bench --fixture-files $env:BENCH_FILES --shape multi --repeat 3 --pages 20 --disk "GitHub-hosted Windows (virtual storage, not physical SSD/HDD)" --profile --memory --execute-fixture-files 1000 > benchmark.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-benchmark
+          path: benchmark.json
