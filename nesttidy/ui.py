@@ -11,91 +11,188 @@ INDEX_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>理巢 NestTidy</title>
 <style>
-:root{color-scheme:light;font-family:"Segoe UI","Microsoft YaHei",sans-serif;--line:#d8ddda;--ink:#242424;--mute:#687370;--ok:#196f5f;--bad:#9b1c1c;--warn:#8a5a00}
-*{box-sizing:border-box} body{margin:0;background:#f7f7f5;color:var(--ink);font-size:14px;line-height:1.55}
-header{padding:18px 26px;background:#174b4f;color:#fff} header h1{margin:0;font-size:20px} header p{margin:4px 0 0;opacity:.85;font-size:13px}
-main{max-width:1240px;margin:0 auto;padding:18px 22px 60px}
-section{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0} h2{font-size:16px;margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #eef1ef} h3{font-size:14px;margin:14px 0 6px}
-label{display:block;font-weight:600;margin:10px 0 5px;font-size:13px} input[type=text],select{width:100%;padding:9px 11px;border:1px solid #b8bfbd;border-radius:6px;background:#fff;font-size:13px}
-button{padding:9px 13px;border:0;border-radius:6px;background:var(--ok);color:#fff;cursor:pointer;font-size:13px;margin:4px 6px 4px 0} button:disabled{background:#c3cbc8;cursor:not-allowed;opacity:.6}
-button.secondary{background:#495057} button.danger{background:#a4161a} button.ghost{background:#e9efec;color:#174b4f}
-table{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px} th,td{padding:7px 8px;border-bottom:1px solid #eef1ef;text-align:left;vertical-align:top;overflow-wrap:anywhere} th{background:#f2f6f4;font-weight:600;white-space:nowrap}
-code{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:break-all}
-.row{display:flex;gap:12px;flex-wrap:wrap} .row>div{flex:1 1 240px}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px} .card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fbfcfb}
-.card b{display:block;font-size:20px;line-height:1.2} .card span{color:var(--mute);font-size:12px}
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --canvas: #f3f5f4; --surface: #fff; --soft: #f6f8f7;
+  --line: #dce4e0; --ink: #172d29; --mute: #586b65;
+  --ok: #166451; --ok-hover: #104d3e; --accent: #e7f2ed;
+  --bad: #a32932; --warn: #86540a; --focus: #177c72;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font-size:14px;line-height:1.6}
+header{background:var(--surface);border-bottom:1px solid var(--line)}
+.masthead{max-width:1520px;margin:auto;padding:20px 28px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.brand-mark{width:42px;height:42px;flex:none;background:#173f36;border-radius:13px;display:grid;place-items:center}
+.brand-mark svg{width:28px;height:28px}
+header h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.02em;line-height:1.2}
+header h1 span{font-size:14px;color:var(--mute);font-weight:500;margin-left:8px;letter-spacing:0}
+header p{margin:5px 0 0;color:var(--mute);font-size:12.5px}
+.local-state{white-space:nowrap;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mute)}
+.local-state::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ok)}
+main{max-width:1520px;margin:0 auto;padding:20px 28px 64px;min-width:0}
+section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;min-width:0}
+h2{font-size:18px;margin:0 0 12px;letter-spacing:.01em}
+h3{font-size:14px;margin:16px 0 8px;font-weight:650}
+p{overflow-wrap:anywhere}
+label{display:block;font-weight:600;margin:9px 0 5px;font-size:13px}
+input[type=text],select{width:100%;min-width:0;padding:10px 12px;border:1px solid #bfcfc8;border-radius:7px;background:#fff;color:var(--ink);font:inherit;font-size:13px}
+input[type=text]::placeholder{color:#71837c}
+input[type=checkbox]{accent-color:var(--ok);width:16px;height:16px;vertical-align:middle}
+button{font:inherit;font-size:13px;font-weight:600;line-height:1.4;padding:9px 14px;min-height:36px;border:1px solid transparent;border-radius:7px;background:var(--ok);color:#fff;cursor:pointer;margin:4px 6px 4px 0;transition:background .12s,border-color .12s}
+button:hover:not(:disabled){background:var(--ok-hover)}
+button.secondary,button.ghost{background:var(--surface);border-color:#cbd8d2;color:var(--ink)}
+button.secondary:hover:not(:disabled),button.ghost:hover:not(:disabled){background:var(--accent);border-color:#9ebcb0}
+button.danger{background:var(--bad);color:#fff}
+button.danger:hover:not(:disabled){background:#81212a}
+button:disabled{background:#e3e9e6;color:#64746d;border-color:#d6dfda;cursor:not-allowed;opacity:1}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+table{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);font-size:12.5px}
+th,td{padding:9px 10px;border-bottom:1px solid #e9eeeb;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+th{background:#edf2ef;font-weight:650;color:#415750;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafcfb}
+tbody tr:hover{background:#f0f7f3}
+td:last-child,th:last-child{font-variant-numeric:tabular-nums}
+code{font-family:Consolas,"Courier New",monospace;font-size:12px;overflow-wrap:anywhere;word-break:normal}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.row>div{flex:1 1 240px;min-width:0}
+.workspace-fields>div:first-child{flex:2 1 440px}
+.workspace-fields>div:last-child{flex:1 1 240px}
+.workspace-heading{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.workspace-heading h2{margin-bottom:0}
+.workspace-heading small{color:var(--mute);font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(144px,1fr));gap:10px;margin-top:12px}
+.card{border:1px solid var(--line);border-radius:9px;padding:13px 14px;background:var(--soft);min-width:0}
+.card b{display:block;font-size:25px;line-height:1.2;letter-spacing:-.025em;font-variant-numeric:tabular-nums;color:var(--ink);margin:4px 0 5px}
+.card .metric-label{color:#40594f;font-size:12px;font-weight:600}
+.card span{display:block;color:var(--mute);font-size:11.5px;margin-top:3px}
 .muted{color:var(--mute)} .error{color:var(--bad)} .ok{color:var(--ok)} .depth{color:var(--mute);font-size:11px}
-.headline{background:#eef7f3;border-left:4px solid var(--ok);padding:10px 12px;border-radius:6px;font-size:14px}
-.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid;margin-right:6px}
-.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1} .badge.warn{color:#7a5200;border-color:#e2c98a;background:#fdf6e3} .badge.bad{color:#9b1c1c;border-color:#e3a8a8;background:#fdeeee}
-.chips{margin:8px 0} .chip{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:14px;margin:0 6px 6px 0;cursor:pointer;font-size:12px;background:#fff} .chip.active{background:var(--ok);color:#fff;border-color:var(--ok)}
-.group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px} .group h4{margin:0 0 6px;font-size:13px} details summary{cursor:pointer;font-weight:600;padding:4px 0}
+.headline{background:var(--accent);border:1px solid #cddfd5;padding:12px 14px;border-radius:8px;font-size:14px;color:#254d3e}
+.badge{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11px;border:1px solid;margin-right:5px;white-space:nowrap}
+.badge.ok{color:#0d5e4d;border-color:#9ecdc0;background:#eaf6f1}
+.badge.warn{color:#79510a;border-color:#e2c98a;background:#fdf6e3}
+.badge.bad{color:#9b1c1c;border-color:#e3a8a8;background:#fdeeee}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
+button.chip{padding:5px 9px;min-height:30px;margin:0;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#fff;color:var(--mute)}
+button.chip:hover:not(:disabled){background:var(--accent);color:var(--ink)}
+button.chip.active{background:var(--accent);color:var(--ok);border-color:#9abdae}
+.group{border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:10px 12px}
+.group h4{margin:0 0 6px;font-size:13px}
+details summary{cursor:pointer;font-weight:600;padding:4px 0}
 .filtered{display:none} .hidden{display:none!important}
-.pbar{height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;margin:8px 0} .pfill{height:100%;width:0;background:var(--ok);transition:width .2s} .pfill.failed{background:var(--bad)}
-@keyframes pfslide{from{transform:translateX(-100%)}to{transform:translateX(380%)}} .pfill.indeterminate{width:26%!important;animation:pfslide 1.4s linear infinite}
-.bar{position:sticky;top:0;z-index:6;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fff;padding:8px 0;margin:-4px 0 6px;border-bottom:1px solid #eef1ef} .bar .sp{flex:1 1 40px} .bar label{margin:0;display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px} .bar select{width:auto;max-width:300px} .bar button{margin:0}
-.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 16px} .tab{padding:12px 14px;border:1px solid var(--line);border-radius:10px;cursor:pointer;background:#fff;text-align:center}
-.tab:focus-visible{outline:2px solid var(--ok);outline-offset:2px} .tab b{display:block;font-size:15px} .tab small{color:var(--mute);font-size:12px}
-.tab.active{background:var(--ok);border-color:var(--ok);color:#fff} .tab.active small{color:#d8ece5} .panel>section>section{background:none;border:0;padding:0;margin:12px 0} .scrollbox{max-height:58vh;overflow:auto;border:1px solid #eef1ef;border-radius:8px;padding:2px 6px} .scrollbox th{position:sticky;top:0;z-index:2}
-pre{white-space:pre-wrap;background:#f5f7f6;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px;margin:6px 0}
-.msgbar{background:#fff;border:1px solid var(--line);border-left:4px solid var(--mute);border-radius:8px;padding:9px 14px;margin:0 0 14px;font-size:13px}
+.pbar{height:6px;background:#e5ece8;border-radius:6px;overflow:hidden;margin:10px 0 6px}
+.pfill{height:100%;width:0;background:var(--ok);transition:width .2s}
+.pfill.failed{background:var(--bad)}
+@keyframes pfslide{from{transform:translateX(-100%)}to{transform:translateX(380%)}}
+.pfill.indeterminate{width:26%!important;animation:pfslide 1.4s linear infinite}
+.bar{position:sticky;top:0;z-index:6;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--surface);padding:10px 0;margin:0 0 6px;border-bottom:1px solid var(--line)}
+.bar .sp{flex:1 1 24px}
+.bar label{margin:0;display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
+.bar select{width:auto;max-width:300px;padding:7px 9px}
+.bar button{margin:0}
+.tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:0 0 16px;padding:5px;border:1px solid var(--line);border-radius:11px;background:#e9eeeb}
+.tab{position:relative;padding:10px 14px;border:1px solid transparent;border-radius:7px;cursor:pointer;background:transparent;text-align:left;min-width:0}
+.tab:hover{background:#f5f8f6}
+.tab b{display:block;font-size:14px}
+.tab small{display:block;color:var(--mute);font-size:11.5px;margin-top:2px}
+.tab.active{background:var(--surface);border-color:#c7d8cf;color:var(--ok);box-shadow:0 1px 3px #173f3610}
+.tab.active::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:2px;background:var(--ok);border-radius:2px}
+.tab.active small{color:var(--mute)}
+.panel>section>section{background:none;border:0;padding:0;margin:16px 0}
+.scrollbox{max-height:60vh;overflow:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:8px;padding:0;min-width:0;scrollbar-color:#afc1b8 #f2f5f3}
+.scrollbox:empty{display:none}
+.scrollbox th{position:sticky;top:0;z-index:2}
+.scrollbox>p{margin:12px}
+#preview .gblock{border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;margin:0}
+#preview .gblock:last-of-type{border-bottom:0}
+#preview .gblock h3{margin:0;padding:10px 12px;background:#f6f9f7;border-bottom:1px solid var(--line)}
+#preview .gblock h3 .muted{font-weight:400;font-size:12px}
+#preview table{min-width:800px;table-layout:fixed}
+#preview .gblock>p{margin:8px 12px}
+#preview tr[data-changed="1"] td:nth-child(2){background:#edf7f0}
+#preview tr[data-row]{cursor:default}
+#dupResult .group{margin:10px}
+#dupResult table{min-width:540px}
+pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:9px;font-size:12px;margin:6px 0}
+.msgbar{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:8px;padding:10px 14px;margin:0 0 14px;font-size:13px}
 .msgbar.error{border-left-color:var(--bad);background:#fdf3f3;color:var(--bad)}
-.steps{color:var(--mute);font-size:12.5px;margin:8px 0 0} .steps b{color:var(--ink)}
-.roothint{font-size:12px;margin:4px 0 0;min-height:18px} .roothint.ok{color:var(--ok)} .roothint.err{color:var(--bad)}
-.overlay{position:fixed;inset:0;background:rgba(20,30,28,.45);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
-.dialog{background:#fff;border-radius:12px;max-width:520px;width:100%;padding:20px 22px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
-.dialog h3{margin:0 0 10px;font-size:16px} .dialog .dbody{font-size:13.5px;margin:0 0 16px} .dialog .dbody p{margin:6px 0} .dialog .dactions{text-align:right}
+.msgbar.error #msg{color:var(--bad)}
+.steps{color:var(--mute);font-size:12.5px;margin:9px 0 0}
+.steps b{color:var(--ink)}
+.roothint{font-size:12px;margin:4px 0 0;min-height:18px}
+.roothint.ok{color:var(--ok)} .roothint.err{color:var(--bad)}
+.overlay{position:fixed;inset:0;background:#172d2980;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
+.dialog{background:var(--surface);border:1px solid var(--line);border-radius:13px;max-width:540px;width:100%;max-height:90vh;overflow:auto;padding:22px;box-shadow:0 18px 52px #142c2930}
+.dialog h3{margin:0 0 12px;font-size:18px}
+.dialog .dbody{font-size:14px;margin:0 0 18px}
+.dialog .dbody p{margin:8px 0}
+.dialog .dactions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.dialog .dactions button{margin:0}
 @media (max-width:900px){
-  .row>div{flex:1 1 100%}
-  .bar select{max-width:100%} .bar label{flex:1 1 100%} .bar{padding:8px 0 2px}
-  main{padding:14px 14px 50px} section{padding:14px}
+  .row>div,.workspace-fields>div:first-child,.workspace-fields>div:last-child{flex:1 1 100%}
+  .bar select{max-width:100%} .bar label{flex:1 1 100%}
+  main,.masthead{padding-left:16px;padding-right:16px}
+  section{padding:15px}
 }
 @media (max-width:700px){
-  .tabs{grid-template-columns:repeat(2,1fr)} .tab{padding:10px 8px} .tab small{display:none}
-  .card b{font-size:17px} .scrollbox{max-height:46vh}
+  .masthead{padding-top:14px;padding-bottom:14px;gap:10px}
+  .local-state{display:none}
+  header p{font-size:11px}
+  .tabs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tab{padding:9px 10px}
+  .tab small{font-size:11px}
+  .card b{font-size:21px}
+  .scrollbox{max-height:48vh}
+  .bar{position:static}
+  .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #dupTools{display:flex;flex-wrap:wrap;gap:5px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition:none!important}
+  .pfill.indeterminate{width:40%!important;animation:none}
 }
 </style>
 </head>
 <body>
-<header><h1>理巢 NestTidy</h1>
-  <p>本地离线资源目录剥壳整理 · 试运行只读：先看清「哪些文件会换位置」，再决定复制、移动，或者删掉多余副本；每一步都要你亲手点按钮</p></header>
+<header><div class="masthead"><div class="brand"><div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="#edf7f1" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h9l3 3h12v12H4z"/><path d="M7 7h8l3 3h7M9 18h14M9 22h9"/></svg></div><div><h1>理巢 <span>NestTidy</span></h1><p>本地文件整理工作台 · 先预览，再执行</p></div></div><span class="local-state">本地离线 · 试运行只读</span></div></header>
 <main>
-<div class="tabs" id="tabs"><span class="tab active" role="tab" tabindex="0" aria-selected="true" data-tab="preview"><b>整理预览</b><small>看清会怎么变，再执行</small></span><span class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="dup"><b>重复文件</b><small>两阶段比对，点选删除</small></span><span class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="repair"><b>权限修复</b><small>只读 / 隐藏 / 网络标记</small></span><span class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="diag"><b>诊断信息</b><small>异常项、规则、历史</small></span></div>
-<section><div class="row"><div><label>源目录（四个页签共用这个路径）</label><input type="text" id="root" placeholder="把文件夹路径粘贴到这里，例如 F:\\私人定制\\【系列作品】" autocomplete="off" spellcheck="false"><p class="roothint" id="rootHint"></p></div><div><label>整理单位（只影响「整理预览」）</label><select id="mode"><option value="batch">批量：子文件夹各自成包</option><option value="single">单个：整个文件夹算一包</option></select></div></div>
+<div class="tabs" id="tabs"><span class="tab active" role="tab" tabindex="0" aria-selected="true" id="tab-preview" aria-controls="panel-preview" data-tab="preview"><b>整理预览</b><small>看清会怎么变，再执行</small></span><span class="tab" role="tab" tabindex="-1" aria-selected="false" id="tab-dup" aria-controls="panel-dup" data-tab="dup"><b>重复文件</b><small>两阶段比对，点选删除</small></span><span class="tab" role="tab" tabindex="-1" aria-selected="false" id="tab-repair" aria-controls="panel-repair" data-tab="repair"><b>权限修复</b><small>只读 / 隐藏 / 网络标记</small></span><span class="tab" role="tab" tabindex="-1" aria-selected="false" id="tab-diag" aria-controls="panel-diag" data-tab="diag"><b>诊断信息</b><small>异常项、规则、历史</small></span></div>
+<section aria-labelledby="workspaceTitle"><div class="workspace-heading"><h2 id="workspaceTitle">工作目录</h2><small>四个功能页共享源目录</small></div><div class="row workspace-fields"><div><label for="root">源目录</label><input type="text" id="root" placeholder="把文件夹路径粘贴到这里，例如 F:\\私人定制\\【系列作品】" autocomplete="off" spellcheck="false"><p class="roothint" id="rootHint"></p></div><div><label for="mode">整理单位（仅整理预览）</label><select id="mode"><option value="batch">批量：子文件夹各自成包</option><option value="single">单个：整个文件夹算一包</option></select></div></div>
   <p class="steps" id="steps">三步上手：<b>①</b> 粘贴或拖入源目录路径 → <b>②</b> 点「试运行」看对照表 → <b>③</b> 确认执行（原地整理可撤销，复制模式不动源目录）。</p>
   <p class="muted" id="modeHint"></p>
-  <label>输出目录（只在「复制到输出目录」时用；原地整理留空）</label><input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118" spellcheck="false"></section>
-<div class="msgbar" id="msgbar"><span class="muted" id="msg">粘贴源目录路径后点「试运行」——试运行只读，不会改动磁盘上的任何东西。</span></div>
-<div class="panel" id="panel-preview"><section><h2>整理预览</h2>
-  <div class="bar"><button onclick="makePlan()">试运行：看看会变成什么样</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button><span class="sp"></span></div>
-  <div class="pbar"><div class="pfill" id="planFill"></div></div><p class="muted" id="planProg">还没试运行。大目录扫描要几分钟，这里会显示已经扫过多少个文件。</p>
+  <label for="output">输出目录（复制模式使用，原地整理留空）</label><input type="text" id="output" placeholder="例如 F:\\私人定制\\理巢输出_20261118" spellcheck="false"></section>
+<div class="msgbar" id="msgbar" role="status" aria-live="polite"><span class="muted" id="msg">粘贴源目录路径后点「试运行」——试运行只读，不会改动磁盘上的任何东西。</span></div>
+<div class="panel" id="panel-preview" role="tabpanel" aria-labelledby="tab-preview"><section><h2>整理预览</h2>
+  <div class="bar"><button onclick="makePlan()">试运行</button><button class="secondary" onclick="exportReport()">导出报告文件</button><button class="secondary" onclick="makeManual()">生成 PDF 手册</button><span class="sp"></span></div>
+  <div class="pbar"><div class="pfill" id="planFill"></div></div><p class="muted" id="planProg">尚未试运行。扫描时显示已处理的文件数量。</p>
   <section id="summarySection" class="hidden"><div class="headline" id="headline"></div><div class="cards" id="cards"></div></section>
   <section id="previewSection" class="hidden"><div class="bar"><span class="chips" id="filters" style="margin:0"></span><span class="sp"></span><label>执行方式<select id="execMode"><option value="move">原地整理</option><option value="copy">复制到输出目录</option></select></label><button id="execBtn" onclick="executePlan()">确认执行</button></div>
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
     <div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p><div id="execResult" class="scrollbox"></div>
     <div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">撤销事务日志时会在这里显示阶段与进度。</p>
-    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox"></div></section>
-  <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox"></div></section>
+    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div></section>
+  <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox" tabindex="0" role="region" aria-label="空目录清单"></div></section>
 </section></div>
-<div class="panel hidden" id="panel-dup"><section><h2>重复文件</h2>
+<div class="panel hidden" id="panel-dup" role="tabpanel" aria-labelledby="tab-dup"><section><h2>重复文件</h2>
   <div class="bar"><label>初筛口径<select id="dupLevel"><option value="standard">标准（推荐）</option><option value="fast">快速</option><option value="deep">深度</option></select></label><label>删除方式<select id="delMode"><option value="recycle">移入回收站</option><option value="purge">彻底删除</option></select></label><button onclick="runDuplicate()">诊断重复文件</button><span class="sp"></span><span id="dupTools"></span><span class="muted" id="dupSelNote"></span></div>
   <p class="muted" id="dupLevelHint"></p>
   <p class="muted">第一遍按你选的级别初筛，程序按大小和全文件内容的 SHA-256 内部签名复核（深度模式直接复用签名）：各真实重复子组独立显示，单例标成「复核剔除」，永不进入可删名单。逐个勾选要删的副本（每组至少留一份），再点删除——程序不会自己删任何东西。<b>右键任意一行</b>可在资源管理器里定位到那个文件。</p>
   <div class="pbar"><div class="pfill" id="dupFill"></div></div><p class="muted" id="dupProg">尚未诊断。</p>
-  <div id="dupResult" class="scrollbox"><p class="muted">尚未诊断。</p></div></section></div>
-<div class="panel hidden" id="panel-repair"><section><h2>权限修复</h2>
+  <div id="dupResult" class="scrollbox" tabindex="0" role="region" aria-label="重复文件清单"><p class="muted">尚未诊断。</p></div></section></div>
+<div class="panel hidden" id="panel-repair" role="tabpanel" aria-labelledby="tab-repair"><section><h2>权限修复</h2>
   <div class="bar"><label><input type="checkbox" id="fixReadonly" style="width:auto"> 清除只读属性</label><label><input type="checkbox" id="fixHidden" style="width:auto"> 清除普通隐藏属性</label><label><input type="checkbox" id="fixZone" style="width:auto"> 清除 Zone.Identifier（来自网络的标记）</label><button onclick="runRepair()">执行所选权限修复</button></div>
   <div class="pbar"><div class="pfill" id="repairFill"></div></div><p class="muted" id="repairProg">尚未开始。</p>
   <div id="repairResult" class="scrollbox"></div></section></div>
-<div class="panel hidden" id="panel-diag"><section><h2>诊断信息</h2>
+<div class="panel hidden" id="panel-diag" role="tabpanel" aria-labelledby="tab-diag"><section><h2>诊断信息</h2>
   <div class="bar"><button onclick="makePlan(true)">重新扫描异常项</button><button class="secondary" onclick="loadHistory()">刷新历史</button><span class="sp"></span><span class="muted">只读信息；整理前不用看，异常项来自最近一次扫描。</span></div>
-  <h3>异常项（这些文件不会被动）</h3><div id="issues" class="scrollbox"></div>
+  <h3>异常项（这些文件不会被动）</h3><div id="issues" class="scrollbox" tabindex="0" role="region" aria-label="异常项清单"></div>
   <h3>规则分类计数与边界检查</h3><div id="ruleStats" class="scrollbox"></div><div id="boundaryNote"></div>
   <h3>历史</h3><div id="history" class="scrollbox"></div>
   <h3>健康检查</h3><div id="health"></div></section></div>
 </main>
-<div class="overlay hidden" id="overlay"><div class="dialog" role="dialog" aria-modal="true" id="dialogBox">
-  <h3 class="dtitle"></h3><div class="dbody"></div>
+<div class="overlay hidden" id="overlay"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogBody" id="dialogBox">
+  <h3 class="dtitle" id="dialogTitle"></h3><div class="dbody" id="dialogBody"></div>
   <div class="dactions"><button class="secondary dno">取消</button><button class="dok">确认</button></div>
 </div></div>
 <script>
@@ -199,13 +296,25 @@ function showModal(opts){
     const okBtn = box.querySelector('.dok'), noBtn = box.querySelector('.dno');
     okBtn.textContent = opts.confirmText || '确认';
     okBtn.className = 'dok' + (opts.danger ? ' danger' : '');
-    function close(v){ ov.classList.add('hidden'); okBtn.onclick=noBtn.onclick=ov.onclick=null; document.removeEventListener('keydown', onKey); resolve(v); }
-    function onKey(e){ if(e.key==='Escape') close(false); }
+    const previousFocus = document.activeElement;
+    function close(v){
+      ov.classList.add('hidden'); okBtn.onclick=noBtn.onclick=ov.onclick=null;
+      document.removeEventListener('keydown', onKey);
+      if(previousFocus && !previousFocus.disabled) previousFocus.focus();
+      resolve(v);
+    }
+    function onKey(e){
+      if(e.key==='Escape'){ e.preventDefault(); close(false); }
+      if(e.key==='Tab'){
+        e.preventDefault();
+        if(document.activeElement===okBtn) noBtn.focus(); else okBtn.focus();
+      }
+    }
     okBtn.onclick = ()=>close(true); noBtn.onclick = ()=>close(false);
     ov.onclick = e=>{ if(e.target===ov) close(false); };
     document.addEventListener('keydown', onKey);
     ov.classList.remove('hidden');
-    okBtn.focus();
+    if(opts.danger) noBtn.focus(); else okBtn.focus();
   });
 }
 async function validateRoot(){
@@ -282,14 +391,14 @@ function renderPlan(plan){
   const v = plan.display.readable;
   document.getElementById('summarySection').classList.remove('hidden');
   document.getElementById('headline').innerHTML = esc(v.headline);
-  document.getElementById('cards').innerHTML = v.cards.map(c=>'<div class="card"><b>'+esc(c.value)+'</b>'+esc(c.label)+'<span>'+esc(c.hint)+'</span></div>').join('');
+  document.getElementById('cards').innerHTML = v.cards.map(c=>'<div class="card"><div class="metric-label">'+esc(c.label)+'</div><b>'+esc(c.value)+'</b><span>'+esc(c.hint)+'</span></div>').join('');
   document.getElementById('previewSection').classList.remove('hidden');
   document.getElementById('filters').innerHTML = [
     ['all','全部 '+v.counts.total],
     ['changed','只看会变的 '+v.counts.changed],
     ['renamed','只看改名 '+v.counts.renamed],
     ['same','只看原地不动 '+v.counts.in_place]
-  ].map(x=>'<span class="chip'+(x[0]===filterMode?' active':'')+'" data-f="'+x[0]+'">'+esc(x[1])+'</span>').join('');
+  ].map(x=>'<button type="button" class="chip'+(x[0]===filterMode?' active':'')+'" aria-pressed="'+(x[0]===filterMode)+'" data-f="'+x[0]+'">'+esc(x[1])+'</button>').join('');
   document.querySelectorAll('#filters .chip').forEach(el=>el.addEventListener('click',()=>setFilter(el.dataset.f)));
   // 大目录（几十万文件）不能一次渲染：每个资源包先给前若干行，余下点「显示更多」按页取。
   let html = '';
@@ -356,6 +465,7 @@ function updateExecPanel(v){
   const c = (v && v.counts) || {};
   const hintEl = document.getElementById('execHint'), btn = document.getElementById('execBtn');
   const modeDrifted = !!lastPlan && (planMode !== execMode.value);
+  btn.classList.toggle('danger', !isCopy && !planExecuted);
   if(planExecuted){
     hintEl.textContent = '这份计划已经执行过了。要看现在的真实状态，请点「重新试运行」生成新计划（旧计划已失效，不会被再次执行）。';
     btn.textContent = '重新试运行（生成新计划）';
@@ -373,7 +483,7 @@ function updateExecPanel(v){
   }
   document.getElementById('execResult').innerHTML = '';
 }
-function setFilter(f){filterMode=f;document.querySelectorAll('#filters .chip').forEach(c=>c.classList.toggle('active',c.dataset.f===f));applyFilter();}
+function setFilter(f){filterMode=f;document.querySelectorAll('#filters .chip').forEach(c=>{const on=c.dataset.f===f;c.classList.toggle('active',on);c.setAttribute('aria-pressed',String(on));});applyFilter();}
 function applyFilter(){
   document.querySelectorAll('#preview tr[data-row]').forEach(tr=>{
     const show = filterMode==='all'
@@ -535,8 +645,8 @@ async function executeMove(){
   const c = ((lastPlan && lastPlan.display && lastPlan.display.readable) || {}).counts || {};
   const ok = await showModal({
     title:'确认原地整理？',
-    body:'<p>会换位置的文件：<b>'+ (c.moved||0) +' 个</b><br>会清掉的空文件夹：<b>'+ (c.folders||0) +' 个</b></p><p>源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原（已被清掉的空壳文件夹不重建）。</p>',
-    confirmText:'确认原地整理'
+    body:'<p>会换位置的文件：<b>'+ (c.moved||0) +' 个</b><br>会清掉的空文件夹：<b>'+ (c.folders||0) +' 个</b></p><p>源目录会被修改，执行后会生成事务日志，可以用「撤销这次整理」还原（事务记录中可确认的空目录也会尝试重建）。</p>',
+    confirmText:'确认原地整理', danger:true
   });
   if(!ok) return;
   const prog = trackProgress('execFill', 'execProg');
@@ -612,6 +722,7 @@ function setTab(name){
     const on = t.dataset.tab===name;
     t.classList.toggle('active',on);
     t.setAttribute('aria-selected', on?'true':'false');
+    t.tabIndex = on ? 0 : -1;
   });
   document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!=='panel-'+name));
 }
