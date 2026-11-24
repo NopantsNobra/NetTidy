@@ -14,12 +14,13 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from nesttidy.repair import repair_permissions
+from nesttidy.repair import repair_permissions, run_attrib, run_icacls
 
 
 def touch(path: Path, text: str = "x") -> None:
@@ -62,6 +63,51 @@ class GrantAndInheritanceWiringTests(unittest.TestCase):
         for row in grant_rows:
             self.assertEqual(row.status, "failed")
             self.assertIn("无法确定当前登录用户名", row.message)
+
+
+class SubprocessOutputDecodingTests(unittest.TestCase):
+    """attrib / icacls 的输出只用于判定成功与否，不解析内容——解码必须容错。
+
+    历史缺陷：两处 `subprocess.run(text=True)` 未指定 encoding/errors。中文 Windows 上
+    Python 3.13 默认按 UTF-8 解码，而 attrib / icacls 输出 GBK 中文路径，读取线程抛
+    UnicodeDecodeError。异常不传播到主流程（check=True 只看 returncode），产品行为正常，
+    但每次权限修复都在 stderr 刷一堆栈。用接线断言锁住契约，跨平台可跑。
+    """
+
+    def test_run_attrib_uses_error_tolerant_decoding(self) -> None:
+        with mock.patch("nesttidy.repair.subprocess.run") as run:
+            run_attrib(Path("whatever.txt"), "+R", "clear_readonly")
+        kwargs = run.call_args.kwargs
+        self.assertTrue(kwargs.get("text"), "输出按文本读取的契约不能丢")
+        self.assertEqual(kwargs.get("errors"), "replace", "text=True 必须配容错解码，否则 GBK 输出抛异常")
+
+    def test_run_icacls_uses_error_tolerant_decoding(self) -> None:
+        with mock.patch("nesttidy.repair.subprocess.run") as run:
+            run_icacls(Path("whatever.txt"), "/grant", "*S-1-1-0:F", action="grant_current_user")
+        kwargs = run.call_args.kwargs
+        self.assertTrue(kwargs.get("text"), "输出按文本读取的契约不能丢")
+        self.assertEqual(kwargs.get("errors"), "replace", "text=True 必须配容错解码，否则 GBK 输出抛异常")
+
+    @unittest.skipUnless(os.name == "nt", "icacls 中文 GBK 输出是 Windows 专有场景")
+    def test_chinese_path_gbk_output_produces_no_thread_exception(self) -> None:
+        """行为级：真实 icacls 对中文路径输出 GBK，解码不得在读取线程抛异常。"""
+        caught: list[BaseException] = []
+        original_hook = threading.excepthook
+
+        def capture(args: threading.ExceptHookArgs) -> None:
+            caught.append(args.exc_value)
+            original_hook(args)
+
+        threading.excepthook = capture
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "中文文件.txt"
+                touch(path)
+                result = run_icacls(path, "/grant", "*S-1-1-0:F", action="grant_current_user")
+        finally:
+            threading.excepthook = original_hook
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(caught, [], f"子进程输出解码异常仍在读取线程抛出：{caught}")
 
 
 class SymlinkBoundaryTests(unittest.TestCase):

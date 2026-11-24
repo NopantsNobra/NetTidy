@@ -99,7 +99,14 @@ def clear_readonly_attr(path: Path) -> RepairResult:
 
 def run_attrib(path: Path, flag: str, action: str) -> RepairResult:
     try:
-        subprocess.run(["attrib", flag, str(path)], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["attrib", flag, str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         return RepairResult(str(path), action, "ok", "attrib 执行成功")
     except Exception as exc:
         return RepairResult(str(path), action, "failed", str(exc))
@@ -118,7 +125,14 @@ def remove_ads(path: Path, stream_name: str) -> RepairResult:
 
 def run_icacls(path: Path, *args: str, action: str) -> RepairResult:
     try:
-        subprocess.run(["icacls", str(path), *args], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["icacls", str(path), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         return RepairResult(str(path), action, "ok", "icacls 执行成功")
     except Exception as exc:
         return RepairResult(str(path), action, "failed", str(exc))

@@ -7,6 +7,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 APP_NAME = "理巢 NestTidy"
+# 1.8.1：修复权限修复工具链噪音——run_attrib / run_icacls 的 subprocess.run(text=True) 补
+# encoding="utf-8", errors="replace"。中文 Windows 上 attrib/icacls 输出 GBK，UTF-8 模式解码
+# 抛 UnicodeDecodeError（读取线程，不传播主流程、产品行为不变，但 stderr 刷堆栈）。规则语义与
+# RULE_VERSION 未变；新增 tests/test_repair_seams.py 3 例（接线 + 中文路径行为级 + 变异已验证）。
 # 1.8.0：新增 R6「移动完成后变空的目录一并删除」（move 收尾清扫资源根以外的空目录，
 # 逐条写 rmdir 事务行）；撤销侧 rmdir 行由「不重放」改为「重建目录」，删掉的空目录可原样还原。
 # 1.7.1：审计修复 10 项——repair 的 icacls 传参 / 账户名取不到 / 不跟随链接，/api/repair 补齐两项转发，
@@ -14,7 +18,7 @@ APP_NAME = "理巢 NestTidy"
 # 非 Windows 回收站逐行失败，复制方式未填输出目录前置提示，--host 非本机一行报错。规则语义与 RULE_VERSION 未变。
 # 1.7.0：P0-2 scandir 元数据复用 / P0-3 单次规划内 resolve 记忆化（规则语义与计划输出不变）；
 # P1-2 服务端 per-plan 执行锁 + progress_key 幂等（同 plan 并发执行 409）。历次版本明细见 ROADMAP。
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 # v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
 # undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
