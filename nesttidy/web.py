@@ -5,6 +5,7 @@ import json
 import socket
 import subprocess
 import threading
+from time import monotonic
 from datetime import UTC, datetime
 from email.message import Message
 from http import HTTPStatus
@@ -212,7 +213,7 @@ def _progress_slot(key: str) -> dict:
         state = PROGRESS.get(key)
         if state is None:
             return {"phase": "", "status": "running", "done": 0, "total": 0, "label": "", "note": "", "updated_at": ""}
-        return dict(state)
+        return {k: v for k, v in state.items() if k != '_reporter'}
 
 
 def _trim_progress_locked() -> None:
@@ -223,37 +224,70 @@ def _trim_progress_locked() -> None:
         PROGRESS.pop(finished if finished is not None else next(iter(PROGRESS)))
 
 
+PROGRESS_INTERVAL = 0.15
+
+
+class _ProgressReporter:
+    """每个同步任务独占一个 reporter；高频回调仅更新最新帧，发布才拿全局锁。"""
+
+    def __init__(self, key: str, phase: str) -> None:
+        self.key, self.phase = key, phase
+        self.latest = (0, 0, "正在准备", phase)
+        self.published = self.latest
+        self.last_publish = monotonic()
+        self.finished = False
+
+    def frame(self) -> dict:
+        done, total, label, phase = self.latest
+        return {"phase": phase, "status": "running", "done": done, "total": total,
+                "label": label, "note": "", "updated_at": datetime.now(UTC).isoformat(),
+                "_reporter": self}
+
+    def __call__(self, done: int, total: int, label: str = "", step: str | None = None) -> None:
+        if self.finished:
+            return
+        phase = step or self.phase
+        previous = self.latest
+        self.latest = (done, total, label, phase)
+        now = monotonic()
+        if (now - self.last_publish < PROGRESS_INTERVAL
+                and phase == previous[3] and total == previous[1] and done >= previous[0]
+                and not (total > 0 and done >= total)):
+            return
+        with _PROGRESS_LOCK:
+            state = PROGRESS.get(self.key)
+            if state is None or state.get("_reporter") is not self:
+                return  # 已淘汰或同 key 已换任务；不得写回旧帧。
+            PROGRESS[self.key] = self.frame()
+            self.published = self.latest
+            self.last_publish = now
+
+
 def _track(body: dict, phase: str = "执行"):
-    """progress_key → 旁路进度槽；回调保持 done/total/label 三参，第四参用于覆盖阶段。"""
+    """进度旁路：阶段/总量切换与完成立即发布，稳定阶段每 150 ms 合并一次。"""
     key = str(body.get("progress_key") or "")
     if not key:
         return "", None
-
-    def report(done: int, total: int, label: str = "", step: str | None = None) -> None:
-        with _PROGRESS_LOCK:
-            # 只在插入新键时淘汰：已在跑的槽每报一次进度就淘汰一个历史槽会让别的页签丢结果。
-            if key not in PROGRESS:
-                _trim_progress_locked()
-            PROGRESS[key] = {
-                "phase": step or phase,
-                "status": "running",
-                "done": done,
-                "total": total,
-                "label": label,
-                "note": "",
-                "updated_at": datetime.now(UTC).isoformat(),
-            }
-
-    report(0, 0, "正在准备", phase)
-    return key, report
+    reporter = _ProgressReporter(key, phase)
+    with _PROGRESS_LOCK:
+        if key not in PROGRESS:
+            _trim_progress_locked()
+        PROGRESS[key] = reporter.frame()
+    return key, reporter
 
 
 def _finish_progress(key: str, ok: bool, note: str = "") -> None:
-    """终态由后端写：失败保留最后一帧，只在 status/note/updated_at 上收口。"""
+    """终态采用最后一次真实回调，即使最后一帧尚未达到发布间隔。"""
     with _PROGRESS_LOCK:
         state = PROGRESS.get(key)
         if state is None:
             return
+        reporter = state.get("_reporter")
+        if reporter is not None:
+            reporter.finished = True
+            state = reporter.frame()
+            state.pop("_reporter", None)
+            PROGRESS[key] = state
         state["status"] = "ok" if ok else "failed"
         state["note"] = "" if ok else str(note)
         state["updated_at"] = datetime.now(UTC).isoformat()
