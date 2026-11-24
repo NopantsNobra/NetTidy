@@ -41,3 +41,10 @@ class WorkspaceVisualContractTests(unittest.TestCase):
                        'request!==previewRequest', 'id="pageNext"', 'id="groupSelect"'):
             self.assertIn(marker, INDEX_HTML)
         self.assertNotIn('g.rows = g.rows.concat', INDEX_HTML)
+
+    def test_duplicate_page_bounds_and_selection_independence(self):
+        for marker in ('const DUP_PAGE=80', 'rows.slice(dupOffset,dupOffset+DUP_PAGE)',
+                       'dupState.selected', 'view:\'bounded\'', '源目录已改变，请重新诊断重复文件',
+                       '删除本组已选副本', '全选已加载可删副本'):
+            self.assertIn(marker, INDEX_HTML)
+        self.assertNotIn("scope.querySelectorAll('.delbox:checked')", INDEX_HTML)

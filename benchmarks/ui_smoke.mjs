@@ -159,6 +159,32 @@ server.serve_forever()
   await evaluate("document.getElementById('tab-preview').focus();document.getElementById('tab-preview').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));true");
   assert.equal(await evaluate("document.querySelector('[aria-selected=true]').id"),'tab-dup');
   assert.equal(await evaluate("document.getElementById('tab-dup').tabIndex"),0);
+  const dupPerf=await evaluate(`(()=>{
+    const data={selected_root:root.value,phase1_label:'standard',stats:{groups:2,recheck_rejected_groups:0,deletable_files:398,reclaimable_bytes:398},row_total:200000,group_total:100000,groups:[],rows:[]};
+    for(let g=0;g<2;g++){
+      const id='group'+g, keep='file'+g+'-0', paths=[];
+      for(let n=0;n<200;n++){
+        const path='file'+g+'-'+n;
+        data.rows.push({path,duplicate_group_id:id,size:1,suggested_keep:n===0});
+        if(n)paths.push(path);
+      }
+      data.groups.push({duplicate_group_id:id,verified:true,verified_hash:'hash',keep_path:keep,deletable_paths:paths,deletable_total:199,file_count:200,size:1,note:''});
+    }
+    renderDup(data);
+    const choose=()=>{const box=document.querySelector('#dupResult .delbox');box.checked=true;box.dispatchEvent(new Event('change',{bubbles:true}));};
+    choose();chooseDupPage(80);choose();
+    const pageRows=document.querySelectorAll('#dupResult tbody tr').length;
+    chooseDupGroup(1);choose();
+    const across=collect().length, group0=collect('group0').length;
+    chooseDupGroup(0);
+    const preserved=document.querySelector('#dupResult .delbox').checked;
+    checkAll(true);const all=collect().length;
+    checkAll(false);const none=collect().length;
+    clearDuplicateState();document.getElementById('dupTools').innerHTML='';document.getElementById('dupResult').innerHTML='';
+    return {pageRows,across,group0,preserved,all,none};
+  })()`);
+  assert.deepEqual(dupPerf,{pageRows:80,across:3,group0:2,preserved:true,all:398,none:0});
+  console.log('Bounded duplicate preview and cross-page selection: '+JSON.stringify(dupPerf));
   await size(420,900);
   await evaluate("setTab('preview');window.scrollTo(0,0)");
   await sleep(250);

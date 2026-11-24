@@ -667,14 +667,19 @@ class Handler(BaseHTTPRequestHandler):
         rows = detect_duplicates(root, level, verify=verify, progress=progress)
         resolved = str(Path(root).resolve())
         _remember_root_quietly(resolved)
+        groups = group_rows(rows)
+        visible = rows[:DUPLICATE_ROW_LIMIT]
+        visible_ids = {row.duplicate_group_id for row in visible}
         return {
             "selected_root": resolved,
+            "group_total": len(groups),
             "phase1_level": level,
             "phase1_label": PHASE1_METHOD.get(level, level),
             "verify": verify and level != "deep",
             "stats": summarize(rows),
-            "groups": [_duplicate_group_payload(group) for group in group_rows(rows)],
-            "rows": [row.to_dict() for row in rows[:DUPLICATE_ROW_LIMIT]],
+            "groups": [_duplicate_group_payload(group) for group in groups
+                       if body.get("view") != "bounded" or group.duplicate_group_id in visible_ids],
+            "rows": [row.to_dict() for row in visible],
             "row_total": len(rows),
         }
 
