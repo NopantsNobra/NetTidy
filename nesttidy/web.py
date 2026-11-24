@@ -137,6 +137,19 @@ class PlanRegistry:
             if self._states.get(plan_id) == "running":
                 self._states[plan_id] = "finished" if ok else "failed"
 
+    def release_for_replan(self, plan_id: str) -> None:
+        """显式放弃旧计划；与 claim 共用锁，绝不淘汰正在执行的计划。"""
+        if not isinstance(plan_id, str) or not plan_id:
+            raise ValueError("replace_plan_id 必须是非空计划标识")
+        with self._lock:
+            if plan_id not in self._plans:
+                return
+            if self._states[plan_id] == "running":
+                raise PlanConflictError("旧计划正在执行，不能替换")
+            del self._plans[plan_id]
+            del self._states[plan_id]
+            del self._pages[plan_id]
+
     def clear(self) -> None:
         with self._lock:
             self._plans.clear()
@@ -531,8 +544,11 @@ class Handler(BaseHTTPRequestHandler):
                 acquired = True
             if self.path == "/api/plan":
                 key, progress = _track(body, "计划")
+                selected_root = _selected_root(body)
+                if "replace_plan_id" in body and body["replace_plan_id"] is not None:
+                    PLANS.release_for_replan(body["replace_plan_id"])
                 plan = build_plan(
-                    _selected_root(body), body.get("mode", "batch"), body.get("output_root") or None, progress=progress
+                    selected_root, body.get("mode", "batch"), body.get("output_root") or None, progress=progress
                 )
                 PLANS.put(plan)
                 _remember_root_quietly(plan.selected_root)

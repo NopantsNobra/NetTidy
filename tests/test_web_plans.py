@@ -57,6 +57,29 @@ class PlanRegistryTests(unittest.TestCase):
             self.assertIs(web.PLANS.get(id_a), plan_a)
             self.assertIs(web.PLANS.get(id_b), plan_b)
 
+    def test_replan_releases_only_named_plan_and_page_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            a, b = [_plan(_make_run_root(base, tag)) for tag in ("A", "B")]
+            registry = web.PlanRegistry()
+            registry.put(a)
+            registry.put(b)
+            registry.page(a.plan_id, a.resource_roots[0], 0, 1)
+            registry.release_for_replan(a.plan_id)
+            self.assertNotIn(a.plan_id, registry._pages)
+            with self.assertRaises(ValueError):
+                registry.claim(a.plan_id)
+            self.assertIs(registry.get(b.plan_id), b)
+            registry.release_for_replan(a.plan_id)  # already evicted is harmless
+            registry.claim(b.plan_id)
+            with self.assertRaises(web.PlanConflictError):
+                registry.release_for_replan(b.plan_id)
+            self.assertIs(registry.get(b.plan_id), b)
+            registry.finish(b.plan_id, True)
+            registry.release_for_replan(b.plan_id)
+            self.assertEqual(registry._plans, {})
+
+
     def test_unknown_plan_id_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             web.PLANS.get("not-a-real-plan-id")

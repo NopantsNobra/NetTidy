@@ -240,17 +240,21 @@ def run_execution_fixture(count: int, parent: Path | None, repeat: int):
     return {"runs": results, "median_files_per_second": statistics.median(r["files_per_second"] for r in results)}
 
 
-def resident_memory_probe(root: Path, mode: str, rounds: int, max_entries: int = 600_000):
+def resident_memory_probe(root: Path, mode: str, rounds: int, max_entries: int = 600_000, replace_previous: bool = False):
     """Measure actual repeated registry retention; no mutation, no forced cold cache."""
     import gc
     registry = PlanRegistry(max_entries=max_entries)
     samples = []
+    previous = None
     tracemalloc.start()
     try:
         for _ in range(rounds):
             start = time.perf_counter()
+            if replace_previous and previous:
+                registry.release_for_replan(previous)
             plan = planner.build_plan(str(root), mode=mode)
             registry.put(plan)
+            previous = plan.plan_id
             count = len(plan.mappings)
             if plan.resource_roots:
                 registry.page(plan.plan_id, plan.resource_roots[0], 0, 200)
@@ -264,7 +268,7 @@ def resident_memory_probe(root: Path, mode: str, rounds: int, max_entries: int =
         registry.clear()
         gc.collect()
         released, _ = tracemalloc.get_traced_memory()
-        return {"max_entries": max_entries, "rounds": samples, "traced_after_clear": released}
+        return {"max_entries": max_entries, "replace_previous": replace_previous, "rounds": samples, "traced_after_clear": released}
     finally:
         tracemalloc.stop()
 
@@ -283,6 +287,7 @@ def main(argv=None):
     parser.add_argument("--profile", action="store_true", help="Extra instrumented cProfile run (not included in median)")
     parser.add_argument("--execute-fixture-files", type=int, default=0, help="Opt-in extra isolated move/undo benchmark; never mutates --root")
     parser.add_argument("--resident-budget", type=int, default=600_000, help="Entry budget for resident memory probe")
+    parser.add_argument("--replace-resident", action="store_true", help="Simulate same-tab explicit plan replacement before planning")
     parser.add_argument("--resident-rounds", type=int, default=0, help="Extra repeated read-only plan retention probe")
     parser.add_argument("--memory", action="store_true", help="Extra tracemalloc run (not included in median)")
     args = parser.parse_args(argv)
@@ -329,7 +334,7 @@ def main(argv=None):
             finally:
                 tracemalloc.stop()
         if args.resident_rounds:
-            result["resident_memory"] = resident_memory_probe(root, args.mode, args.resident_rounds, args.resident_budget)
+            result["resident_memory"] = resident_memory_probe(root, args.mode, args.resident_rounds, args.resident_budget, args.replace_resident)
         if args.execute_fixture_files:
             result["execution_fixture"] = run_execution_fixture(args.execute_fixture_files, args.fixture_parent, args.repeat)
         print(json.dumps(result, ensure_ascii=True, indent=2))
