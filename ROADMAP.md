@@ -269,7 +269,9 @@ M0–M1.6 已完成（2026-10-26 ~ 10-27）：可信基线、规则接缝、剥�
 
 - [ ] B1 建立 opt-in benchmarks（不将重型夹具加入日常单测）：20 万真实文件基准、50 万压力、100 万探索；记录平坦/深层/多根/高冲突/全 keep/大量 move 等数据形态及 SSD/HDD 条件。真实目录仅做只读规划，写入实验用隔离夹具。
   - 工具第一切片：`python -m benchmarks.plan_bench --root <目录> --repeat 3 --profile --memory --disk <介质>` 只读真实目录；`--fixture-files 200000 --shape multi --fixture-parent <临时盘目录>` 生成隔离夹具；50 万/100 万可按需指定。记录规划、首屏、分页、快照与语义摘要、阶段调用、working set 和独立内存/剖析轮次。Windows CI #45374879878 双版本各 266 例（1 skip），真实目录不变、隔离夹具回收用例通过。20 万实际用户文件及真实盘 I/O 尚待测，不勾选 B1/B2。
+  - 工具第二切片：`--execute-fixture-files 1000` 在隔离夹具中计时 move/undo，并逐文件路径和字节比对恢复结果；新增 `.github/workflows/windows-benchmark.yml`，手动选择 2万/20万/50万/100万合成规模，普通 push 不触发重型测试。Windows 常规回归 #45376651949 通过。
 - [ ] B2 分段测量：perf_counter、cProfile、独立 tracemalloc 轮次及 Windows working set；记录扫描、resolve 次数/耗时/命中率、规则、计划构建、快照、首屏、分页 p50/p95、执行吞吐及连续试运行内存。记录版本、Python、磁盘、冷热缓存、文件/目录数，重复同夹具取中位数；对照归一化操作、映射、摘要和异常。结果回填本节，不另建治理文档。
+  - Windows 云端合成基线（v1.8.5，commit d3b4fa7，Actions #45376665459，Windows Server 2025 / Python 3.13.17，20,000 个小文件 / 100 资源根 / 全 keep，重复 3 次，缓存未强制清空）：规划中位 3.537s、首屏服务端生成 0.365s、响应体 538,620 B；每轮 20 页、每页 200 行，各轮 P50 约 72.7–73.3ms、P95 约 73.8–79.7ms；独立 tracemalloc 峰值 42,690,416 B（40.7 MiB），正常轮 working set 约 80 MB。三轮快照和归一化语义摘要一致。剖析轮（含 instrumentation 开销，不计入正常耗时）：resolve 40,001 次（20,000 命中、20,001 未命中）2.406s；build_tree 1.499s，scan_residual_dirs 1.700s，snapshot_digest 0.506s，process_node 0.027s；分段为 inclusive，不可直接相加。1,000 个隔离小文件 move+undo 独立三轮，中位 111.8 文件/s，撤销均完整恢复。平台为云端虚拟存储，不代表物理 SSD/HDD；浏览器渲染、20 万真实目录、50 万压力、100 万探索及不同形态尚未验收，B1/B2 不勾选。C1 仅按本基线开展可隔离的分页 POC。
 
 #### C · 低风险性能优化（B 后优先）
 
