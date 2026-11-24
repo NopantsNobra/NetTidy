@@ -121,14 +121,19 @@ def plan_display_stats(plan: OperationPlan, row_limit: int = 0, folder_limit: in
 
     roots = [plan.output_root] if plan.output_root else plan.resource_roots
     label = "output_root（copy 模式）" if plan.output_root else "resource_roots（资源根内）"
-    file_ops = [op for op in plan.operations if op.op_type in {"move", "copy", "keep"} and op.target_path]
+    checked = escaped = 0
     lookup = _root_lookup(roots)
-    escaped = sum(not _inside(op.target_path, roots, lookup, {}) for op in file_ops)
+    target_cache: dict[str, str] = {}
+    for op in plan.operations:
+        if op.op_type not in {"move", "copy", "keep"} or not op.target_path:
+            continue
+        checked += 1
+        escaped += not _inside(op.target_path, roots, lookup, target_cache)
     return {
         "rule_counts": counts,
         "rule_rows": [{"rule": c, "name": _RULE_NAMES[c], "count": counts[c]} for c in _RULE_CODES],
         "r5_samples": samples,
-        "boundary": {"checked": len(file_ops), "out_of_bound": escaped, "label": label},
+        "boundary": {"checked": checked, "out_of_bound": escaped, "label": label},
         "readable": readable_plan_view(plan, row_limit, folder_limit, total_row_limit, summary_only=summary_only),
     }
 
@@ -231,6 +236,7 @@ def _root_for(path: str, roots: list[str], lookup: dict[str, str] | None = None,
     """
     table = lookup if lookup is not None else _root_lookup(roots)
     node = _norm_path(path)
+    leaf = node
     walked: list[str] = []
     while True:
         if cache is not None:
@@ -248,8 +254,10 @@ def _root_for(path: str, roots: list[str], lookup: dict[str, str] | None = None,
             break
         node = parent
     if cache is not None:
+        # 缓存祖先目录，不缓存每条文件路径，避免 O(文件数) 的临时字典。
         for item in walked:
-            cache[item] = found
+            if item != leaf:
+                cache[item] = found
     return found
 
 
