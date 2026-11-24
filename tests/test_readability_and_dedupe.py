@@ -106,6 +106,40 @@ class TwoPhaseDuplicateTests(unittest.TestCase):
             self.assertTrue(all(row.duplicate_group_id.endswith("-recheck") for row in rows))
             self.assertTrue(all("复核剔除" in row.conflict_note for row in rows))
 
+    def test_all_verified_subgroups_survive_initial_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, middle in (("a", b"A"), ("b", b"A"), ("c", b"B"), ("d", b"B"), ("e", b"C")):
+                (root / name).write_bytes(b"H" * CHUNK + middle + b"T" * CHUNK)
+            groups = group_rows(detect_duplicates(tmp, "standard", workers=2))
+            verified = [g for g in groups if g.verified]
+            self.assertEqual(len(verified), 2)
+            self.assertEqual({frozenset(Path(p).name for p in [g.keep_path, *g.deletable_paths]) for g in verified},
+                             {frozenset(("a", "b")), frozenset(("c", "d"))})
+            self.assertEqual(sum(len(g.deletable_paths) for g in groups), 2)
+            self.assertEqual(len([g for g in groups if not g.verified]), 1)
+
+    def test_deep_hash_is_read_once_per_file(self) -> None:
+        from unittest.mock import patch
+        from nesttidy import duplicate
+        with tempfile.TemporaryDirectory() as tmp:
+            touch(Path(tmp) / "a", "same")
+            touch(Path(tmp) / "b", "same")
+            with patch.object(duplicate, "file_signature", wraps=duplicate.file_signature) as signature:
+                rows = detect_duplicates(tmp, "deep", workers=1)
+            self.assertEqual(signature.call_count, 2)
+            self.assertEqual(group_rows(rows)[0].verified_hash, full_sha256(Path(tmp) / "a"))
+
+    def test_hardlink_alias_of_keep_is_not_deletable_or_reclaimable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            touch(root / "a", "same")
+            os.link(root / "a", root / "b")
+            touch(root / "c", "same")
+            group = group_rows(detect_duplicates(tmp, "deep"))[0]
+            self.assertEqual([Path(p).name for p in group.deletable_paths], ["c"])
+            self.assertEqual(group.reclaimable_bytes, 4)
+
     def test_verified_twins_are_deletable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             first, second = self._pair(Path(tmp), b"\x00" * CHUNK, b"\x00" * CHUNK)
