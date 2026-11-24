@@ -48,3 +48,13 @@ class WorkspaceVisualContractTests(unittest.TestCase):
                        '删除本组已选副本', '全选已加载可删副本'):
             self.assertIn(marker, INDEX_HTML)
         self.assertNotIn("scope.querySelectorAll('.delbox:checked')", INDEX_HTML)
+
+    def test_readonly_result_tables_are_bounded(self):
+        for marker in ('const RESULT_PAGE=80', 'rows.slice(offset,offset+RESULT_PAGE)',
+                       "mountPagedRows('folders'", "mountPagedRows('issues'",
+                       "mountPagedRows('dupResult'", "mountPagedTable('repairResult'",
+                       "mountPagedTable('execResult'", "mountPagedRows('execResult'",
+                       "mountPagedTable('history'", '仅加载 '):
+            self.assertIn(marker, INDEX_HTML)
+        self.assertNotIn('v.folders.map(', INDEX_HTML)
+        self.assertNotIn('plan.issues.map(', INDEX_HTML)

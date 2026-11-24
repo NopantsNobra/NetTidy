@@ -185,6 +185,31 @@ server.serve_forever()
   })()`);
   assert.deepEqual(dupPerf,{pageRows:80,across:3,group0:2,preserved:true,all:398,none:0});
   console.log('Bounded duplicate preview and cross-page selection: '+JSON.stringify(dupPerf));
+  const resultPerf=await evaluate(`(()=>{
+    const box=document.getElementById('execResult');
+    const rows=Array.from({length:200000},(_,i)=>({path:'file '+i,status:'ok'}));
+    const start=performance.now();
+    mountPagedTable('execResult',rows,['path','status'],['文件','状态'],{prefix:'<p>summary</p>'});
+    let maxRows=0;
+    for(let i=0;i<25;i++){
+      box.querySelector('[data-result-next]').click();
+      maxRows=Math.max(maxRows,box.querySelectorAll('tbody tr').length);
+    }
+    const jump=box.querySelector('[data-result-jump]');jump.value='2500';
+    box.querySelector('[data-result-go]').click();
+    const last=box.querySelector('tbody tr:last-child td').textContent;
+    const disabled=box.querySelector('[data-result-next]').disabled;
+    setBusy(true);setBusy(false);
+    const stillDisabled=box.querySelector('[data-result-next]').disabled;
+    const ms=performance.now()-start;
+    box.innerHTML='';
+    return {maxRows,last,disabled,stillDisabled,ms};
+  })()`);
+  assert.equal(resultPerf.maxRows,80);
+  assert.equal(resultPerf.last,'file 199999');
+  assert.equal(resultPerf.disabled,true);
+  assert.equal(resultPerf.stillDisabled,true);
+  console.log('Bounded 200k result table: '+JSON.stringify(resultPerf));
   await size(420,900);
   await evaluate("setTab('preview');window.scrollTo(0,0)");
   await sleep(250);
