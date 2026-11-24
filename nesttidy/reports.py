@@ -133,19 +133,38 @@ def plan_display_stats(plan: OperationPlan, row_limit: int = 0, folder_limit: in
     }
 
 
-def readable_group_rows(plan: OperationPlan, root_path: str, offset: int = 0, limit: int = 200) -> dict:
-    """按资源包分页取对照行：给「显示更多」用，避免一次性传输几十万行。"""
+def build_mapping_index(plan: OperationPlan) -> dict[str, list[MappingEntry]]:
+    """按既有最长资源根语义建立一次索引；保存映射引用而非复制行或状态。"""
     roots = list(plan.resource_roots)
     lookup = _root_lookup(roots)
     root_cache: dict[str, str] = {}
-    rows: list[dict] = []
-    total = 0
+    index: dict[str, list[MappingEntry]] = {}
     for mapping in plan.mappings:
-        if _root_for(mapping.original_path, roots, lookup, root_cache) != root_path:
-            continue
-        if offset <= total < offset + max(limit, 1):
-            rows.append(_readable_row(plan, mapping, root_path))
-        total += 1
+        root = _root_for(mapping.original_path, roots, lookup, root_cache)
+        index.setdefault(root, []).append(mapping)
+    return index
+
+
+def readable_group_rows(plan: OperationPlan, root_path: str, offset: int = 0, limit: int = 200,
+                        index: dict[str, list[MappingEntry]] | None = None) -> dict:
+    """按资源包分页。传入随计划存活的索引时，每页仅翻译所需行。"""
+    if index is None:
+        roots = list(plan.resource_roots)
+        lookup = _root_lookup(roots)
+        root_cache: dict[str, str] = {}
+        rows: list[dict] = []
+        total = 0
+        for mapping in plan.mappings:
+            if _root_for(mapping.original_path, roots, lookup, root_cache) != root_path:
+                continue
+            if offset <= total < offset + max(limit, 1):
+                rows.append(_readable_row(plan, mapping, root_path))
+            total += 1
+    else:
+        bucket = index.get(root_path, [])
+        total = len(bucket)
+        start, stop = max(0, offset), max(0, offset + max(limit, 1))
+        rows = [_readable_row(plan, mapping, root_path) for mapping in bucket[start:stop]]
     return {"root_path": root_path, "offset": offset, "total": total, "rows": rows}
 
 

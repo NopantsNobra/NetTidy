@@ -22,7 +22,7 @@ from unittest.mock import patch
 from nesttidy import planner, executor
 from nesttidy.recovery import undo_transaction
 from nesttidy.reports import readable_group_rows
-from nesttidy.web import _plan_payload
+from nesttidy.web import PlanRegistry, _plan_payload
 
 
 def working_set_bytes():
@@ -120,13 +120,22 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
     payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     first_screen_seconds = time.perf_counter() - start
     samples = []
+    indexed_samples = []
+    registry = PlanRegistry()
+    registry.put(plan)
     for i in range(pages):
         if not plan.resource_roots:
             break
         resource = plan.resource_roots[i % len(plan.resource_roots)]
         start = time.perf_counter()
-        readable_group_rows(plan, resource, offset=(i // len(plan.resource_roots)) * 200, limit=200)
+        offset = (i // len(plan.resource_roots)) * 200
+        legacy = readable_group_rows(plan, resource, offset=offset, limit=200)
         samples.append(time.perf_counter() - start)
+        start = time.perf_counter()
+        indexed = registry.page(plan.plan_id, resource, offset, 200)
+        indexed_samples.append(time.perf_counter() - start)
+        if indexed != legacy:
+            raise RuntimeError("indexed page differs from legacy")
     sorted_samples = sorted(samples)
     p95 = sorted_samples[max(0, (95 * len(samples) + 99) // 100 - 1)] if samples else None
     return {
@@ -137,6 +146,10 @@ def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
         "plan_seconds": plan_seconds, "first_screen_seconds": first_screen_seconds,
         "payload_bytes": payload_bytes, "page_p50_seconds": statistics.median(samples) if samples else None,
         "page_p95_seconds": p95, "page_samples": len(samples),
+        "indexed_first_page_seconds": indexed_samples[0] if indexed_samples else None,
+        "indexed_warm_page_p50_seconds": statistics.median(indexed_samples[1:]) if len(indexed_samples) > 1 else None,
+        "indexed_warm_page_p95_seconds": sorted(indexed_samples[1:])[max(0, (95 * (len(indexed_samples)-1) + 99) // 100 - 1)] if len(indexed_samples) > 1 else None,
+        "indexed_total_seconds": sum(indexed_samples), "legacy_total_seconds": sum(samples),
         "phase_seconds_inclusive": dict(phases), "phase_calls": dict(calls),
         "progress_calls": dict(progress_calls), "working_set_bytes": working_set_bytes(),
         "snapshot_digest": plan.source_snapshot_digest, "semantic_digest": canonical_digest(plan),

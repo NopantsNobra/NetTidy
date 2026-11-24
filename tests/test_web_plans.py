@@ -74,6 +74,52 @@ class PlanRegistryTests(unittest.TestCase):
             self.assertIsNotNone(registry.get(ids[2]))
 
 
+    def test_indexed_pages_match_legacy_and_reflect_live_status(self) -> None:
+        from unittest.mock import patch
+        from nesttidy.reports import readable_group_rows
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "src"
+            for group in ("A", "B"):
+                for n in range(7):
+                    p = root / group / "wrapper" / f"{n}.txt"
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(group, encoding="utf-8")
+            plan = build_plan(str(root), "batch")
+            registry = web.PlanRegistry(max_plans=1)
+            registry.put(plan)
+            with patch("nesttidy.web.build_mapping_index", wraps=web.build_mapping_index) as build:
+                for group in [*plan.resource_roots, "", "missing"]:
+                    for offset, limit in [(0, 3), (3, 3), (6, 5), (20, 2), (-2, 4), (0, 0)]:
+                        self.assertEqual(registry.page(plan.plan_id, group, offset, limit),
+                                         readable_group_rows(plan, group, offset, limit))
+                plan.mappings[0].status = "completed"
+                for group in plan.resource_roots:
+                    self.assertEqual(registry.page(plan.plan_id, group, 0, 20),
+                                     readable_group_rows(plan, group, 0, 20))
+                self.assertEqual(build.call_count, 1)
+            other = build_plan(str(root), "batch")
+            registry.put(other)
+            self.assertNotIn(plan.plan_id, registry._pages)
+            with self.assertRaises(ValueError):
+                registry.page(plan.plan_id, plan.resource_roots[0], 0, 10)
+
+    def test_parallel_pages_build_index_once(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            plan = _plan(_make_run_root(base, "A"))
+            registry = web.PlanRegistry()
+            registry.put(plan)
+            with patch("nesttidy.web.build_mapping_index", wraps=web.build_mapping_index) as build:
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    rows = list(pool.map(lambda _: registry.page(plan.plan_id, plan.resource_roots[0], 0, 1), range(8)))
+                self.assertEqual(build.call_count, 1)
+                self.assertTrue(all(row == rows[0] for row in rows))
+            registry.clear()
+            self.assertFalse(registry._pages)
+
+
 class PortBindingTests(unittest.TestCase):
     def test_occupied_port_is_classified_with_port_number(self) -> None:
         """真实占用一个临时端口，再让服务绑定它：必须得到可判定的占用错误。"""
