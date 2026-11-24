@@ -246,6 +246,30 @@ class DeleteDuplicateTests(unittest.TestCase):
             self.assertEqual(changed.issues[0].code, "NOT_DUPLICATE")
             self.assertTrue(victim.exists(), "内容变了就不许删")
 
+    def test_keep_outside_root_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "root"
+            victim, keep = root / "a", base / "b"
+            touch(victim, "same")
+            touch(keep, "same")
+            result = delete_duplicates(str(root), [DeleteEntry(str(victim), str(keep))],
+                                       mode="purge", confirm=True, transaction_log=str(base / "tx.jsonl"))
+            self.assertEqual(result.issues[0].code, "OUT_OF_ROOT")
+            self.assertTrue(victim.exists())
+
+    def test_purge_hardlink_does_not_overstate_released_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            touch(root / "keep", "same")
+            touch(root / "victim", "same")
+            os.link(root / "victim", root / "alias")
+            result = delete_duplicates(str(root), [DeleteEntry(str(root / "victim"), str(root / "keep"))],
+                                       mode="purge", confirm=True, transaction_log=str(root / "tx.jsonl"))
+            self.assertEqual(result.deleted, 1)
+            self.assertEqual(result.freed_bytes, 0)
+            self.assertTrue((root / "alias").exists())
+
     def test_missing_keep_blocks_deletion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
