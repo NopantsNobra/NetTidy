@@ -181,7 +181,7 @@ pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);bor
     <p class="muted" id="execHint" style="margin:0 0 4px"></p>
     <div class="task-progress idle" id="execProgress"><div class="pbar"><div class="pfill" id="execFill"></div></div><p class="muted" id="execProg">尚未开始。</p></div><div id="execResult" class="scrollbox"></div>
     <div class="task-progress idle" id="undoProgress"><div class="pbar"><div class="pfill" id="undoFill"></div></div><p class="muted" id="undoProg">尚未撤销。</p></div>
-    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div class="preview-nav"><label for="groupSelect">资源包</label><select id="groupSelect"></select><button class="secondary" id="groupPrev">上一包</button><button class="secondary" id="groupNext">下一包</button><span id="groupCount" class="muted"></span></div><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div><div class="preview-nav" id="pageNav"><button class="secondary" id="pagePrev">上一页</button><button class="secondary" id="pageNext">下一页</button><span class="muted" id="pageCount" role="status"></span><label for="pageJump">跳至</label><input type="number" id="pageJump" min="1" value="1"><button class="secondary" id="pageGo">跳转</button></div></section>
+    <p class="muted">左列是现在的位置（相对资源包），右列是整理后的位置；「藏了 N 层」表示这个文件现在被 N 层壳文件夹压着。<b>双击任意一行</b>在资源管理器里打开它所在的目录。</p><div class="preview-nav"><label for="groupSelect">资源包</label><select id="groupSelect"></select><button class="secondary" id="groupPrev">上一包</button><button class="secondary" id="groupNext">下一包</button><label for="groupJump">包序号</label><input type="number" id="groupJump" min="1" value="1"><button class="secondary" id="groupGo">跳转</button><span id="groupCount" class="muted"></span></div><div id="preview" class="scrollbox" tabindex="0" role="region" aria-label="整理前后对照"></div><div class="preview-nav" id="pageNav"><button class="secondary" id="pagePrev">上一页</button><button class="secondary" id="pageNext">下一页</button><span class="muted" id="pageCount" role="status"></span><label for="pageJump">跳至</label><input type="number" id="pageJump" min="1" value="1"><button class="secondary" id="pageGo">跳转</button></div></section>
   <section id="foldersSection" class="hidden"><h3>会被清掉的空文件夹</h3><p class="muted">只有文件被提走、文件夹真的变空之后才会删；非空目录一律保留。</p><div id="folders" class="scrollbox" tabindex="0" role="region" aria-label="空目录清单"></div></section>
 </section></div>
 <div class="panel hidden" id="panel-dup" role="tabpanel" aria-labelledby="tab-dup"><section><h2>重复文件</h2>
@@ -242,7 +242,7 @@ function setBusy(on){
   busy = on;
   document.querySelectorAll('button').forEach(b=>{ if(!b.classList.contains('dok') && !b.classList.contains('dno')) b.disabled = on; });
   if(!on){
-    if(lastPlan && previewGroup>=0){refreshGroupNav();pageControls(previewTotal,previewOffset,false);}
+    if(lastPlan){refreshGroupNav();pageControls(previewTotal,previewOffset,previewLoading);}
     const btn = document.getElementById('execBtn');
     if(btn && lastPlan && !planExecuted && planMode !== execMode.value) btn.disabled = true;  // 执行方式漂移后保持禁用
   }
@@ -381,6 +381,7 @@ async function makePlanInner(stay){
   const isCopy = execMode.value === 'copy';
   if(isCopy && !cleanPath(output.value)){ say('复制方式要先填输出目录，再点试运行。',true); return; }
   say('正在扫描并生成试运行计划（只读，不改磁盘）...');
+  previewRequest++;
   const prog = trackProgress('planFill','planProg');
   try{
     const data = await api('/api/plan',{selected_root:cleanPath(root.value),mode:mode.value,output_root:isCopy?(cleanPath(output.value)||null):null,view:'summary',progress_key:prog.key});
@@ -414,10 +415,11 @@ function renderPlan(plan){
     ['all','全部 '+v.counts.total],
     ['changed','只看会变的 '+v.counts.changed],
     ['renamed','只看改名 '+v.counts.renamed],
-    ['same','只看原地不动 '+v.counts.in_place]
+    ['same','只看原地不动 '+(v.counts.total-v.counts.changed)]
   ].map(x=>'<button type="button" class="chip'+(x[0]===filterMode?' active':'')+'" aria-pressed="'+(x[0]===filterMode)+'" data-f="'+x[0]+'">'+esc(x[1])+'</button>').join('');
   document.querySelectorAll('#filters .chip').forEach(el=>el.addEventListener('click',()=>setFilter(el.dataset.f)));
   initPreviewGroups();
+  document.getElementById('foldersSection').classList.add('hidden');
   if(v.folders.length){
     document.getElementById('foldersSection').classList.remove('hidden');
     document.getElementById('folders').innerHTML = '<table><thead><tr><th>资源包</th><th>会被清掉的文件夹</th><th>层级</th></tr></thead><tbody>'
@@ -448,9 +450,10 @@ function rowHtml(g,r){
 }
 // 固定页大小，不累计 DOM 或历史文件行；资源包导航仅保留当前一段选项。
 const PREVIEW_PAGE = 80, GROUP_OPTIONS = 100;
-let previewGroups=[], previewGroup=-1, previewOffset=0, previewTotal=0, previewRequest=0;
+let previewGroups=[], previewGroup=-1, previewOffset=0, previewTotal=0, previewRequest=0, previewLoading=false;
 const groupSelect=document.getElementById('groupSelect');
 const groupPrev=document.getElementById('groupPrev'), groupNext=document.getElementById('groupNext');
+const groupJump=document.getElementById('groupJump'), groupGo=document.getElementById('groupGo');
 const pagePrev=document.getElementById('pagePrev'), pageNext=document.getElementById('pageNext');
 const pageJump=document.getElementById('pageJump'), pageGo=document.getElementById('pageGo');
 function groupMatches(g){
@@ -470,6 +473,8 @@ function refreshGroupNav(){
     '<option value="'+(start+i)+'">'+esc(g.root_name)+' · '+g.row_total+' 文件</option>').join('');
   if(previewGroup>=0)groupSelect.value=String(previewGroup);
   document.getElementById('groupCount').textContent=previewGroups.length?'资源包 '+(previewGroup+1)+' / '+previewGroups.length:'无匹配资源包';
+  groupJump.max=String(Math.max(1,previewGroups.length));groupJump.value=String(Math.max(1,previewGroup+1));
+  groupJump.disabled=groupGo.disabled=previewGroup<0;
   groupSelect.disabled=previewGroup<0;
   groupPrev.disabled=previewGroup<=0;
   groupNext.disabled=previewGroup<0||previewGroup>=previewGroups.length-1;
@@ -479,7 +484,7 @@ function chooseGroup(n){
   previewGroup=n;refreshGroupNav();return showPreviewPage(0);
 }
 function pageControls(total,offset,loading){
-  previewTotal=total;previewOffset=offset;
+  previewTotal=total;previewOffset=offset;previewLoading=loading;
   const pages=Math.max(1,Math.ceil(total/PREVIEW_PAGE)), page=Math.floor(offset/PREVIEW_PAGE)+1;
   pagePrev.disabled=loading||offset<=0;
   pageNext.disabled=loading||offset+PREVIEW_PAGE>=total;
@@ -508,6 +513,8 @@ async function showPreviewPage(offset){
 groupSelect.addEventListener('change',()=>chooseGroup(Number(groupSelect.value)));
 groupPrev.addEventListener('click',()=>chooseGroup(previewGroup-1));
 groupNext.addEventListener('click',()=>chooseGroup(previewGroup+1));
+function jumpGroup(){return chooseGroup(Math.min(previewGroups.length,Math.max(1,Math.floor(Number(groupJump.value)||1)))-1);}
+groupGo.addEventListener('click',jumpGroup);groupJump.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();jumpGroup();}});
 pagePrev.addEventListener('click',()=>showPreviewPage(Math.max(0,previewOffset-PREVIEW_PAGE)));
 pageNext.addEventListener('click',()=>showPreviewPage(previewOffset+PREVIEW_PAGE));
 function jumpPage(){const n=Math.min(Math.max(1,Number(pageJump.value)||1),Math.max(1,Math.ceil(previewTotal/PREVIEW_PAGE)));return showPreviewPage((Math.floor(n)-1)*PREVIEW_PAGE);}

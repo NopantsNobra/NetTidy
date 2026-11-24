@@ -739,8 +739,8 @@ class LargePlanPagingTests(unittest.TestCase):
     def test_page_template_renders_groups_lazily(self) -> None:
         from nesttidy.ui import INDEX_HTML
 
-        self.assertIn("function loadMore(", INDEX_HTML)
-        self.assertIn("data-more=", INDEX_HTML)
-        self.assertIn("rowMoreHint(", INDEX_HTML)
+        self.assertIn("function showPreviewPage(", INDEX_HTML)
+        self.assertIn('id="pageNext"', INDEX_HTML)
+        self.assertIn("pageControls(", INDEX_HTML)
         self.assertIn("id=\"more-", INDEX_HTML.replace("'", '"'))
         self.assertIn("trackProgress('planFill'", INDEX_HTML.replace('"', "'"))
