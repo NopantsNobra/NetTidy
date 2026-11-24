@@ -41,8 +41,10 @@ class TruncatedLogTests(unittest.TestCase):
 
             rows = undo_transaction(str(tx))  # 修复前此处抛 JSONDecodeError
 
-            self.assertEqual(len(rows), 1, "截断行必须被跳过，完整行照常处理")
+            self.assertEqual(len(rows), 2, "完整 move 照常恢复，截断行须另报失败并保留日志")
             self.assertEqual(rows[0].status, "ok", "started 行必须被回收")
+            self.assertEqual((rows[1].action, rows[1].status), ("journal", "failed"))
+            self.assertTrue(tx.exists(), "无法确认截断行时不能退役日志")
             self.assertTrue(source.exists(), "已搬移的文件没有回到原路径")
             self.assertFalse(target.exists())
             self.assertEqual(source.read_text(encoding="utf-8"), "payload")
@@ -219,6 +221,93 @@ class UndoBoundaryTests(unittest.TestCase):
             self.assertIn("undo_root_recreated", tx.read_text(encoding="utf-8"))
             second = undo_transaction(str(tx))
             self.assertTrue(any(row.action == "rmdir" and row.status == "ok" for row in second))
+            self.assertTrue(tx.exists())
+
+
+
+
+class JournalRecoverySafetyTests(unittest.TestCase):
+    def test_undo_rejects_replaced_target_even_with_matching_size_and_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            tx = base / "tx.jsonl"
+            result = execute_plan(build_plan(str(root), "single"), "move", confirm_move=True, transaction_log=str(tx))
+            self.assertEqual(result.failed, 0)
+            target = root / "文件.txt"
+            info = target.stat()
+            saved = base / "原文件.txt"
+            target.rename(saved)
+            touch(target, "payload")
+            os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+
+            rows = undo_transaction(str(tx))
+
+            self.assertTrue(any(row.action == "move" and row.status == "failed" for row in rows))
+            self.assertFalse(source.exists())
+            self.assertTrue(target.is_file())
+            self.assertTrue(saved.is_file())
+            self.assertTrue(tx.exists())
+
+    def test_undo_preserves_mkdir_started_only_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            folder = base / "可能由他人创建"
+            folder.mkdir()
+            tx = base / "tx.jsonl"
+            tx.write_text(json.dumps({"action": "mkdir", "source": str(folder), "status": "started"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(rows[0].status, "failed")
+            self.assertTrue(folder.is_dir())
+            self.assertTrue(tx.exists())
+
+    def test_undo_preserves_replaced_created_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            folder = base / "整理时创建"
+            folder.mkdir()
+            info = folder.stat()
+            tx = base / "tx.jsonl"
+            tx.write_text(json.dumps({"action": "mkdir", "source": str(folder), "directory_identity": [info.st_dev, info.st_ino], "status": "done"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            folder.rename(base / "旧目录")
+            folder.mkdir()
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(rows[0].status, "failed")
+            self.assertTrue(folder.is_dir())
+            self.assertTrue(tx.exists())
+
+    def test_undo_missing_both_paths_retains_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            tx = base / "tx.jsonl"
+            tx.write_text(json.dumps({"action": "move", "source": str(base / "原.txt"), "target": str(base / "目标.txt"), "status": "done"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(rows[0].status, "failed")
+            self.assertTrue(tx.exists())
+
+    def test_non_object_and_partial_utf8_rows_do_not_block_valid_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            target = base / "已移.txt"
+            source = base / "原.txt"
+            touch(target, "payload")
+            tx = base / "tx.jsonl"
+            valid = json.dumps({"action": "move", "source": str(source), "target": str(target), "status": "done"}, ensure_ascii=False)
+            tx.write_bytes(valid.encode("utf-8") + b"\n[]\n" + bytes([0xe4, 0xb8]))
+
+            rows = undo_transaction(str(tx))
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "payload")
+            self.assertFalse(target.exists())
+            self.assertTrue(any(row.action == "journal" and row.status == "failed" for row in rows))
             self.assertTrue(tx.exists())
 
 
