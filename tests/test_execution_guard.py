@@ -234,5 +234,49 @@ class IdempotencyTests(unittest.TestCase):
         guard.release("plan-b", "key-b")
 
 
+
+class PlanLifecycleTests(_ServerMixin):
+    def test_finished_plan_rejects_new_progress_key(self) -> None:
+        pid = self._plan()
+        with mock.patch("nesttidy.web.execute_plan", return_value=SimpleNamespace(completed=1, skipped=0, failed=0, issues=[])) as run:
+            first = _post(self.port, "/api/execute-copy", {"plan_id": pid, "progress_key": "first"})
+            replay = _post(self.port, "/api/execute-copy", {"plan_id": pid, "progress_key": "second"})
+        self.assertEqual(first[0], 200)
+        self.assertEqual(replay[0], 409)
+        self.assertEqual(run.call_count, 1)
+
+    def test_failed_plan_cannot_be_replayed(self) -> None:
+        pid = self._plan()
+        with mock.patch("nesttidy.web.execute_plan", side_effect=OSError("执行中断")) as run:
+            first = _post(self.port, "/api/execute-copy", {"plan_id": pid, "progress_key": "failed"})
+            replay = _post(self.port, "/api/execute-copy", {"plan_id": pid, "progress_key": "retry"})
+        self.assertEqual(first[0], 400)
+        self.assertEqual(replay[0], 409)
+        self.assertEqual(run.call_count, 1)
+
+    def test_unconfirmed_move_does_not_consume_plan(self) -> None:
+        pid = self._plan(output=False)
+        with mock.patch("nesttidy.web.execute_plan", return_value=SimpleNamespace(completed=1, skipped=0, failed=0, issues=[], transaction_log="")) as run:
+            first = _post(self.port, "/api/execute-move", {"plan_id": pid, "progress_key": "unconfirmed"})
+            second = _post(self.port, "/api/execute-move", {"plan_id": pid, "confirm": True, "progress_key": "confirmed"})
+        self.assertEqual(first[0], 400)
+        self.assertEqual(second[0], 200)
+        self.assertEqual(run.call_count, 1)
+
+    def test_running_plan_is_not_evicted(self) -> None:
+        registry = web.PlanRegistry(max_plans=1)
+        plan = web.PLANS.get(self._plan())
+        registry.put(plan)
+        registry.claim(plan.plan_id)
+        other = web.PLANS.get(self._plan())
+        with self.assertRaises(web.PlanConflictError):
+            registry.put(other)
+        self.assertIs(registry.get(plan.plan_id), plan)
+        registry.finish(plan.plan_id, True)
+        registry.put(other)
+        with self.assertRaises(ValueError):
+            registry.get(plan.plan_id)
+
+
 if __name__ == "__main__":
     unittest.main()

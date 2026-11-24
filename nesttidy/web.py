@@ -26,19 +26,31 @@ from .storage import list_history
 from .ui import INDEX_HTML
 
 
+class PlanConflictError(ValueError):
+    """计划已经开始执行，禁止再次提交。"""
+
+
 class PlanRegistry:
-    """按 plan_id 索引冻结计划：多标签页各持自己的 id，服务端不信任前端回传的计划对象（不变量 6）。"""
+    """冻结计划的身份与执行生命周期分离；执行结果只更新状态元数据。"""
 
     def __init__(self, max_plans: int = 16) -> None:
         self._plans: dict[str, OperationPlan] = {}
+        self._states: dict[str, str] = {}
         self._lock = threading.Lock()
-        self._max = max_plans
+        self._max = max(1, max_plans)
 
     def put(self, plan: OperationPlan) -> str:
         with self._lock:
+            if plan.plan_id in self._plans:
+                raise ValueError("计划标识重复")
+            while len(self._plans) >= self._max:
+                victim = next((pid for pid in self._plans if self._states[pid] != "running"), None)
+                if victim is None:
+                    raise PlanConflictError("所有缓存计划正在执行，请稍后重新试运行")
+                del self._plans[victim]
+                del self._states[victim]
             self._plans[plan.plan_id] = plan
-            while len(self._plans) > self._max:
-                self._plans.pop(next(iter(self._plans)))
+            self._states[plan.plan_id] = "ready"
         return plan.plan_id
 
     def get(self, plan_id: str) -> OperationPlan:
@@ -48,9 +60,26 @@ class PlanRegistry:
             raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
         return plan
 
+    def claim(self, plan_id: str) -> OperationPlan:
+        """首次实际执行前原子消耗计划；终态不随 progress_key 淘汰重置。"""
+        with self._lock:
+            plan = self._plans.get(plan_id)
+            if plan is None:
+                raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
+            if self._states[plan_id] != "ready":
+                raise PlanConflictError("该计划已开始或结束执行，请重新试运行")
+            self._states[plan_id] = "running"
+            return plan
+
+    def finish(self, plan_id: str, ok: bool) -> None:
+        with self._lock:
+            if self._states.get(plan_id) == "running":
+                self._states[plan_id] = "finished" if ok else "failed"
+
     def clear(self) -> None:
         with self._lock:
             self._plans.clear()
+            self._states.clear()
 
 
 PLANS = PlanRegistry()
@@ -364,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
         guard_plan = ""
         guard_key = ""
         acquired = False
+        claimed = False
+        execution_ok = False
         failed = False
         try:
             body = self.read_json()
@@ -444,15 +475,26 @@ class Handler(BaseHTTPRequestHandler):
                 _remember_root_quietly(str(Path(root).resolve()))
                 self.send_tracked(key, {"rows": rows_as_dicts(bad), "checked": len(rows), "passed": len(rows) - len(bad)})
             elif self.path == "/api/execute-copy":
+                plan = PLANS.get(guard_plan)
+                if not plan.output_root:
+                    raise ValueError("复制执行需要带输出目录的试运行计划")
+                plan = PLANS.claim(guard_plan)
+                claimed = True
                 key, progress = _track(body, "执行")
-                result = execute_plan(PLANS.get(_plan_id(body)), "copy", progress=progress)
+                result = execute_plan(plan, "copy", progress=progress)
+                execution_ok = not result.failed
                 self.send_tracked(key, {"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
             elif self.path == "/api/execute-move":
                 plan = PLANS.get(_plan_id(body))
                 if body.get("confirm") is not True:
                     raise ValueError("原地整理会修改源目录；请先看预览，再点确认执行")
+                if plan.output_root:
+                    raise ValueError("复制计划不能原地执行，请重新试运行")
+                plan = PLANS.claim(guard_plan)
+                claimed = True
                 key, progress = _track(body, "执行")
                 result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)), progress=progress)
+                execution_ok = not result.failed
                 self.send_tracked(key, {
                     "completed": result.completed,
                     "skipped": result.skipped,
@@ -474,8 +516,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             failed = True
             _finish_progress(key, False, str(exc))
-            self.send_json({"error": str(exc)}, status=400)
+            self.send_json({"error": str(exc)}, status=409 if isinstance(exc, PlanConflictError) else 400)
         finally:
+            if claimed:
+                PLANS.finish(guard_plan, execution_ok and not failed)
             if acquired:
                 EXECUTION_GUARD.release(guard_plan, guard_key, ok=not failed)
 
