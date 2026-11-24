@@ -48,21 +48,36 @@ class _PlanPageIndex:
 class PlanRegistry:
     """冻结计划的身份与执行生命周期分离；执行结果只更新状态元数据。"""
 
-    def __init__(self, max_plans: int = 16) -> None:
+    def __init__(self, max_plans: int = 16, max_entries: int = 1_200_000) -> None:
         self._plans: dict[str, OperationPlan] = {}
         self._states: dict[str, str] = {}
         self._pages: dict[str, _PlanPageIndex] = {}
         self._lock = threading.Lock()
         self._max = max(1, max_plans)
+        # 条目数是内存压力代理指标，不是精确字节限制。20 万文件通常约 40 万条。
+        self._entry_budget = max(1, max_entries)
+
+    @staticmethod
+    def _weight(plan: OperationPlan) -> int:
+        return max(1, len(plan.operations) + len(plan.mappings) + len(plan.issues))
 
     def put(self, plan: OperationPlan) -> str:
         with self._lock:
             if plan.plan_id in self._plans:
                 raise ValueError("计划标识重复")
-            while len(self._plans) >= self._max:
-                victim = next((pid for pid in self._plans if self._states[pid] != "running"), None)
+            weight = self._weight(plan)
+            budget = max(self._entry_budget, weight)  # 单个超大计划允许独占缓存。
+            running = [pid for pid, state in self._states.items() if state == "running"]
+            active_weight = sum(self._weight(self._plans[pid]) for pid in running)
+            if len(running) >= self._max or active_weight + weight > budget:
+                raise PlanConflictError("运行中计划已占用缓存预算，请稍后重新试运行")
+            # 先确认可容纳，再淘汰；避免一个拒绝的请求先破坏其它未执行计划。
+            total = sum(self._weight(cached) for cached in self._plans.values())
+            while len(self._plans) >= self._max or total + weight > budget:
+                victim = next((pid for pid in self._plans if self._states[pid] in {"finished", "failed"}), None)
                 if victim is None:
-                    raise PlanConflictError("所有缓存计划正在执行，请稍后重新试运行")
+                    victim = next(pid for pid in self._plans if self._states[pid] == "ready")
+                total -= self._weight(self._plans[victim])
                 del self._plans[victim]
                 del self._states[victim]
                 del self._pages[victim]

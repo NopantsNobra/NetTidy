@@ -120,6 +120,45 @@ class PlanRegistryTests(unittest.TestCase):
             self.assertFalse(registry._pages)
 
 
+    def test_plan_entry_budget_prefers_finished_and_keeps_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            plans = [_plan(_make_run_root(base, str(n))) for n in range(4)]
+            unit = web.PlanRegistry._weight(plans[0])
+            registry = web.PlanRegistry(max_plans=16, max_entries=3 * unit)
+            for plan in plans[:3]:
+                registry.put(plan)
+            registry.claim(plans[0].plan_id)
+            registry.claim(plans[2].plan_id)
+            registry.finish(plans[2].plan_id, True)
+            registry.put(plans[3])
+            self.assertIs(registry.get(plans[0].plan_id), plans[0])
+            self.assertIs(registry.get(plans[1].plan_id), plans[1])
+            self.assertIs(registry.get(plans[3].plan_id), plans[3])
+            with self.assertRaises(ValueError):
+                registry.get(plans[2].plan_id)
+            self.assertNotIn(plans[2].plan_id, registry._pages)
+
+    def test_budget_rejection_does_not_evict_unrelated_ready_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            a, b, c = [_plan(_make_run_root(base, str(n))) for n in range(3)]
+            unit = web.PlanRegistry._weight(a)
+            registry = web.PlanRegistry(max_entries=2 * unit)
+            registry.put(a)
+            registry.put(b)
+            registry.claim(a.plan_id)
+            c.operations.extend(c.operations * 5)
+            with self.assertRaises(web.PlanConflictError):
+                registry.put(c)
+            self.assertIs(registry.get(b.plan_id), b)
+            registry.finish(a.plan_id, True)
+            registry.put(c)
+            self.assertEqual(list(registry._plans), [c.plan_id])
+            self.assertEqual(list(registry._pages), [c.plan_id])
+
+
+
 class PortBindingTests(unittest.TestCase):
     def test_occupied_port_is_classified_with_port_number(self) -> None:
         """真实占用一个临时端口，再让服务绑定它：必须得到可判定的占用错误。"""
