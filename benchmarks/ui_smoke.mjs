@@ -101,7 +101,7 @@ server.serve_forever()
   assert.equal(oldGone,true);
   const otherStill=await evaluate("api('/api/plan/rows',"+JSON.stringify({plan_id:otherPlan.plan_id,root:otherPlan.resource_roots[0],limit:1})+").then(x=>x.total>0,()=>false)");
   assert.equal(otherStill,true);
-  console.log('Replan released previous ID and preserved independent tab plan');
+  console.log('Same-tab replan released previous ID and preserved independent plan');
   assert.equal(await evaluate("lastPlan.mapping_count"),126);
   assert.equal(await evaluate("document.querySelectorAll('#cards .card').length"),7);
   assert.equal(await evaluate("document.getElementById('execBtn').classList.contains('danger')"),true);
