@@ -24,3 +24,14 @@ class WorkspaceVisualContractTests(unittest.TestCase):
                        'min-width:800px;table-layout:fixed', '/api/plan/rows', 'data-more=',
                        'limit:200'):
             self.assertIn(marker, INDEX_HTML)
+
+    def test_execution_choice_precedes_first_plan_and_idle_progress_is_compact(self):
+        self.assertLess(INDEX_HTML.index('id="execMode"'), INDEX_HTML.index('onclick="makePlan()"'))
+        self.assertEqual(INDEX_HTML.count('id="execMode"'), 1)
+        self.assertIn('.task-progress.idle{display:none}', INDEX_HTML)
+        self.assertIn("fill.closest('.task-progress')", INDEX_HTML)
+
+    def test_duplicate_render_uses_single_group_index(self):
+        self.assertIn('const rowsByGroup = new Map()', INDEX_HTML)
+        self.assertIn('const deletableSet = new Set(g.deletable_paths || [])', INDEX_HTML)
+        self.assertNotIn('data.rows.filter(r=>r.duplicate_group_id===g.duplicate_group_id)', INDEX_HTML)
