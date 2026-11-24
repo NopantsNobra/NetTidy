@@ -1,0 +1,197 @@
+"""Opt-in plan benchmark. Real paths are read-only; generated fixtures are isolated."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from contextlib import ExitStack
+import cProfile
+import ctypes
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import pstats
+import statistics
+import sys
+import tempfile
+import time
+import tracemalloc
+from unittest.mock import patch
+
+from nesttidy import planner
+from nesttidy.reports import readable_group_rows
+from nesttidy.web import _plan_payload
+
+
+def working_set_bytes():
+    if os.name != "nt":
+        return None
+    from ctypes import wintypes
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                "PagefileUsage", "PeakPagefileUsage")]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+    counters = Counters()
+    counters.cb = ctypes.sizeof(counters)
+    if not psapi.GetProcessMemoryInfo(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        return None
+    return {"current": counters.WorkingSetSize, "process_peak": counters.PeakWorkingSetSize}
+
+
+def make_fixture(root: Path, count: int, shape: str) -> None:
+    for i in range(count):
+        package = root / ("pkg-%03d" % (i % 100) if shape == "multi" else "pkg")
+        if shape == "deep":
+            parent = package / ("branch-%03d" % (i % 100)) / "a" / "b" / "c"
+        elif shape == "conflict":
+            parent = package / ("branch-%03d" % (i % 100))
+        elif shape == "move":
+            parent = package / "wrapper" / "payload"
+        else:
+            parent = package
+        parent.mkdir(parents=True, exist_ok=True)
+        filename = "file-%08d.dat" % (i // 100 if shape == "conflict" else i)
+        (parent / filename).write_bytes(b"benchmark")
+
+
+def canonical_digest(plan):
+    """Hash complete operation/mapping semantics, ignoring random IDs/timestamps."""
+    digest = hashlib.sha256()
+    for label, records, omitted in (
+        ("operations", plan.operations, {"op_id"}),
+        ("mappings", plan.mappings, {"entry_id"}),
+        ("issues", plan.issues, {"issue_id", "created_at"}),
+    ):
+        digest.update(label.encode())
+        for record in records:
+            value = {k: v for k, v in record.to_dict().items() if k not in omitted}
+            digest.update(json.dumps(value, ensure_ascii=True, sort_keys=True).encode())
+            digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def run_once(root: Path, mode: str, pages: int, instrument: bool = False):
+    phases = Counter()
+    calls = Counter()
+    progress_calls = Counter()
+    def progress(done, total, label="", step=None):
+        progress_calls[step or ""] += 1
+
+    with ExitStack() as stack:
+        if instrument:
+            def timed(name, fn):
+                def wrapped(*args, **kwargs):
+                    calls[name] += 1
+                    start = time.perf_counter()
+                    try:
+                        return fn(*args, **kwargs)
+                    finally:
+                        phases[name] += time.perf_counter() - start
+                return wrapped
+            for name in ("build_tree", "resource_roots", "collect_dir_paths", "prune_empty_dirs",
+                         "apply_root_chain_penetration", "process_node", "final_files",
+                         "scan_residual_dirs", "snapshot_digest"):
+                stack.enter_context(patch.object(planner, name, timed(name, getattr(planner, name))))
+            original_resolver = planner._path_resolver
+            def resolver_factory():
+                resolve = original_resolver()
+                seen = set()
+                def resolve_counted(path):
+                    key = str(path)
+                    calls["resolve.hit" if key in seen else "resolve.miss"] += 1
+                    seen.add(key)
+                    return resolve(path)
+                return timed("resolve", resolve_counted)
+            stack.enter_context(patch.object(planner, "_path_resolver", resolver_factory))
+        start = time.perf_counter()
+        plan = planner.build_plan(str(root), mode=mode, progress=progress)
+        plan_seconds = time.perf_counter() - start
+    start = time.perf_counter()
+    payload = _plan_payload(plan)
+    payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    first_screen_seconds = time.perf_counter() - start
+    samples = []
+    for i in range(pages):
+        if not plan.resource_roots:
+            break
+        resource = plan.resource_roots[i % len(plan.resource_roots)]
+        start = time.perf_counter()
+        readable_group_rows(plan, resource, offset=(i // len(plan.resource_roots)) * 200, limit=200)
+        samples.append(time.perf_counter() - start)
+    sorted_samples = sorted(samples)
+    p95 = sorted_samples[max(0, (95 * len(samples) + 99) // 100 - 1)] if samples else None
+    return {
+        "version": plan.app_version, "rule_version": plan.rule_version,
+        "mapping_count": len(plan.mappings), "resource_count": len(plan.resource_roots),
+        "operation_counts": dict(Counter(op.op_type for op in plan.operations)),
+        "issue_counts": dict(Counter(issue.code for issue in plan.issues)),
+        "plan_seconds": plan_seconds, "first_screen_seconds": first_screen_seconds,
+        "payload_bytes": payload_bytes, "page_p50_seconds": statistics.median(samples) if samples else None,
+        "page_p95_seconds": p95, "page_samples": len(samples),
+        "phase_seconds_inclusive": dict(phases), "phase_calls": dict(calls),
+        "progress_calls": dict(progress_calls), "working_set_bytes": working_set_bytes(),
+        "snapshot_digest": plan.source_snapshot_digest, "semantic_digest": canonical_digest(plan),
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--root", type=Path, help="Existing directory, read-only plan")
+    source.add_argument("--fixture-files", type=int, help="Generated temporary fixture, e.g. 200000")
+    parser.add_argument("--fixture-parent", type=Path, help="Existing volume/directory for isolated fixture")
+    parser.add_argument("--shape", choices=("flat", "deep", "multi", "conflict", "keep", "move"), default="multi")
+    parser.add_argument("--mode", choices=("batch", "single"), default="batch")
+    parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument("--pages", type=int, default=10)
+    parser.add_argument("--disk", default="unspecified", help="Operator-supplied SSD/HDD/filesystem note")
+    parser.add_argument("--profile", action="store_true", help="Extra instrumented cProfile run (not included in median)")
+    parser.add_argument("--memory", action="store_true", help="Extra tracemalloc run (not included in median)")
+    args = parser.parse_args(argv)
+    if args.repeat < 1 or args.pages < 0 or (args.fixture_files is not None and args.fixture_files < 1):
+        parser.error("repeat/fixture-files must be positive; pages nonnegative")
+    with ExitStack() as stack:
+        if args.root is not None:
+            if args.fixture_parent is not None:
+                parser.error("--fixture-parent only applies to generated fixtures")
+            root = args.root.resolve(strict=True)
+            if not root.is_dir():
+                parser.error("--root must be a directory")
+            source_kind = "real-read-only"
+        else:
+            root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nesttidy-bench-", dir=args.fixture_parent)))
+            make_fixture(root, args.fixture_files, args.shape)
+            source_kind = "synthetic"
+        results = [run_once(root, args.mode, args.pages) for _ in range(args.repeat)]
+        result = {"source": source_kind, "shape": args.shape if source_kind == "synthetic" else "operator directory",
+                  "disk_note": args.disk, "platform": platform.platform(), "python": platform.python_version(),
+                  "cache_note": "first run not guaranteed cold; subsequent runs potentially warm",
+                  "runs": results, "median_plan_seconds": statistics.median(r["plan_seconds"] for r in results),
+                  "median_first_screen_seconds": statistics.median(r["first_screen_seconds"] for r in results),
+                  "semantic_stable": len({r["semantic_digest"] for r in results}) == 1,
+                  "snapshot_stable": len({r["snapshot_digest"] for r in results}) == 1}
+        if args.profile:
+            profiler = cProfile.Profile()
+            result["profile_run"] = profiler.runcall(run_once, root, args.mode, args.pages, True)
+            pstats.Stats(profiler, stream=sys.stderr).sort_stats("cumulative").print_stats(30)
+        if args.memory:
+            tracemalloc.start()
+            try:
+                result["memory_run"] = run_once(root, args.mode, args.pages)
+                current, peak = tracemalloc.get_traced_memory()
+                result["tracemalloc_bytes"] = {"current": current, "peak": peak}
+            finally:
+                tracemalloc.stop()
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+
+
+if __name__ == "__main__":
+    main()

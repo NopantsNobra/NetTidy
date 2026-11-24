@@ -268,6 +268,7 @@ M0–M1.6 已完成（2026-10-26 ~ 10-27）：可信基线、规则接缝、剥�
 #### B · Windows 实机性能基线
 
 - [ ] B1 建立 opt-in benchmarks（不将重型夹具加入日常单测）：20 万真实文件基准、50 万压力、100 万探索；记录平坦/深层/多根/高冲突/全 keep/大量 move 等数据形态及 SSD/HDD 条件。真实目录仅做只读规划，写入实验用隔离夹具。
+  - 工具第一切片：`python -m benchmarks.plan_bench --root <目录> --repeat 3 --profile --memory --disk <介质>` 只读真实目录；`--fixture-files 200000 --shape multi --fixture-parent <临时盘目录>` 生成隔离夹具；50 万/100 万可按需指定。记录规划、首屏、分页、快照与语义摘要、阶段调用、working set 和独立内存/剖析轮次。Windows CI #45374879878 双版本各 266 例（1 skip），真实目录不变、隔离夹具回收用例通过。20 万实际用户文件及真实盘 I/O 尚待测，不勾选 B1/B2。
 - [ ] B2 分段测量：perf_counter、cProfile、独立 tracemalloc 轮次及 Windows working set；记录扫描、resolve 次数/耗时/命中率、规则、计划构建、快照、首屏、分页 p50/p95、执行吞吐及连续试运行内存。记录版本、Python、磁盘、冷热缓存、文件/目录数，重复同夹具取中位数；对照归一化操作、映射、摘要和异常。结果回填本节，不另建治理文档。
 
 #### C · 低风险性能优化（B 后优先）
