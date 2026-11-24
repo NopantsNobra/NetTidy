@@ -600,5 +600,45 @@ class MoveResourceBoundaryTests(unittest.TestCase):
                     self.assertFalse((target / source.name).exists())
 
 
+
+    def test_move_refuses_replaced_resource_root_with_matching_file_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            selected = base / "源"
+            root = selected / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            plan = build_plan(str(selected), "batch")
+            original_stat = source.stat()
+            old = base / "原资源包"
+            root.rename(old)
+            touch(source, "payload")
+            os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "payload")
+            self.assertEqual((old / "壳" / "文件.txt").read_text(encoding="utf-8"), "payload")
+            self.assertFalse((root / "文件.txt").exists())
+            self.assertTrue(any(row.code == "MOVE_BOUNDARY_REFUSED" for row in result.issues))
+
+    def test_r6_preserves_replaced_empty_resource_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            selected = base / "源"
+            root = selected / "资源包"
+            root.mkdir(parents=True)
+            plan = build_plan(str(selected), "batch")
+            root.rename(base / "原资源包")
+            root.mkdir()
+            tx = base / "tx.jsonl"
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+
+            self.assertTrue(root.is_dir())
+            self.assertFalse(tx.exists())
+            self.assertTrue(any(row.code == "R6_PATH_REFUSED" for row in result.issues))
+
+
 if __name__ == "__main__":
     unittest.main()
