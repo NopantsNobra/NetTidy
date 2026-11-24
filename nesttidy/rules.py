@@ -16,7 +16,7 @@ MAX_NAME_LEN = 180
 MAX_SUFFIX_LEN = 24
 
 
-@dataclass
+@dataclass(slots=True)
 class VFile:
     name: str
     original_path: Path
@@ -27,7 +27,7 @@ class VFile:
     conflict_trace: list[str] = field(default_factory=list)
 
 
-@dataclass
+@dataclass(slots=True)
 class VDir:
     name: str
     original_path: Path

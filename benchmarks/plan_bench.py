@@ -212,6 +212,35 @@ def run_execution_fixture(count: int, parent: Path | None, repeat: int):
     return {"runs": results, "median_files_per_second": statistics.median(r["files_per_second"] for r in results)}
 
 
+def resident_memory_probe(root: Path, mode: str, rounds: int):
+    """Measure actual repeated registry retention; no mutation, no forced cold cache."""
+    import gc
+    registry = PlanRegistry()
+    samples = []
+    tracemalloc.start()
+    try:
+        for _ in range(rounds):
+            start = time.perf_counter()
+            plan = planner.build_plan(str(root), mode=mode)
+            registry.put(plan)
+            count = len(plan.mappings)
+            if plan.resource_roots:
+                registry.page(plan.plan_id, plan.resource_roots[0], 0, 200)
+            del plan
+            gc.collect()
+            current, peak = tracemalloc.get_traced_memory()
+            samples.append({"mappings": count, "retained_plans": len(registry._plans),
+                            "entries": sum(registry._weight(p) for p in registry._plans.values()),
+                            "traced_current": current, "traced_peak": peak,
+                            "working_set": working_set_bytes(), "seconds": time.perf_counter() - start})
+        registry.clear()
+        gc.collect()
+        released, _ = tracemalloc.get_traced_memory()
+        return {"rounds": samples, "traced_after_clear": released}
+    finally:
+        tracemalloc.stop()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -225,10 +254,13 @@ def main(argv=None):
     parser.add_argument("--disk", default="unspecified", help="Operator-supplied SSD/HDD/filesystem note")
     parser.add_argument("--profile", action="store_true", help="Extra instrumented cProfile run (not included in median)")
     parser.add_argument("--execute-fixture-files", type=int, default=0, help="Opt-in extra isolated move/undo benchmark; never mutates --root")
+    parser.add_argument("--resident-rounds", type=int, default=0, help="Extra repeated read-only plan retention probe")
     parser.add_argument("--memory", action="store_true", help="Extra tracemalloc run (not included in median)")
     args = parser.parse_args(argv)
     if args.repeat < 1 or args.pages < 0 or (args.fixture_files is not None and args.fixture_files < 1):
         parser.error("repeat/fixture-files must be positive; pages nonnegative")
+    if args.resident_rounds < 0:
+        parser.error("--resident-rounds must be nonnegative")
     if args.execute_fixture_files < 0:
         parser.error("--execute-fixture-files must be nonnegative")
     with ExitStack() as stack:
@@ -264,6 +296,8 @@ def main(argv=None):
                 result["tracemalloc_bytes"] = {"current": current, "peak": peak}
             finally:
                 tracemalloc.stop()
+        if args.resident_rounds:
+            result["resident_memory"] = resident_memory_probe(root, args.mode, args.resident_rounds)
         if args.execute_fixture_files:
             result["execution_fixture"] = run_execution_fixture(args.execute_fixture_files, args.fixture_parent, args.repeat)
         print(json.dumps(result, ensure_ascii=True, indent=2))

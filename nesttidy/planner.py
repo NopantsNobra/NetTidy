@@ -255,12 +255,16 @@ def build_plan(
             actual_target = target
             if output_root:
                 actual_target = resolve(Path(output_root)) / root.name / target.relative_to(root)
+            source_text = str(file_item.original_path)
+            target_text = str(actual_target)
+            if source_text == target_text:
+                target_text = source_text
             op = Operation(
                 op_id=str(uuid.uuid4()),
                 resource_root_id=resource_id,
                 op_type=op_type,
-                source_path=str(file_item.original_path),
-                target_path=str(actual_target),
+                source_path=source_text,
+                target_path=target_text,
                 rule_trace=file_item.traces or ["保留原位"],
                 risk_level="low" if op_type in {"keep", "copy"} else "medium",
                 precheck={"size": file_item.size, "mtime_ns": file_item.mtime_ns},
@@ -271,9 +275,9 @@ def build_plan(
                     entry_id=op.op_id,
                     resource_root_id=resource_id,
                     entry_type="file",
-                    original_path=str(file_item.original_path),
-                    current_path=str(file_item.original_path),
-                    planned_target_path=str(actual_target),
+                    original_path=source_text,
+                    current_path=source_text,
+                    planned_target_path=target_text,
                     operation_type=op_type,
                     rule_trace=op.rule_trace,
                     risk_level=op.risk_level,
