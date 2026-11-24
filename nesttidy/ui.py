@@ -240,7 +240,7 @@ function say(text, isError){
 function setBusy(on){
   if(busy === on) return;
   busy = on;
-  document.querySelectorAll('button').forEach(b=>{ if(!b.classList.contains('dok') && !b.classList.contains('dno')) b.disabled = on; });
+  document.querySelectorAll('button').forEach(b=>{ if(!b.classList.contains('dok') && !b.classList.contains('dno')) b.disabled = on || b.dataset.pageDisabled === 'true'; });
   if(!on){
     refreshDupControls();
     if(lastPlan){refreshGroupNav();pageControls(previewTotal,previewOffset,previewLoading);}
@@ -421,10 +421,11 @@ function renderPlan(plan){
   document.querySelectorAll('#filters .chip').forEach(el=>el.addEventListener('click',()=>setFilter(el.dataset.f)));
   initPreviewGroups();
   document.getElementById('foldersSection').classList.add('hidden');
+  document.getElementById('folders').innerHTML='';
   if(v.folders.length){
     document.getElementById('foldersSection').classList.remove('hidden');
-    document.getElementById('folders').innerHTML = '<table><thead><tr><th>资源包</th><th>会被清掉的文件夹</th><th>层级</th></tr></thead><tbody>'
-      + v.folders.map(f=>'<tr data-open="'+esc(f.full_path||'')+'"><td>'+esc(f.root_name)+'</td><td>'+pathCell(f.path)+'</td><td>第 '+f.depth+' 层</td></tr>').join('')+'</tbody></table>';
+    mountPagedRows('folders',v.folders,['资源包','会被清掉的文件夹','层级'],
+      f=>'<tr data-open="'+esc(f.full_path||'')+'"><td>'+esc(f.root_name)+'</td><td>'+pathCell(f.path)+'</td><td>第 '+f.depth+' 层</td></tr>',{total:v.folder_total});
   } else if (v.output_root) {
     document.getElementById('foldersSection').classList.remove('hidden');
     document.getElementById('folders').innerHTML = '<p class="muted">这次是复制到输出目录，源目录里的空壳会原样保留，所以没有要清的空文件夹。想连空壳一起清掉，就用 move 模式执行。</p>';
@@ -434,10 +435,8 @@ function renderPlan(plan){
     + table(d.rule_rows, ['rule','name','count'], ['规则','说明','条数']);
   const b = d.boundary;
   document.getElementById('boundaryNote').innerHTML = '<p>已校验 <b>'+b.checked+'</b> 条文件操作，目标越界 <b>'+b.out_of_bound+'</b> 条；边界口径：'+esc(b.label)+'。</p>';
-  document.getElementById('issues').innerHTML = plan.issues.length
-    ? '<table><thead><tr><th>文件</th><th>为什么跳过</th><th>代码</th><th>状态</th></tr></thead><tbody>'
-      + plan.issues.map(i=>'<tr><td>'+pathCell(i.path)+'</td><td>'+esc(issueText(i.code,i.message))+'</td><td class="muted">'+esc(i.code)+'</td><td>'+esc(i.final_status)+'</td></tr>').join('')+'</tbody></table>'
-    : '<p class="muted">没有异常项。</p>';
+  mountPagedRows('issues',plan.issues,['文件','为什么跳过','代码','状态'],
+    i=>'<tr><td>'+pathCell(i.path)+'</td><td>'+esc(issueText(i.code,i.message))+'</td><td class="muted">'+esc(i.code)+'</td><td>'+esc(i.final_status)+'</td></tr>',{total:plan.issue_total,empty:'没有异常项。'});
   updateExecPanel(v);
 }
 function rowHtml(g,r){
@@ -689,11 +688,10 @@ const doDelete = guard(async function doDelete(entries){
     let html = '<div class="headline">已处理 '+done+' 个（回收站 '+data.recycled+' / 彻底删除 '+data.deleted+'），跳过 '+data.skipped+'，失败 '+data.failed+'。'
       + (data.recycled ? '想反悔就去回收站还原——清空回收站之前它们一直占着空间。' : '')
       + '</div>';
-    html += '<table><thead><tr><th>文件</th><th>结果</th><th>说明</th></tr></thead><tbody>'
-      + data.rows.map(r=>'<tr data-pick="'+esc(r.path)+'"><td><code title="'+esc(r.path)+'">'+esc(fileName(r.path))+'</code></td><td>'+esc(r.status)+'</td><td>'+esc(issueText(r.code,r.message))+'</td></tr>').join('')+'</tbody></table>';
-    if(data.transaction_log) html += '<p class="muted">删除日志：<code>'+esc(data.transaction_log)+'</code></p>';
+    const suffix=data.transaction_log?'<p class="muted">删除日志：<code>'+esc(data.transaction_log)+'</code></p>':'';
     document.getElementById('dupTools').innerHTML = '';
-    document.getElementById('dupResult').innerHTML = html;
+    mountPagedRows('dupResult',data.rows,['文件','结果','说明'],
+      r=>'<tr data-pick="'+esc(r.path)+'"><td><code title="'+esc(r.path)+'">'+esc(fileName(r.path))+'</code></td><td>'+esc(r.status)+'</td><td>'+esc(issueText(r.code,r.message))+'</td></tr>',{prefix:html,suffix});
     say('删除完成：成功 '+done+'，跳过 '+data.skipped+'，失败 '+data.failed+'。');
   }catch(e){ prog.fail(); say(e.message,true); }
   finally{ prog.stop(); }
@@ -708,10 +706,9 @@ const runRepair = guard(async function runRepair(){
   try{
     const data = await api('/api/repair',{selected_root:cleanPath(root.value),clear_readonly:fixReadonly.checked,clear_hidden:fixHidden.checked,clear_zone_identifier:fixZone.checked,progress_key:prog.key});
     const bad = data.rows || [];
-    document.getElementById('repairResult').innerHTML = bad.length
-      ? '<div class="headline">检查 '+data.checked+' 项，异常 '+bad.length+' 项（正常项略）。</div>'
-        + table(bad,['path','action','status','message'],['文件','动作','状态','说明'])
-      : '<p class="muted">检查 '+data.checked+' 项，全部正常，没有需要列出的异常。</p>';
+    mountPagedTable('repairResult',bad,['path','action','status','message'],['文件','动作','状态','说明'],
+      {prefix:bad.length?'<div class="headline">检查 '+data.checked+' 项，异常 '+bad.length+' 项（正常项略）。</div>':'',
+       empty:'检查 '+data.checked+' 项，全部正常，没有需要列出的异常。'});
     say('权限修复完成：检查 '+data.checked+' 项，异常 '+bad.length+' 项。');
   }catch(e){ prog.fail(); say(e.message,true); }
   finally{ prog.stop(); }
@@ -736,10 +733,9 @@ async function executeCopy(){
     const data = await api('/api/execute-copy',{plan_id:currentPlanId,progress_key:prog.key});
     markPlanExecuted();
     const outRoot = (lastPlan && lastPlan.output_root) || cleanPath(output.value);
-    document.getElementById('execResult').innerHTML =
-      '<div class="headline">复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。</div>'
-      + '<p>输出目录：<code>'+esc(outRoot)+'</code> <button class="secondary" data-open-out="'+esc(outRoot)+'">在资源管理器中打开</button></p>'
-      + table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态']);
+    mountPagedTable('execResult',data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'],
+      {prefix:'<div class="headline">复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。</div>'
+      + '<p>输出目录：<code>'+esc(outRoot)+'</code> <button class="secondary" data-open-out="'+esc(outRoot)+'">在资源管理器中打开</button></p>'});
     document.querySelectorAll('#execResult button[data-open-out]').forEach(b=>b.addEventListener('click',()=>reveal(b.dataset.openOut,false)));
     say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动，输出目录见下方。');
   }catch(e){ prog.fail(); say(e.message,true); }
@@ -758,10 +754,9 @@ async function executeMove(){
   try{
     const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true,progress_key:prog.key});
     markPlanExecuted();
-    document.getElementById('execResult').innerHTML =
-      '<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。</div>'
-      + table(data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'])
-      + (data.transaction_log ? '<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>' : '');
+    mountPagedTable('execResult',data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'],
+      {prefix:'<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。</div>',
+       suffix:data.transaction_log?'<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>':''});
     document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
     say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。');
   }catch(e){ prog.fail(); say(e.message,true); }
@@ -781,8 +776,8 @@ const undoRun = guard(async function undoRun(logPath){
   const prog = trackProgress('undoFill','undoProg');
   try{
     const data = await api('/api/undo',{transaction_log:logPath,progress_key:prog.key});
-    const rows = (data.rows||[]).map(function(r){ return Object.assign({}, r, {action: (UNDO_ACTION[r.action]||r.action)}); });
-    document.getElementById('execResult').innerHTML = table(rows,['action','source','status','message'],['动作','路径','结果','说明']);
+    mountPagedRows('execResult',data.rows||[],['动作','路径','结果','说明'],
+      r=>'<tr>'+[UNDO_ACTION[r.action]||r.action,r.source,r.status,r.message].map(v=>'<td>'+esc(v)+'</td>').join('')+'</tr>');
     say('撤销完成，逐条结果见下方。');
   }catch(e){ prog.fail(); say(e.message,true); }
   finally{ prog.stop(); }
@@ -796,11 +791,43 @@ const exportReport = guard(async function exportReportInner(){
 });
 async function loadHistory(){
   try{ const data = await fetch('/api/history').then(r=>r.json());
-    document.getElementById('history').innerHTML = table(data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
+    mountPagedTable('history',data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
   }catch(e){say(e.message,true);}
 }
 async function makeManual(){
   try{ const data = await api('/api/manual',{}); say('PDF 手册已生成：'+data.manual_pdf); }catch(e){say(e.message,true);}
+}
+// Read-only result tables retain the received rows but never accumulate DOM.
+const RESULT_PAGE=80;
+function mountPagedRows(id,rows,heads,renderRow,opts={}){
+  const box=document.getElementById(id), total=opts.total??rows.length;
+  const note=total>rows.length?'<p class="muted">仅加载 '+rows.length+' / '+total+' 条；完整记录见报告或日志。</p>':'';
+  box.innerHTML=(opts.prefix||'')+note+(rows.length?
+    '<div class="result-page"></div><div class="preview-nav"><button class="secondary" data-result-prev>上一页</button><button class="secondary" data-result-next>下一页</button><span class="muted" data-result-count role="status"></span><label>跳至 <input type="number" data-result-jump min="1" value="1"></label><button class="secondary" data-result-go>跳转</button></div>'
+    :'<p class="muted">'+esc(opts.empty||'无异常项。')+'</p>')+(opts.suffix||'');
+  if(!rows.length)return;
+  const page=box.querySelector('.result-page'), prev=box.querySelector('[data-result-prev]'),next=box.querySelector('[data-result-next]'),count=box.querySelector('[data-result-count]'),jump=box.querySelector('[data-result-jump]'),go=box.querySelector('[data-result-go]');
+  let offset=0;
+  const max=Math.ceil(rows.length/RESULT_PAGE);
+  jump.max=String(max);
+  function show(start){
+    offset=Math.max(0,Math.min((max-1)*RESULT_PAGE,start));
+    page.innerHTML='<table><thead><tr>'+heads.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.slice(offset,offset+RESULT_PAGE).map(renderRow).join('')+'</tbody></table>';
+    for(const [btn,disabled] of [[prev,offset===0],[next,offset+RESULT_PAGE>=rows.length]]){
+      btn.dataset.pageDisabled=String(disabled);btn.disabled=busy||disabled;
+    }
+    const n=offset/RESULT_PAGE+1;jump.value=String(n);
+    count.textContent='第 '+n+' / '+max+' 页 · '+(offset+1)+'–'+Math.min(offset+RESULT_PAGE,rows.length)+' / '+rows.length+' 条';
+  }
+  prev.addEventListener('click',()=>{if(!busy)show(offset-RESULT_PAGE);});
+  next.addEventListener('click',()=>{if(!busy)show(offset+RESULT_PAGE);});
+  function jumpTo(){if(!busy)show((Math.min(max,Math.max(1,Math.floor(Number(jump.value)||1)))-1)*RESULT_PAGE);}
+  go.addEventListener('click',jumpTo);jump.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();jumpTo();}});
+  if(busy)go.disabled=true;
+  show(0);
+}
+function mountPagedTable(id,rows,cols,heads,opts={}){
+  return mountPagedRows(id,rows,heads||cols,r=>'<tr>'+cols.map(c=>'<td>'+esc(Array.isArray(r[c])?r[c].join(' | '):r[c])+'</td>').join('')+'</tr>',opts);
 }
 function table(rows, cols, heads){
   if(!rows || !rows.length) return '<p class="muted">无异常项。</p>';
