@@ -17,11 +17,11 @@ from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize
 from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
-from .model import OperationPlan
+from .model import MappingEntry, OperationPlan
 from .planner import build_plan
 from .recovery import rows_as_dicts, undo_transaction
 from .repair import repair_permissions
-from .reports import plan_display_stats, readable_group_rows, write_plan_report
+from .reports import build_mapping_index, plan_display_stats, readable_group_rows, write_plan_report
 from .storage import list_history
 from .ui import INDEX_HTML
 
@@ -30,12 +30,27 @@ class PlanConflictError(ValueError):
     """计划已经开始执行，禁止再次提交。"""
 
 
+class _PlanPageIndex:
+    """惰性构建，每份计划单独锁，不占用注册表全局锁。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._index: dict[str, list[MappingEntry]] | None = None
+
+    def get(self, plan: OperationPlan) -> dict[str, list[MappingEntry]]:
+        with self._lock:
+            if self._index is None:
+                self._index = build_mapping_index(plan)
+            return self._index
+
+
 class PlanRegistry:
     """冻结计划的身份与执行生命周期分离；执行结果只更新状态元数据。"""
 
     def __init__(self, max_plans: int = 16) -> None:
         self._plans: dict[str, OperationPlan] = {}
         self._states: dict[str, str] = {}
+        self._pages: dict[str, _PlanPageIndex] = {}
         self._lock = threading.Lock()
         self._max = max(1, max_plans)
 
@@ -49,8 +64,10 @@ class PlanRegistry:
                     raise PlanConflictError("所有缓存计划正在执行，请稍后重新试运行")
                 del self._plans[victim]
                 del self._states[victim]
+                del self._pages[victim]
             self._plans[plan.plan_id] = plan
             self._states[plan.plan_id] = "ready"
+            self._pages[plan.plan_id] = _PlanPageIndex()
         return plan.plan_id
 
     def get(self, plan_id: str) -> OperationPlan:
@@ -59,6 +76,14 @@ class PlanRegistry:
         if plan is None:
             raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
         return plan
+
+    def page(self, plan_id: str, root: str, offset: int, limit: int) -> dict:
+        with self._lock:
+            plan = self._plans.get(plan_id)
+            holder = self._pages.get(plan_id)
+        if plan is None or holder is None:
+            raise ValueError("计划不存在或已被淘汰，请重新生成试运行计划")
+        return readable_group_rows(plan, root, offset, limit, index=holder.get(plan))
 
     def claim(self, plan_id: str) -> OperationPlan:
         """首次实际执行前原子消耗计划；终态不随 progress_key 淘汰重置。"""
@@ -80,6 +105,7 @@ class PlanRegistry:
         with self._lock:
             self._plans.clear()
             self._states.clear()
+            self._pages.clear()
 
 
 PLANS = PlanRegistry()
@@ -443,10 +469,9 @@ class Handler(BaseHTTPRequestHandler):
                 _remember_root_quietly(plan.selected_root)
                 self.send_tracked(key, _plan_payload(plan))
             elif self.path == "/api/plan/rows":
-                plan = PLANS.get(_plan_id(body))
                 self.send_json(
-                    readable_group_rows(
-                        plan,
+                    PLANS.page(
+                        _plan_id(body),
                         str(body.get("root") or ""),
                         int(body.get("offset") or 0),
                         min(int(body.get("limit") or ROW_PAGE), 1000),
