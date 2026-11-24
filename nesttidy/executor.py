@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import REPORT_DIR_NAME
 from .duplicate import full_sha256
 from .model import ExecutionIssue, Operation, OperationPlan
-from .planner import issue, validate_copy_output
+from .planner import issue, should_skip_path, validate_copy_output
 from .rules import stable_key
 
 
@@ -74,6 +74,51 @@ def ensure_target_within_output(target: Path, output_root: Path) -> None:
         raise OutputBoundaryError(f"目标越过 copy 输出边界: {target} -> {resolved_parent}")
 
 
+class MoveBoundaryError(ValueError):
+    """原地执行的路径已偏离冻结计划的资源根。"""
+
+
+def ensure_move_path(path: Path, root: Path) -> None:
+    """拒绝越界和重解析点，允许尚不存在的目标目录；不消除 TOCTOU。"""
+    if not path.is_absolute() or not path.is_relative_to(root) or path == root:
+        raise MoveBoundaryError(f"路径越过资源根或指向资源根本身: {path}")
+    try:
+        if path.resolve() != path or root.resolve() != root:
+            raise MoveBoundaryError(f"路径已被重定向: {path}")
+        for current in (path, *path.parents):
+            try:
+                attrs = current.lstat()
+            except FileNotFoundError:
+                continue
+            if current.is_symlink() or getattr(attrs, "st_file_attributes", 0) & 0x400:
+                raise MoveBoundaryError(f"拒绝符号链接或重解析点: {current}")
+            if current == root:
+                break
+    except (OSError, RuntimeError) as exc:
+        raise MoveBoundaryError(f"无法安全复核路径: {path}: {exc}") from exc
+
+
+def move_resource_root(plan: OperationPlan, op: Operation, roots: set[Path]) -> Path:
+    if not op.source_path:
+        raise MoveBoundaryError("缺少源路径")
+    selected = Path(plan.selected_root)
+    source = Path(op.source_path)
+    if not source.is_absolute() or not source.is_relative_to(selected) or source == selected:
+        raise MoveBoundaryError(f"源路径越过选中根: {source}")
+    if selected in roots:
+        root = selected
+    else:
+        root = selected / source.relative_to(selected).parts[0]
+    if root not in roots:
+        raise MoveBoundaryError(f"源路径不属于冻结资源根: {source}")
+    ensure_move_path(source, root)
+    if op.op_type in {"move", "copy"}:
+        if not op.target_path:
+            raise MoveBoundaryError("缺少目标路径")
+        ensure_move_path(Path(op.target_path), root)
+    return root
+
+
 def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None) -> ExecutionResult:
     if not plan.frozen:
         raise ValueError("OperationPlan 未冻结，禁止执行")
@@ -102,12 +147,14 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
     if tx_path:
         tx_path.parent.mkdir(parents=True, exist_ok=True)
 
+    roots = {Path(root) for root in plan.resource_roots}
     ops = deterministic_ops(plan.operations)
     for index, op in enumerate(ops, 1):
         if progress:
             progress(index, len(ops), op.op_type)
         status = "failed"
         try:
+            move_root = move_resource_root(plan, op, roots) if mode == "move" and op.op_type in {"move", "copy", "rmdir"} else None
             precheck(op)
             if op.op_type == "keep":
                 status = "skipped"
@@ -119,10 +166,10 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
                     status = "skipped"
             else:  # move
                 if op.op_type in {"move", "copy"}:
-                    do_move(op, tx_path)
+                    do_move(op, tx_path, move_root)
                     status = "completed"
                 elif op.op_type == "rmdir":
-                    if do_rmdir(op, tx_path):
+                    if do_rmdir(op, tx_path, move_root):
                         status = "completed"
                     else:
                         status = "skipped"
@@ -141,7 +188,7 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
             skipped += 1
         else:
             failed += 1
-    swept = sweep_empty_dirs(plan, tx_path) if mode == "move" else 0
+    swept = sweep_empty_dirs(plan, tx_path, issues) if mode == "move" else 0
     apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None, swept=swept)
 
@@ -219,21 +266,27 @@ def missing_dirs(path: Path) -> list[Path]:
     return list(reversed(missing))
 
 
-def do_move(op: Operation, tx_path: Path | None) -> None:
+def do_move(op: Operation, tx_path: Path | None, root: Path | None = None) -> None:
     assert op.source_path and op.target_path
     source = Path(op.source_path)
     target = Path(op.target_path)
     if source.resolve() == target.resolve():
         return
     for created in missing_dirs(target.parent):
+        if root is not None:
+            ensure_move_path(created, root)
         created.mkdir()
         write_tx(tx_path, {"action": "mkdir", "source": str(created), "status": "done"})
+    if root is not None:
+        ensure_move_path(source, root)
+        ensure_move_path(target, root)
+        precheck(op)
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "started"})
     shutil.move(str(source), str(target))
     write_tx(tx_path, {"action": "move", "source": str(source), "target": str(target), "status": "done"})
 
 
-def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
+def do_rmdir(op: Operation, tx_path: Path | None, root: Path | None = None) -> bool:
     """返回是否达成「目录已不存在」这一目的。非空目录返回 False，上层须计入跳过而非成功。"""
     assert op.source_path
     path = Path(op.source_path)
@@ -241,35 +294,79 @@ def do_rmdir(op: Operation, tx_path: Path | None) -> bool:
         return True
     if any(path.iterdir()):
         return False
+    if root is not None:
+        ensure_move_path(path, root)
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
     path.rmdir()
     write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
     return True
 
 
-def sweep_empty_dirs(plan: OperationPlan, tx_path: Path | None) -> int:
-    """R6：move 收尾清扫。空目录（含整理后变空的资源根）一并删除，逐条写 rmdir 事务行，撤销可原样重建。"""
-    # 选中根本身不删：单包模式下它就是资源根，而包内文件只会在根内移动，正常整理不会让它变空。
-    keep = str(Path(plan.selected_root).resolve())
+def sweep_empty_dirs(
+    plan: OperationPlan, tx_path: Path | None, issues: list[ExecutionIssue] | None = None
+) -> int:
+    """R6：只清扫资源根内未排除的空目录；不跟随重新定向的目录。"""
+    selected = Path(plan.selected_root)
     removed = 0
-    for root in sorted({str(Path(item).resolve()) for item in plan.resource_roots}):
-        base = Path(root)
-        if not base.is_dir():
-            continue
+
+    def report(path: Path, code: str, message: str) -> None:
+        if issues is not None:
+            issues.append(issue(str(path), "execute", code, message))
+
+    def excluded(path: Path) -> bool:
+        reason = should_skip_path(path)
+        if reason and reason.startswith("ACCESS_ERROR"):
+            report(path, "R6_ACCESS_ERROR", reason)
+        return reason is not None
+
+    def eligible(path: Path, base: Path) -> bool:
+        # 比较冻结计划中的原路径，绝不把新 resolve 的结果当成新的资源根。
         try:
-            dirs = [path for path in base.rglob("*") if path.is_dir()]
-        except OSError:
+            if not path.is_relative_to(base) or path.resolve() != path:
+                report(path, "R6_PATH_REFUSED", "清扫路径已重定向或越过资源根，拒绝删除")
+                return False
+            # 删除前复查祖先：目录可能在枚举后被替换，或被设置为排除属性。
+            current = path
+            while current != selected:
+                if excluded(current):
+                    return False
+                current = current.parent
+            return True
+        except (OSError, RuntimeError) as exc:
+            report(path, "R6_ACCESS_ERROR", str(exc))
+            return False
+
+    def walk_error(exc: OSError) -> None:
+        report(Path(exc.filename or str(selected)), "R6_ACCESS_ERROR", str(exc))
+
+    for root in sorted(set(plan.resource_roots), key=lambda value: stable_key(Path(value), "dir")):
+        base = Path(root)
+        if base != selected and base.parent != selected:
+            report(base, "R6_PATH_REFUSED", "资源根不在选中根的直接边界内")
             continue
-        if root != keep:
-            dirs.append(base)
-        # 深 → 浅：先收掉最里层，父目录才可能跟着变空；资源根本身排在最后。
+        if not eligible(base, base) or not base.is_dir():
+            continue
+        dirs: list[Path] = []
+        # topdown 剪枝：Windows junction 也必须按扫描排除规则处理，
+        # 不能只依靠 os.walk 的 followlinks=False。
+        for current, dirnames, _ in os.walk(base, topdown=True, followlinks=False, onerror=walk_error):
+            folder = Path(current)
+            if not eligible(folder, base):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [name for name in dirnames if not excluded(folder / name)]
+            if folder != selected:
+                dirs.append(folder)
         for path in sorted(dirs, key=lambda item: (-len(item.parts), stable_key(item, "dir"))):
+            if not eligible(path, base):
+                continue
             try:
                 if any(path.iterdir()):
                     continue
                 write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "started"})
                 path.rmdir()
-            except OSError:
+            except OSError as exc:
+                report(path, "R6_ACCESS_ERROR", str(exc))
                 continue
             write_tx(tx_path, {"action": "rmdir", "source": str(path), "status": "done"})
             removed += 1
@@ -284,6 +381,8 @@ def write_tx(tx_path: Path | None, row: dict) -> None:
 
 
 def classify_exception(exc: Exception) -> str:
+    if isinstance(exc, MoveBoundaryError):
+        return "MOVE_BOUNDARY_REFUSED"
     if isinstance(exc, OutputBoundaryError):
         return "OUTPUT_BOUNDARY_ESCAPED"
     if isinstance(exc, PermissionError):

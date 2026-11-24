@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +123,93 @@ class EmptyShellSweepTests(unittest.TestCase):
             rebuilt = [row for row in rows if row.action == "rmdir"]
             self.assertTrue(rebuilt, "撤销结果里应出现 rmdir 行")
             self.assertTrue(all(row.status == "ok" for row in rebuilt), f"rmdir 行应记为已还原：{rebuilt}")
+
+
+
+    def test_sweep_preserves_excluded_subtrees(self) -> None:
+        """R6 不得进入扫描时排除的目录，连其中的空壳也不能删。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            package = base / "源" / "资源包"
+            package.mkdir(parents=True)
+            plan = build_plan(str(base / "源"), "batch")
+            protected = [
+                package / "理巢报告" / "空目录",
+                package / "理巢输出_旧" / "空目录",
+                package / "理巢隔离_旧" / "空目录",
+                package / "下载.tmp" / "空目录",
+            ]
+            for folder in protected:
+                folder.mkdir(parents=True)
+            ordinary = package / "普通空目录"
+            ordinary.mkdir()
+            tx = base / "tx.jsonl"
+
+            execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+
+            self.assertTrue(all(folder.is_dir() for folder in protected))
+            self.assertFalse(ordinary.exists(), "正常空壳仍应清扫")
+            rows = [json.loads(line) for line in tx.read_text(encoding="utf-8").splitlines()]
+            for row in rows:
+                self.assertEqual(Path(row["source"]), ordinary)
+
+    def _directory_link(self, link: Path, target: Path) -> None:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True,
+            )
+            if result.returncode:
+                self.skipTest("本机无法创建 junction")
+        else:
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError:
+                self.skipTest("本机无法创建目录符号链接")
+
+    def test_sweep_refuses_redirected_resource_root(self) -> None:
+        """计划冻结后资源根被替换为 junction，不能跟着它清理外部目录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            package = base / "源" / "资源包"
+            package.mkdir(parents=True)
+            outside = base / "外部" / "空目录"
+            outside.mkdir(parents=True)
+            plan = build_plan(str(base / "源"), "batch")
+            package.rmdir()
+            self._directory_link(package, outside.parent)
+            tx = base / "tx.jsonl"
+            try:
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(tx))
+                self.assertTrue(outside.is_dir(), "资源根重定向后不得修改外部目录")
+                self.assertTrue(package.is_dir(), "不得删除重定向后的资源根")
+                self.assertFalse(tx.exists(), "拒绝清扫不得写入目录删除事务")
+                self.assertTrue(any(row.code == "R6_PATH_REFUSED" for row in result.issues))
+            finally:
+                if os.name == "nt":
+                    package.rmdir()
+                else:
+                    package.unlink()
+
+    def test_sweep_does_not_descend_into_directory_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            package = base / "源" / "资源包"
+            package.mkdir(parents=True)
+            outside = base / "外部" / "空目录"
+            outside.mkdir(parents=True)
+            plan = build_plan(str(base / "源"), "batch")
+            link = package / "链接"
+            self._directory_link(link, outside.parent)
+            try:
+                execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+                self.assertTrue(outside.is_dir())
+                self.assertTrue(link.is_dir())
+            finally:
+                if os.name == "nt":
+                    link.rmdir()
+                else:
+                    link.unlink()
 
 
 if __name__ == "__main__":

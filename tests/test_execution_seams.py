@@ -357,9 +357,9 @@ class UndoCreatedFolderTests(unittest.TestCase):
     def _plan(root: Path, source: Path, target: Path) -> OperationPlan:
         return OperationPlan(
             plan_id="p", app_version="t", rule_version="r", mode="move",
-            selected_root=str(root), output_root=None, config_snapshot={},
-            source_snapshot_digest="d", resource_roots=[str(root)],
-            operations=[Operation("o1", "rid", "move", str(source), str(target), ["R4 单文件提级"])],
+            selected_root=str(root.resolve()), output_root=None, config_snapshot={},
+            source_snapshot_digest="d", resource_roots=[str(root.resolve())],
+            operations=[Operation("o1", "rid", "move", str(source.resolve()), str(target.resolve()), ["R4 单文件提级"])],
             issues=[], mappings=[], created_at="t",
         )
 
@@ -478,6 +478,88 @@ class UndoCreatedFolderTests(unittest.TestCase):
             rows = undo_transaction(str(tx))
             self.assertIn("failed", {row.status for row in rows})
             self.assertTrue(tx.exists(), "有失败行还删了日志，用户没法再撤一次")
+
+
+
+class MoveResourceBoundaryTests(unittest.TestCase):
+    def test_move_refuses_cross_resource_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            source = base / "源" / "甲" / "壳" / "文件.txt"
+            touch(source, "payload")
+            other = base / "源" / "乙"
+            other.mkdir()
+            plan = build_plan(str(base / "源"), "batch")
+            op = next(op for op in plan.operations if op.op_type == "move")
+            target = other / "不应创建" / "文件.txt"
+            op.target_path = str(target)
+
+            result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "payload")
+            self.assertFalse(target.parent.exists())
+            self.assertTrue(any(row.code == "MOVE_BOUNDARY_REFUSED" for row in result.issues))
+
+    def test_move_refuses_redirected_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            source = root / "壳" / "文件.txt"
+            touch(source, "payload")
+            plan = build_plan(str(root), "single")
+            outside = base / "外部"
+            source.parent.rename(outside)
+            link = root / "壳"
+            if os.name == "nt":
+                if not CopyOutputBoundaryTests._junction(link, outside):
+                    self.skipTest("本机无法创建 junction")
+            else:
+                try:
+                    link.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    self.skipTest("本机无法创建目录符号链接")
+            try:
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+                self.assertEqual((outside / "文件.txt").read_text(encoding="utf-8"), "payload")
+                self.assertFalse((root / "文件.txt").exists())
+                self.assertTrue(any(row.code == "MOVE_BOUNDARY_REFUSED" for row in result.issues))
+            finally:
+                if os.name == "nt":
+                    link.rmdir()
+                else:
+                    link.unlink()
+
+    def test_planned_rmdir_refuses_redirected_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            root = base / "资源包"
+            root.mkdir()
+            empty = root / "空壳"
+            empty.mkdir()
+            plan = build_plan(str(root), "single")
+            self.assertTrue(any(op.op_type == "rmdir" for op in plan.operations))
+            outside = base / "外部"
+            outside.mkdir()
+            empty.rmdir()
+            if os.name == "nt":
+                if not CopyOutputBoundaryTests._junction(empty, outside):
+                    self.skipTest("本机无法创建 junction")
+            else:
+                try:
+                    empty.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    self.skipTest("本机无法创建目录符号链接")
+            try:
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(base / "tx.jsonl"))
+                self.assertTrue(outside.is_dir())
+                self.assertTrue(empty.is_dir())
+                self.assertTrue(any(row.code == "MOVE_BOUNDARY_REFUSED" for row in result.issues))
+            finally:
+                if os.name == "nt":
+                    empty.rmdir()
+                else:
+                    empty.unlink()
+
 
 
 if __name__ == "__main__":
