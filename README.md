@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.8.20-166451)
+![Version](https://img.shields.io/badge/version-1.8.21-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -138,7 +138,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 基准默认使用隔离临时文件；也可用 --root 指定真实目录进行只读规划测量。重型测试不属于日常单测。
 
-截至 v1.8.20，Windows Python 3.11/3.13 各运行 301 项 unittest（各 1 项跳过），实际 Chromium 测试通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) 和 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957)。
+截至 v1.8.21，本机 Windows Python 3.13 运行 302 项 unittest（4 项跳过：3 项符号链接权限、1 项非 Windows 降级路径），全绿；CI 在 Python 3.11/3.13 各运行 301 项（各 1 项跳过），实际 Chromium 测试通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) 和 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957)。
 
 ## 项目资料
 

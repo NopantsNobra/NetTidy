@@ -7,6 +7,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 APP_NAME = "理巢 NestTidy"
+# 1.8.21：修复主启动入口 start_nesttidy.bat 的编码缺陷——原文件以 LF 行尾 + UTF-8 中文保存，
+# cmd.exe 下 %VAR% 被截断、中文提示被当命令执行，双击无法打开浏览器/服务（管理员实机用 CLI
+# 直接跑故未暴露）。转 CRLF + GBK，实测双击 HTTP 200、Chrome 真实发起 /api/health 请求；
+# 新增 test_web_plans.py:PortBindingTests 字节格式断言（CRLF + GBK 可解码），旧文件上先红。
+# 规则语义与 RULE_VERSION 未变。
 # 1.8.1：修复权限修复工具链噪音——run_attrib / run_icacls 的 subprocess.run(text=True) 补
 # encoding="utf-8", errors="replace"。中文 Windows 上 attrib/icacls 输出 GBK，UTF-8 模式解码
 # 抛 UnicodeDecodeError（读取线程，不传播主流程、产品行为不变，但 stderr 刷堆栈）。规则语义与
@@ -37,7 +42,7 @@ APP_NAME = "理巢 NestTidy"
 # 1.8.18：展示统计目录级缓存及减少临时列表。
 # 1.8.19：重复文件明细有界分页与跨页勾选。
 # 1.8.20：辅助结果表格统一有界分页。
-APP_VERSION = "1.8.20"
+APP_VERSION = "1.8.21"
 # v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
 # undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；

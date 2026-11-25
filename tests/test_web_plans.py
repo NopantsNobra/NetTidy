@@ -243,11 +243,30 @@ class PortBindingTests(unittest.TestCase):
         """bat 必须对退出码 23 单独提示端口占用，并保留原 Python 安装提示。"""
         from nesttidy.app import EXIT_PORT_IN_USE
 
-        bat = (Path(__file__).resolve().parents[1] / "start_nesttidy.bat").read_text(encoding="utf-8")
+        bat = (Path(__file__).resolve().parents[1] / "start_nesttidy.bat").read_text(encoding="gbk")
         self.assertEqual(EXIT_PORT_IN_USE, 23)
         self.assertIn(f'"{EXIT_PORT_IN_USE}"', bat)
         self.assertIn("已被占用", bat)
         self.assertIn("Python 3.11", bat)
+
+    def test_launcher_is_cmd_executable_format(self) -> None:
+        """bat 必须是 cmd.exe 可执行的格式：CRLF 行尾 + 系统 ANSI(GBK) 可解码。
+
+        历史缺陷：文件以 LF 行尾 + UTF-8 中文保存，双击时 cmd.exe 把 `%VAR%`
+        截断成 `IDY_PORT`、把中文提示当命令执行，浏览器与服务都起不来；而
+        `read_text(encoding='utf-8')` 的文本断言照样全绿——内容对、格式错。
+        这里对字节格式立断言，避开 GUI/端口依赖，跨平台可跑。
+        """
+        raw = (Path(__file__).resolve().parents[1] / "start_nesttidy.bat").read_bytes()
+        self.assertGreater(raw.count(b"\r\n"), 0, "bat 必须用 CRLF 行尾，否则 cmd.exe 解析错乱")
+        self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"), "不允许混入裸 LF 行尾")
+        # GBK 可解码意味着 cmd.exe（中文 Windows 默认 ANSI 代码页）能正确显示中文提示
+        try:
+            text = raw.decode("gbk")
+        except UnicodeDecodeError as exc:
+            self.fail(f"bat 必须能被 GBK 解码，否则 cmd.exe 提示乱码: {exc}")
+        self.assertIn("端口", text)
+        self.assertIn("已被占用", text)
 
 
 class WebEndpointTests(unittest.TestCase):

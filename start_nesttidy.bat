@@ -8,13 +8,13 @@ python -m nesttidy.app --host 127.0.0.1 --port %NESTTIDY_PORT%
 set "NESTTIDY_RC=%ERRORLEVEL%"
 if "%NESTTIDY_RC%"=="23" (
   echo.
-  echo 端口 %NESTTIDY_PORT% 已被占用，请先关闭占用该端口的程序后重试。
+  echo �˿� %NESTTIDY_PORT% �ѱ�ռ�ã����ȹر�ռ�øö˿ڵĳ�������ԡ�
   pause
   exit /b 23
 )
 if not "%NESTTIDY_RC%"=="0" (
   echo.
-  echo 理巢启动失败。请确认已经安装 Python 3.11 或更高版本，并在当前目录运行。
+  echo ��������ʧ�ܡ���ȷ���Ѿ���װ Python 3.11 ����߰汾�����ڵ�ǰĿ¼���С�
   pause
   exit /b %NESTTIDY_RC%
 )
