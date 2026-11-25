@@ -148,4 +148,4 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 - [路线图](ROADMAP.md)：验收状态、性能实验、未完成工作及裁决
 - [完整旧版版本记录](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [提交历史](https://github.com/NopantsNobra/NetTidy/commits/main)
 
-当前源码仓库公开，但尚未指定正式 LICENSE；不要将公开可读等同于已授予开源许可。
+本项目以 [MIT License](LICENSE) 授权（Copyright © 2025-2026 服雲）：可自由使用、修改、分发、商用，包括闭源衍生作品；唯一要求是保留版权与许可声明，作者不承担任何担保责任。许可文本见仓库根目录 `LICENSE`。

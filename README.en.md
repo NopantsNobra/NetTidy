@@ -150,4 +150,4 @@ As of v1.8.21, the local Windows Python 3.13 run passed 302 unittest cases (4 sk
 - [Roadmap](ROADMAP.md) — acceptance status, performance experiments and outstanding work (Chinese)
 - [Previous full version history](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [Commit history](https://github.com/NopantsNobra/NetTidy/commits/main)
 
-The source repository is publicly visible, but a formal LICENSE has not been selected. Public visibility does not itself grant an open-source license.
+This project is licensed under the [MIT License](LICENSE) (Copyright © 2025-2026 服雲): free to use, modify, distribute and include in commercial or proprietary works, provided the copyright and permission notice are retained. The author provides it "as is", without warranty. The full text is in the repository root `LICENSE`.
