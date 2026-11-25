@@ -7,10 +7,10 @@
 import os
 
 # 项目根目录（spec 位于 packaging/），保证Analysis能从源码树导入 nesttidy 包
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPEC_PATH)))
+ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 
 a = Analysis(
-    [os.path.join(ROOT, "nesttidy", "app.py")],
+    [os.path.join(ROOT, "packaging", "entry.py")],
     pathex=[ROOT],
     binaries=[],
     datas=[],

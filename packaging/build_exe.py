@@ -50,13 +50,17 @@ def check_prerequisites() -> str:
     major = int(version.split(".", 1)[0])
     if major < 6:
         raise SystemExit(f"PyInstaller 6+  required（当前 {version}）；版本过低不支持 Python 3.13")
+    # 注意：不能对整段输出 strip()，否则会吃掉 git porcelain 行首的状态空格，
+    # 把 ' M path' 变成 'M path'，导致前缀匹配失效。只去掉空行。
     status = subprocess.run(
         ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True
-    ).stdout.strip()
-    # .workbuddy/ 与 _review/ 是约定不入库目录，忽略
+    ).stdout
+    # .workbuddy/ 与 _review/ 不入库；packaging/ 是构建脚本自身，
+    # 改它不影响被打包的源码，不应被自己挡住。
+    ignored_prefixes = ("?? .workbuddy/", "?? _review/", " M packaging/", "?? packaging/")
     unexpected = [
         line for line in status.splitlines()
-        if not line.startswith("?? .workbuddy/") and not line.startswith("?? _review/")
+        if line.strip() and not line.startswith(ignored_prefixes)
     ]
     if unexpected:
         raise SystemExit("构建前工作树有未提交改动，拒绝构建：\n" + "\n".join(unexpected[:10]))
@@ -64,9 +68,10 @@ def check_prerequisites() -> str:
 
 
 def build(version: str) -> None:
+    # 传 .spec 时不能再传 --specpath（makespec 选项与 spec 输入互斥），
+    # spec 文件自身所在目录即 specpath。
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-           "--distpath", str(DIST), "--workpath", str(ROOT / "build"),
-           "--specpath", str(ROOT / "packaging"), str(SPEC)]
+           "--distpath", str(DIST), "--workpath", str(ROOT / "build"), str(SPEC)]
     print("[build] " + " ".join(cmd), flush=True)
     result = subprocess.run(cmd, cwd=ROOT)
     if result.returncode != 0:
