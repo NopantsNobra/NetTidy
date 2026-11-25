@@ -7,6 +7,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 APP_NAME = "理巢 NestTidy"
+# 1.9.0：分发形态阶段起点——管理员裁决解除 EXE 暂缓、启动封装准备；文档一致性治理：
+# ROADMAP 新增「当前态速查表」为唯一当前态权威，修正风险台账提权条目与 guard 表述。
+# 规则语义、计划/报告格式与 RULE_VERSION 均未变（按 AGENTS.md 6.1 严格口径本更接近 patch，
+# 管理员以 1.9.0 作为 EXE 阶段起点，裁决优先）。EXE 构建期工具仅用于打包，运行时零依赖不变。
 # 1.8.21：修复主启动入口 start_nesttidy.bat 的编码缺陷——原文件以 LF 行尾 + UTF-8 中文保存，
 # cmd.exe 下 %VAR% 被截断、中文提示被当命令执行，双击无法打开浏览器/服务（管理员实机用 CLI
 # 直接跑故未暴露）。转 CRLF + GBK，实测双击 HTTP 200、Chrome 真实发起 /api/health 请求；
@@ -42,7 +46,7 @@ APP_NAME = "理巢 NestTidy"
 # 1.8.18：展示统计目录级缓存及减少临时列表。
 # 1.8.19：重复文件明细有界分页与跨页勾选。
 # 1.8.20：辅助结果表格统一有界分页。
-APP_VERSION = "1.8.21"
+APP_VERSION = "1.9.0"
 # v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
 # undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；

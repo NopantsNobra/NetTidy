@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.8.21-166451)
+![Version](https://img.shields.io/badge/version-1.9.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -140,7 +140,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 Benchmarks use isolated temporary fixtures by default. Use --root for read-only planning on a real directory. Heavy benchmarks are opt-in, not part of the routine unit suite.
 
-As of v1.8.21, the local Windows Python 3.13 run passed 302 unittest cases (4 skipped: three symlink-privilege cases and one non-Windows fallback case); CI ran 301 cases per version on Python 3.11 and 3.13 (one skipped per version), and the Chromium smoke test passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957).
+As of v1.9.0, the local Windows Python 3.13 run passed 302 unittest cases (4 skipped: three symlink-privilege cases and one non-Windows fallback case); CI ran 301 cases per version on Python 3.11 and 3.13 (one skipped per version), and the Chromium smoke test passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957).
 
 ## Project documentation
 

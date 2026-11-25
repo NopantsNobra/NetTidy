@@ -17,3 +17,8 @@ delete_log.jsonl
 # 本地测试夹与临时目录
 .LocalSandbox/
 tmp/
+
+# EXE 构建产物（构建期工具输出，不入库；spec 与构建脚本本身入库以复现）
+dist/
+build/
+*.spec.bak
