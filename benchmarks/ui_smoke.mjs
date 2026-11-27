@@ -180,7 +180,14 @@ server.serve_forever()
     return {pageRows,across,group0,preserved,all,none};
   })()`);
   assert.deepEqual(dupPerf,{pageRows:5,across:3,group0:2,preserved:true,all:81,none:0});
-  console.log('Full duplicate server pagination beyond 400 rows and cross-page selection: '+JSON.stringify(dupPerf));
+  const lastDupPage=await evaluate("api('/api/duplicates/rows',"+JSON.stringify({diagnosis_id:dupData.diagnosis_id,group:0,offset:400,limit:80})+")");
+  const victim=lastDupPage.rows.at(-1), keep=lastDupPage.group.keep_path;
+  assert.equal(victim.deletable,true);
+  const removed=await evaluate("api('/api/duplicates/delete',"+JSON.stringify({diagnosis_id:dupData.diagnosis_id,selected_root:dupRoot,mode:'purge',confirm:true,entries:[{path:victim.path,keep_path:keep,expected_sha256:lastDupPage.group.verified_hash}]})+")");
+  assert.equal(removed.deleted,1);assert.equal(existsSync(victim.path),false);assert.equal(existsSync(keep),true);
+  const retired=await evaluate("api('/api/duplicates/rows',"+JSON.stringify({diagnosis_id:dupData.diagnosis_id,group:0,offset:400,limit:80})+").then(()=>false,()=>true)");
+  assert.equal(retired,true);
+  console.log('Full duplicate server pagination beyond 400 rows, selection and deletion: '+JSON.stringify(dupPerf));
   const resultPerf=await evaluate(`(()=>{
     const box=document.getElementById('execResult');
     const rows=Array.from({length:200000},(_,i)=>({path:'file '+i,status:'ok'}));

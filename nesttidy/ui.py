@@ -595,7 +595,7 @@ async function renderDupPage(index,offset){
     }
     html += '<div class="preview-nav"><label for="dupGroupSelect">重复组</label><select id="dupGroupSelect" onchange="chooseDupGroup(Number(this.value))">'
       +groupPage.groups.map((item,i)=>'<option value="'+(start+i)+'"'+(start+i===index?' selected':'')+'>'+esc(item.duplicate_group_id)+' · '+item.file_count+' 个文件</option>').join('')
-      +'</select><button class="secondary" id="dupGroupPrev" onclick="chooseDupGroup(dupGroup-1)">上一组</button><button class="secondary" id="dupGroupNext" onclick="chooseDupGroup(dupGroup+1)">下一组</button><label>组序号 <input type="number" id="dupGroupJump" min="1" max="'+data.group_total+'" value="'+(index+1)+'"></label><button class="secondary" onclick="chooseDupGroup(Number(document.getElementById(\'dupGroupJump\').value)-1)">跳转</button><span class="muted">'+(index+1)+' / '+data.group_total+' 组</span></div>';
+      +'</select><button class="secondary" id="dupGroupPrev" onclick="chooseDupGroup(dupGroup-1)">上一组</button><button class="secondary" id="dupGroupNext" onclick="chooseDupGroup(dupGroup+1)">下一组</button><label>组序号 <input type="number" id="dupGroupJump" min="1" max="'+data.group_total+'" value="'+(index+1)+'"></label><button class="secondary" id="dupGroupGo">跳转</button><span class="muted">'+(index+1)+' / '+data.group_total+' 组</span></div>';
     const badge=g.verified?'<span class="badge ok">已复核</span>':'<span class="badge warn">复核剔除</span>';
     html += '<div class="group"><h4>'+badge+' 组 '+esc(g.duplicate_group_id)+' · '+g.file_count+' 个文件 · 每个 '+fmtBytes(g.size)+'</h4><p class="muted">'+esc(g.note)+'；本组可删 '+g.deletable_total+' 个。跨页勾选保留，保留项不可勾选。</p>';
     html += '<table><thead><tr><th style="width:34px">删</th><th>文件</th><th>相对资源包</th><th>大小</th></tr></thead><tbody>';
@@ -610,9 +610,11 @@ async function renderDupPage(index,offset){
       html += '<tr data-pick="'+esc(r.path)+'" title="右键在资源管理器中定位"><td>'+box+'</td><td><code title="'+esc(r.path)+'">'+esc(fileName(r.path))+'</code></td><td>'+pathCell(rel)+'</td><td>'+fmtBytes(r.size)+'</td></tr>';
     });
     const pages=Math.max(1,Math.ceil(page.total/DUP_PAGE));
-    html += '</tbody></table><div class="preview-nav"><button class="secondary" id="dupPagePrev" onclick="chooseDupPage(dupOffset-DUP_PAGE)">上一页</button><button class="secondary" id="dupPageNext" onclick="chooseDupPage(dupOffset+DUP_PAGE)">下一页</button><span class="muted">'+(offset+1)+'–'+Math.min(offset+DUP_PAGE,page.total)+' / '+page.total+' 个</span><label>页码 <input type="number" id="dupPageJump" min="1" max="'+pages+'" value="'+(Math.floor(offset/DUP_PAGE)+1)+'"></label><button class="secondary" onclick="chooseDupPage((Number(document.getElementById(\'dupPageJump\').value)-1)*DUP_PAGE)">跳转</button></div>';
+    html += '</tbody></table><div class="preview-nav"><button class="secondary" id="dupPagePrev" onclick="chooseDupPage(dupOffset-DUP_PAGE)">上一页</button><button class="secondary" id="dupPageNext" onclick="chooseDupPage(dupOffset+DUP_PAGE)">下一页</button><span class="muted">'+(offset+1)+'–'+Math.min(offset+DUP_PAGE,page.total)+' / '+page.total+' 个</span><label>页码 <input type="number" id="dupPageJump" min="1" max="'+pages+'" value="'+(Math.floor(offset/DUP_PAGE)+1)+'"></label><button class="secondary" id="dupPageGo">跳转</button></div>';
     if(g.deletable_total)html += '<p><button class="danger" data-g="'+esc(g.duplicate_group_id)+'" onclick="deleteGroup(this.dataset.g)">删除本组已选副本</button></p>';
     box.innerHTML=html+'</div>';box.scrollTop=0;
+    document.getElementById('dupGroupGo').addEventListener('click',()=>chooseDupGroup(Number(document.getElementById('dupGroupJump').value)-1));
+    document.getElementById('dupPageGo').addEventListener('click',()=>chooseDupPage((Number(document.getElementById('dupPageJump').value)-1)*DUP_PAGE));
     refreshDupControls();updateSelNote();
   }catch(e){
     if(state!==dupState||request!==state.request)return;
