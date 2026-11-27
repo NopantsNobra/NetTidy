@@ -140,6 +140,10 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 v1.14.0 Windows CI 3.11/3.13 每套 322 例（1 例跳过），新增真实长路径移动与撤销、ADS 清除、保存计划校验和错误日志回归（[记录](https://github.com/NopantsNobra/NetTidy/actions/runs/45931762240)）。v1.13.0 浏览器回归中，Chromium 使用 408 个真实隔离文件验证第 400 行之后的分页、跨页选择、实际删除及保留文件。历史撤销回归仍通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) 与 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141)。
 
+开发期静态检查（可选）：`python -m pip install ruff==0.11.13`，随后 `python -m ruff check --select E9,F nesttidy tests benchmarks packaging`。CI 已启用；运行程序不需要安装 Ruff。
+
+复制续跑的全文签名比较针对普通文件数据流，不证明所有 NTFS ADS 或 ACL 一致。对需逐流保真或特殊元数据的目录，建议另选空输出目录并单独验证。
+
 ## 项目资料
 
 - [详细介绍](docs/理巢_详细介绍.md)：设计、架构与取舍

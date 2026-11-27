@@ -144,6 +144,10 @@ Benchmarks use isolated temporary fixtures by default. Use --root for read-only 
 
 For v1.14.0, Windows CI ran 322 tests per Python 3.11/3.13 version (one skipped), including real long-path move/undo, ADS removal, saved-plan verification and traceback logging ([run](https://github.com/NopantsNobra/NetTidy/actions/runs/45931762240)). In v1.13.0, Chromium verified paging beyond 400 rows, cross-page selection, actual deletion and preservation of the retained file using 408 isolated files. History-based undo regression also passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141).
 
+Optional development lint: `python -m pip install ruff==0.11.13`, then `python -m ruff check --select E9,F nesttidy tests benchmarks packaging`. CI enforces it; Ruff is not needed at runtime.
+
+Resume verification hashes the ordinary file data stream; it does not establish equality of all NTFS ADS or ACL metadata. For metadata-sensitive copies, use a fresh output directory and verify separately.
+
 ## Project documentation
 
 - [Detailed introduction](docs/理巢_详细介绍.md) — design and architecture (Chinese)
