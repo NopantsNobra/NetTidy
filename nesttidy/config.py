@@ -46,24 +46,29 @@ APP_NAME = "理巢 NestTidy"
 # 1.8.18：展示统计目录级缓存及减少临时列表。
 # 1.8.19：重复文件明细有界分页与跨页勾选。
 # 1.8.20：辅助结果表格统一有界分页。
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 # v4：新增 R6——执行收尾清扫「移动完成后变空」的目录（不含资源根）；
 # undo 对 rmdir 行改为重建目录（可还原）。R0–R5 语义未变。
 # v3：R1 不再是终态（穿透后必须继续 R0-R4）；R5 增加「前缀无法区分时的路径短码兜底」；
 # 单文件名分量硬上限 180 落实到 R5 与 clean_name 两处。
-RULE_VERSION = "P0-R0-R5-R6-v4"
+RULE_VERSION = "P0-R0-R5-R6-v5"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 
-INCOMPLETE_SUFFIXES = {
+INCOMPLETE_SUFFIXES = (
     ".crdownload",
     ".part",
     ".!qb",
     ".aria2",
     ".tmp",
     ".downloading",
-}
+    ".xltd",
+    ".td",
+    ".td.cfg",
+    ".bc!",
+    ".!ut",
+)
 
 REPORT_DIR_NAME = "理巢报告"
 OUTPUT_DIR_PREFIX = "理巢输出_"

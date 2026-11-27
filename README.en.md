@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.9.0-166451)
+![Version](https://img.shields.io/badge/version-1.10.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -84,7 +84,7 @@ The web UI currently loads at most 400 diagnostic detail rows, paginated at 80 r
 ## Safety and scope
 
 - Structural planning and disk execution are separate. Web execution uses frozen plan IDs, lifecycle checks and write-scope exclusion to prevent replay and overlapping write tasks.
-- Source state, destination conflicts, package identity and link boundaries are checked before writing; no silent overwrite. Incomplete downloads, symbolic links, junctions, system files and designated NestTidy output directories are handled by exclusion rules.
+- Source state, destination conflicts, package identity and link boundaries are checked before writing; no silent overwrite. Incomplete downloads (including `.xltd`, `.td`, `.td.cfg`, `.bc!`, `.!ut`), symbolic links, junctions, system files and designated NestTidy output directories are handled by exclusion rules.
 - Transaction intent is recorded before moves and directory removal. Recovery checks file identity and state, retaining the log when recovery cannot be confirmed. This is not an ACID transaction and cannot eliminate every time-of-check/time-of-use race.
 - Binds to 127.0.0.1, validates Host, Origin and JSON request types; no cloud service, telemetry, multi-user remote access or unattended background deletion.
 - Not a semantic classifier, general file manager, cloud sync client or custom rule editor. Back up important data; prefer copy while downloads or seeding are active.
@@ -146,7 +146,7 @@ As of v1.9.0, the local Windows Python 3.13 run passed 302 unittest cases (4 ski
 
 - [Detailed introduction](docs/理巢_详细介绍.md) — design and architecture (Chinese)
 - [Product manual](docs/理巢_产品开发手册_v1.0.md) — product scope and design history (Chinese)
-- [Rule reference](docs/规则对照表.md) — sole authoritative rule specification, currently `P0-R0-R5-R6-v4` (Chinese)
+- [Rule reference](docs/规则对照表.md) — sole authoritative rule specification, currently `P0-R0-R5-R6-v5` (Chinese)
 - [Roadmap](ROADMAP.md) — acceptance status, performance experiments and outstanding work (Chinese)
 - [Previous full version history](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [Commit history](https://github.com/NopantsNobra/NetTidy/commits/main)
 

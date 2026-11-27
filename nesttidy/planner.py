@@ -45,7 +45,7 @@ def should_skip_path(path: Path) -> str | None:
             QUARANTINE_DIR_PREFIX.lower()
         ):
             return "SKIPPED_NESTTIDY_OUTPUT"
-        if path.suffix.lower() in INCOMPLETE_SUFFIXES or lower.endswith(".!qb"):
+        if lower.endswith(INCOMPLETE_SUFFIXES):
             return "DOWNLOAD_IN_PROGRESS"
         if os.name == "nt":
             attrs = path.stat().st_file_attributes  # type: ignore[attr-defined]
@@ -76,7 +76,7 @@ def should_skip_entry(entry: os.DirEntry, path: Path) -> str | None:
             QUARANTINE_DIR_PREFIX.lower()
         ):
             return "SKIPPED_NESTTIDY_OUTPUT"
-        if path.suffix.lower() in INCOMPLETE_SUFFIXES or lower.endswith(".!qb"):
+        if lower.endswith(INCOMPLETE_SUFFIXES):
             return "DOWNLOAD_IN_PROGRESS"
         if attrs & 0x4:
             return "SKIPPED_SYSTEM_FILE"

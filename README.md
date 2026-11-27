@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.9.0-166451)
+![Version](https://img.shields.io/badge/version-1.10.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -82,7 +82,7 @@ Web 端当前最多加载 400 条诊断明细，按组固定 80 行分页；「�
 ## 安全设计与边界
 
 - 结构规则与执行分离，Web 执行使用冻结计划 ID；计划状态及目录写操作互斥防止重放和重叠任务写入。
-- 写入前重新校验源状态、目标冲突、资源根及链接边界；不静默覆盖。未完成下载、符号链接、junction、系统文件及理巢专用输出目录按排除规则处理。
+- 写入前重新校验源状态、目标冲突、资源根及链接边界；不静默覆盖。未完成下载（包括 `.xltd`、`.td`、`.td.cfg`、`.bc!`、`.!ut`）、符号链接、junction、系统文件及理巢专用输出目录按排除规则处理。
 - 移动与目录清理的事务意图先记录再执行；撤销复核文件身份和状态，无法确认的恢复保留日志。不是 ACID 事务，无法消除所有检查与使用之间的竞态。
 - 只绑定 127.0.0.1，校验 Host、Origin 与 JSON 请求类型；不提供云服务、遥测、多人远程访问或自动后台删除。
 - 不做内容语义分类、通用文件管理器、云同步或自定义规则编辑器。重要数据请先备份，下载或做种期间优先使用复制。
@@ -144,7 +144,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 - [详细介绍](docs/理巢_详细介绍.md)：设计、架构与取舍
 - [产品手册](docs/理巢_产品开发手册_v1.0.md)：产品范围与历史设计依据
-- [规则对照表](docs/规则对照表.md)：唯一权威规则定义，当前 `P0-R0-R5-R6-v4`
+- [规则对照表](docs/规则对照表.md)：唯一权威规则定义，当前 `P0-R0-R5-R6-v5`
 - [路线图](ROADMAP.md)：验收状态、性能实验、未完成工作及裁决
 - [完整旧版版本记录](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [提交历史](https://github.com/NopantsNobra/NetTidy/commits/main)
 
