@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.10.0-166451)
+![Version](https://img.shields.io/badge/version-1.11.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -67,7 +67,7 @@ The application UI, CLI messages and generated documentation are currently prima
 4. Confirm execution. For the first run, copy to a separate directory and inspect the result before considering in-place organization.
 5. Export the full plan report if needed. After an in-place run, use the transaction log to attempt undo. Replan after a mode change, a failed dry run, eviction or execution of a plan.
 
-Copy never deletes the source automatically and requires additional storage. In-place R6 cleanup can remove directories that become empty during execution, including empty package roots; the selected run root is retained. Undo recreates directories when the recorded state can be safely restored. It is not a backup and cannot restore arbitrary later modifications or permanently deleted files.
+Copy never deletes the source automatically and requires additional storage. After interruption, replan and execute against the same output directory. An existing copy is skipped only if size, modification time and full-content signature agree, and it is neither a link nor the same physical file. Other existing destinations remain conflicts. New copies are staged in private temporary files and published without replacement; forced termination may leave `.nesttidy-copy-*.tmp` files, which may be removed manually after confirming no task is running. In-place R6 cleanup can remove directories that become empty during execution, including empty package roots; the selected run root is retained. Undo recreates directories when the recorded state can be safely restored. It is not a backup and cannot restore arbitrary later modifications or permanently deleted files.
 
 ### Duplicate files
 

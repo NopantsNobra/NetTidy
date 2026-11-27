@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.10.0-166451)
+![Version](https://img.shields.io/badge/version-1.11.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -65,7 +65,7 @@ python -m nesttidy.app
 4. 确认后执行。首次使用建议先复制到独立目录，验证结果，再考虑原地整理。
 5. 按需导出完整计划报告；原地整理结束后可根据事务日志尝试撤销。更改执行方式、试运行失败、计划被淘汰或已执行时，应重新规划。
 
-复制不自动删除源文件，会额外占用磁盘空间。原地整理的 R6 收尾清扫可能删除执行期间变空的目录（含空资源包），选中的运行根保留；撤销按日志重建能够安全恢复的目录。撤销不是备份，也无法恢复随后被其他程序改写或永久删除的文件。
+复制不自动删除源文件，会额外占用磁盘空间。中断后可对同一输出目录重新试运行并执行；仅在大小、修改时间及全文签名一致且不是链接/同一物理文件时跳过已有副本，不一致仍报冲突。新文件先写同目录私有临时文件，再以不覆盖方式发布；进程被强制终止可能留下 `.nesttidy-copy-*.tmp`，确认无任务运行后可手工清理。原地整理的 R6 收尾清扫可能删除执行期间变空的目录（含空资源包），选中的运行根保留；撤销按日志重建能够安全恢复的目录。撤销不是备份，也无法恢复随后被其他程序改写或永久删除的文件。
 
 ### 重复文件
 

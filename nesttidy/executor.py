@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import stat as statmod
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -177,13 +178,15 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
         status = "failed"
         try:
             move_root = move_resource_root(plan, op, roots) if mode == "move" and op.op_type in {"move", "copy", "rmdir"} else None
-            precheck(op)
+            if mode == "copy" and op.op_type in {"copy", "move"}:
+                precheck(op, allow_existing_target=True)
+            else:
+                precheck(op)
             if op.op_type == "keep":
                 status = "skipped"
             elif mode == "copy":
                 if op.op_type in {"copy", "move"}:
-                    do_copy(op, output_root_path)
-                    status = "completed"
+                    status = "completed" if do_copy(op, output_root_path) else "skipped"
                 else:
                     status = "skipped"
             else:  # move
@@ -247,7 +250,7 @@ def deterministic_ops(ops: list[Operation]) -> list[Operation]:
     return files + dirs
 
 
-def precheck(op: Operation) -> None:
+def precheck(op: Operation, *, allow_existing_target: bool = False) -> None:
     if op.op_type == "rmdir":
         return
     if not op.source_path:
@@ -269,24 +272,73 @@ def precheck(op: Operation) -> None:
     if op.op_type == "keep" and op.source_path == op.target_path:
         return
     target = Path(op.target_path)
-    if target.exists() and target.resolve() != source.resolve():
+    if not allow_existing_target and target.exists() and target.resolve() != source.resolve():
         raise FileExistsError(f"目标已存在，禁止覆盖: {target}")
 
 
-def do_copy(op: Operation, output_root: Path | None = None) -> None:
+def _regular_file_state(path: Path) -> tuple[int, int, int, int]:
+    info = path.lstat()
+    if not statmod.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise OutputBoundaryError(f"拒绝非普通文件或重解析点: {path}")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def do_copy(op: Operation, output_root: Path | None = None) -> bool:
+    """返回 True 表示新复制；已有完整且一致的副本返回 False。不覆盖目标。"""
     assert op.source_path and op.target_path
     source = Path(op.source_path)
     target = Path(op.target_path)
-    if source.resolve() == target.resolve():
-        return
-    # 边界复查必须先于任何写入，mkdir 也算写入：目标链里若被换成 junction / 目录符号链接，
-    # 先 mkdir 会把空目录建到输出边界之外（junction 逃逸要求「一个字节都不写」）。
+    if source.resolve() != source:
+        raise OutputBoundaryError(f"源路径已被重定向: {source}")
+    source_state = _regular_file_state(source)
     if output_root is not None:
         ensure_target_within_output(target, output_root)
+    if source == target:
+        raise OutputBoundaryError(f"源与目标相同: {target}")
+
+    try:
+        target_state = _regular_file_state(target)
+    except FileNotFoundError:
+        target_state = None
+    if target_state is not None:
+        if (target_state[2:] != source_state[2:]
+                or target_state[:2] == source_state[:2]
+                or full_sha256(source) != full_sha256(target)):
+            raise FileExistsError(f"目标已存在且不符合续跑条件，禁止覆盖: {target}")
+        if source_state != _regular_file_state(source) or target_state != _regular_file_state(target):
+            raise FileExistsError(f"比对期间文件发生变化: {target}")
+        precheck(op, allow_existing_target=True)
+        if output_root is not None:
+            ensure_target_within_output(target, output_root)
+        return False
+
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    if target.stat().st_size != source.stat().st_size:
-        raise RuntimeError(f"复制后大小校验失败: {target}")
+    if output_root is not None:
+        ensure_target_within_output(target, output_root)
+    fd, name = tempfile.mkstemp(prefix=".nesttidy-copy-", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        shutil.copy2(source, temporary)
+        if temporary.stat().st_size != source_state[2] or source_state != _regular_file_state(source):
+            raise RuntimeError(f"复制期间源状态变化或大小不一致: {source}")
+        precheck(op, allow_existing_target=True)
+        if output_root is not None:
+            ensure_target_within_output(target, output_root)
+        # Windows rename 不替换既有目标；POSIX link 同样以原子不覆盖方式发布。
+        if os.name == "nt":
+            os.rename(temporary, target)
+        else:
+            os.link(temporary, target)
+        return True
+    finally:
+        if temporary.exists():
+            try:
+                temporary.unlink()
+            except PermissionError:
+                # Windows copy2 可能把只读属性复制给私有临时文件。
+                temporary.chmod(statmod.S_IWRITE)
+                temporary.unlink()
 
 
 def missing_dirs(path: Path) -> list[Path]:
