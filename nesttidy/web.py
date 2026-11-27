@@ -399,7 +399,7 @@ def _move_log_path(plan: OperationPlan) -> Path:
 
 def _finish_history(plan: OperationPlan, mode: str, result) -> str:
     try:
-        record_execution(plan, mode, "partial" if result.failed else "completed", result.transaction_log)
+        record_execution(plan, mode, "partial" if result.failed else "completed", result.transaction_log if mode == "move" else None)
     except (OSError, sqlite3.Error) as exc:
         return f"磁盘操作已结束，但历史状态更新失败：{exc}；请保留事务日志路径"
     return ""

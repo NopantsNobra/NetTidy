@@ -234,7 +234,7 @@ server.serve_forever()
   await waitFor(()=>existsSync(oldFile)&&!existsSync(moved.transaction_log));
   await waitFor(()=>evaluate("!busy && !document.querySelector('#history [data-history-tx]')"));
   assert.equal(await fs.readFile(oldFile,'utf8'),'restore me');
-  console.log('Cross-session Web history undo passed after actual browser reload');
+  console.log('Cross-session Web history undo passed after browser reload');
   assert.deepEqual(errors,[],'page must not emit uncaught runtime errors');
   console.log('UI smoke passed: actual plan, pagination, filter, risk confirmation, keyboard tabs and 420px layout.');
 } finally {
