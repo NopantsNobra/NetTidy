@@ -198,7 +198,9 @@ pre{white-space:pre-wrap;background:var(--soft);border:1px solid var(--line);bor
   <div class="bar"><button onclick="makePlan(true)">重新扫描异常项</button><button class="secondary" onclick="loadHistory()">刷新历史</button><span class="sp"></span><span class="muted">只读信息；整理前不用看，异常项来自最近一次扫描。</span></div>
   <h3>异常项（这些文件不会被动）</h3><div id="issues" class="scrollbox" tabindex="0" role="region" aria-label="异常项清单"></div>
   <h3>规则分类计数与边界检查</h3><div id="ruleStats" class="scrollbox"></div><div id="boundaryNote"></div>
-  <h3>历史</h3><div id="history" class="scrollbox"></div>
+  <h3>任务与报告历史（最近 50 条）</h3><div id="history" class="scrollbox"></div>
+  <label for="manualUndoPath">旧事务日志路径（也可用于历史列表之外的任务）</label><div class="row"><input id="manualUndoPath" type="text" placeholder="粘贴 transaction_log.jsonl 的完整路径"><button class="secondary" id="manualUndoBtn">按日志撤销</button></div>
+  <div class="task-progress idle"><div class="pbar"><div class="pfill" id="historyUndoFill"></div></div><p class="muted" id="historyUndoProg">尚未撤销。</p></div><div id="historyUndoResult" class="scrollbox"></div>
   <h3>健康检查</h3><div id="health"></div></section></div>
 </main>
 <div class="overlay hidden" id="overlay"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogBody" id="dialogBox">
@@ -734,7 +736,7 @@ async function executeCopy(){
     markPlanExecuted();
     const outRoot = (lastPlan && lastPlan.output_root) || cleanPath(output.value);
     mountPagedTable('execResult',data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'],
-      {prefix:'<div class="headline">复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。</div>'
+      {prefix:'<div class="headline">复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动。</div>'+(data.history_warning?'<p class="error">'+esc(data.history_warning)+'</p>':'')
       + '<p>输出目录：<code>'+esc(outRoot)+'</code> <button class="secondary" data-open-out="'+esc(outRoot)+'">在资源管理器中打开</button></p>'});
     document.querySelectorAll('#execResult button[data-open-out]').forEach(b=>b.addEventListener('click',()=>reveal(b.dataset.openOut,false)));
     say('复制完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+'。源目录没有动，输出目录见下方。');
@@ -755,7 +757,7 @@ async function executeMove(){
     const data = await api('/api/execute-move',{plan_id:currentPlanId,confirm:true,progress_key:prog.key});
     markPlanExecuted();
     mountPagedTable('execResult',data.issues||[],['path','stage','code','message','final_status'],['文件','阶段','代码','说明','状态'],
-      {prefix:'<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。</div>',
+      {prefix:'<div class="headline">整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。</div>'+(data.history_warning?'<p class="error">'+esc(data.history_warning)+'</p>':''),
        suffix:data.transaction_log?'<p class="muted">事务日志：'+esc(data.transaction_log)+' <button class="secondary" data-tx="'+esc(data.transaction_log)+'">撤销这次整理</button></p>':''});
     document.querySelectorAll('#execResult button[data-tx]').forEach(b=>b.addEventListener('click',()=>undoRun(b.dataset.tx)));
     say('整理完成：完成 '+data.completed+'，跳过 '+data.skipped+'，失败 '+data.failed+(data.swept?'，另清掉 '+data.swept+' 个变空的文件夹':'')+'。');
@@ -772,13 +774,15 @@ function markPlanExecuted(){
   }
 }
 const UNDO_ACTION = {move:'搬回原处', mkdir:'删除新建文件夹', rmdir:'空目录删除', recycle:'回收站', delete:'彻底删除', quarantine:'放回原处'};
-const undoRun = guard(async function undoRun(logPath){
-  const prog = trackProgress('undoFill','undoProg');
+const undoRun = guard(async function undoRun(logPath, fromHistory=false){
+  if(fromHistory && !await showModal({title:'确认撤销原地整理',body:'将根据事务日志复核并恢复可恢复的操作：<code>'+esc(logPath)+'</code>',confirmText:'确认撤销',danger:true}))return;
+  const prog = fromHistory?trackProgress('historyUndoFill','historyUndoProg'):trackProgress('undoFill','undoProg');
   try{
     const data = await api('/api/undo',{transaction_log:logPath,progress_key:prog.key});
-    mountPagedRows('execResult',data.rows||[],['动作','路径','结果','说明'],
+    mountPagedRows(fromHistory?'historyUndoResult':'execResult',data.rows||[],['动作','路径','结果','说明'],
       r=>'<tr>'+[UNDO_ACTION[r.action]||r.action,r.source,r.status,r.message].map(v=>'<td>'+esc(v)+'</td>').join('')+'</tr>');
     say('撤销完成，逐条结果见下方。');
+    if(fromHistory)await loadHistory();
   }catch(e){ prog.fail(); say(e.message,true); }
   finally{ prog.stop(); }
 });
@@ -790,10 +794,14 @@ const exportReport = guard(async function exportReportInner(){
   finally{ prog.stop(); }
 });
 async function loadHistory(){
-  try{ const data = await fetch('/api/history').then(r=>r.json());
-    mountPagedTable('history',data,['created_at','mode','selected_root','operation_count','issue_count','report_dir'],['时间','模式','源目录','操作数','异常数','报告目录']);
+  try{ const response=await fetch('/api/history'), data=await response.json();
+    if(!response.ok)throw Error(data.error||'读取历史失败');
+    const states={started:'已开始（结果待确认）',completed:'已结束',partial:'存在失败项'};
+    mountPagedRows('history',data,['时间','方式 / 状态','源目录','操作数 / 异常数','报告 / 日志','撤销'],r=>'<tr><td>'+esc(r.executed_at||r.created_at)+'</td><td>'+esc(r.execution_mode?(r.execution_mode==='move'?'原地整理':'复制')+' / '+(states[r.execution_status]||r.execution_status):'报告记录')+'</td><td>'+pathCell(r.selected_root)+'</td><td>'+r.operation_count+' / '+r.issue_count+'</td><td>'+pathCell(r.transaction_log||r.report_dir||'')+'</td><td>'+(r.undo_available?'<button class="secondary" data-history-tx="'+esc(r.transaction_log)+'">撤销</button>':'—')+'</td></tr>',{empty:'暂无任务或报告记录。'});
   }catch(e){say(e.message,true);}
 }
+document.getElementById('history').addEventListener('click',e=>{const b=e.target.closest('[data-history-tx]');if(b&&!busy)undoRun(b.dataset.historyTx,true);});
+document.getElementById('manualUndoBtn').addEventListener('click',()=>{const path=cleanPath(document.getElementById('manualUndoPath').value);if(!path){say('请填写事务日志路径。',true);return;}undoRun(path,true);});
 async function makeManual(){
   try{ const data = await api('/api/manual',{}); say('PDF 手册已生成：'+data.manual_pdf); }catch(e){say(e.message,true);}
 }
@@ -856,6 +864,7 @@ function setTab(name){
     t.tabIndex = on ? 0 : -1;
   });
   document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!=='panel-'+name));
+  if(name==='diag')loadHistory();
 }
 document.querySelectorAll('#tabs .tab').forEach((t,i)=>{
   t.addEventListener('click',()=>setTab(t.dataset.tab));

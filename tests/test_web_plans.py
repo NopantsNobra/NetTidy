@@ -309,6 +309,41 @@ class WebEndpointTests(unittest.TestCase):
         self.assertEqual(self._files("outA"), ["a.txt"])
         self.assertEqual(self._files("outB"), ["b.txt"])
 
+
+    def test_execution_history_survives_registry_clear_and_report_export(self):
+        root = self.base / "srcA"
+        status, plan = _post(self.port, "/api/plan", {"selected_root": str(root), "mode": "batch"})
+        self.assertEqual(status, 200)
+        status, result = _post(self.port, "/api/execute-move", {"plan_id": plan["plan_id"], "confirm": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["failed"], 0)
+        log = Path(result["transaction_log"])
+        self.assertTrue(log.is_relative_to(self.base / "理巢报告"))
+        self.assertEqual(log.name, "transaction_log.jsonl")
+        self.assertEqual(_post(self.port, "/api/report", {"plan_id": plan["plan_id"]})[0], 200)
+        web.PLANS.clear()
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/history") as response:
+            history = json.load(response)
+        entry = next(r for r in history if r["plan_id"] == plan["plan_id"])
+        self.assertEqual(entry["transaction_log"], str(log))
+        self.assertTrue(entry["undo_available"])
+        self.assertEqual(entry["execution_mode"], "move")
+        self.assertEqual(entry["execution_status"], "completed")
+        self.assertEqual(_post(self.port, "/api/undo", {"transaction_log": str(log)})[0], 200)
+        self.assertTrue((root / "RA" / "shellA" / "a.txt").exists())
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/history") as response:
+            self.assertFalse(next(r for r in json.load(response) if r["plan_id"] == plan["plan_id"])["undo_available"])
+
+    def test_copy_execution_is_recorded_without_export(self):
+        status, plan = _post(self.port, "/api/plan", {"selected_root": str(self.base / "srcB"), "mode": "batch", "output_root": str(self.base / "outB")})
+        self.assertEqual(status, 200)
+        self.assertEqual(_post(self.port, "/api/execute-copy", {"plan_id": plan["plan_id"]})[0], 200)
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/history") as response:
+            rows = json.load(response)
+        self.assertEqual(rows[0]["execution_mode"], "copy")
+        self.assertEqual(rows[0]["execution_status"], "completed")
+        self.assertFalse(rows[0]["undo_available"])
+
     def test_execute_without_plan_id_is_rejected(self) -> None:
         _post(self.port, "/api/plan", {"selected_root": str(self.base / "srcA"), "mode": "batch", "output_root": str(self.base / "outA")})
         status, body = _post(self.port, "/api/execute-copy", {})

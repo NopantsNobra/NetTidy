@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from .config import REPORT_DIR_NAME
 from .model import MappingEntry, OperationPlan
@@ -14,8 +15,8 @@ from .storage import record_plan
 def new_report_dir(base_dir: str | None = None) -> Path:
     base = Path(base_dir).resolve() if base_dir else Path.cwd() / REPORT_DIR_NAME
     stamp = datetime.now().strftime("task_%Y%m%d_%H%M%S")
-    path = base / stamp
-    path.mkdir(parents=True, exist_ok=True)
+    path = base / f"{stamp}_{uuid4().hex[:12]}"
+    path.mkdir(parents=True, exist_ok=False)
     return path
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import json
 import socket
+import sqlite3
 import subprocess
 import threading
 from time import monotonic
@@ -22,8 +23,8 @@ from .model import MappingEntry, OperationPlan
 from .planner import build_plan
 from .recovery import rows_as_dicts, undo_transaction
 from .repair import repair_permissions
-from .reports import _row_flags, build_mapping_index, plan_display_stats, readable_group_rows, write_plan_report
-from .storage import list_history
+from .reports import _row_flags, build_mapping_index, plan_display_stats, readable_group_rows, write_plan_report, new_report_dir
+from .storage import list_history, record_execution
 from .ui import INDEX_HTML
 
 
@@ -382,11 +383,26 @@ def _delete_entries(body: dict) -> list[DeleteEntry]:
     return entries
 
 
+def _check_history_location(plan: OperationPlan) -> None:
+    base = Path.cwd().resolve() / REPORT_DIR_NAME
+    if base.resolve() != base:
+        raise ValueError("报告目录被重定向，拒绝执行")
+    for raw in (plan.selected_root, plan.output_root):
+        if raw and base.is_relative_to(Path(raw).resolve()):
+            raise ValueError("报告目录位于源目录或输出目录内部；请从独立启动目录运行理巢")
+
+
 def _move_log_path(plan: OperationPlan) -> Path:
-    """move 的事务日志与隔离区同级：选中目录的上一级 / 理巢报告 / 事务日志_<时间>.jsonl。"""
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = Path(plan.selected_root).resolve()
-    return base.parent / REPORT_DIR_NAME / f"事务日志_{stamp}.jsonl"
+    _check_history_location(plan)
+    return new_report_dir() / "transaction_log.jsonl"
+
+
+def _finish_history(plan: OperationPlan, mode: str, result) -> str:
+    try:
+        record_execution(plan, mode, "partial" if result.failed else "completed", result.transaction_log)
+    except (OSError, sqlite3.Error) as exc:
+        return f"磁盘操作已结束，但历史状态更新失败：{exc}；请保留事务日志路径"
+    return ""
 
 
 def _remember_root_quietly(root: str) -> None:
@@ -457,7 +473,10 @@ class Handler(BaseHTTPRequestHandler):
             rows = [item.__dict__ for item in run_healthcheck()]
             self.send_json(rows)
         elif self.path == "/api/history":
-            self.send_json(list_history())
+            try:
+                self.send_json(list_history())
+            except (OSError, sqlite3.Error) as exc:
+                self.send_json({"error": str(exc)}, status=400)
         elif self.path == "/api/config":
             try:
                 config = load_local_config()
@@ -602,9 +621,12 @@ class Handler(BaseHTTPRequestHandler):
                 plan = PLANS.claim(guard_plan)
                 claimed = True
                 key, progress = _track(body, "执行")
+                _check_history_location(plan)
+                record_execution(plan, "copy", "started")
                 result = execute_plan(plan, "copy", progress=progress)
                 execution_ok = not result.failed
-                self.send_tracked(key, {"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues]})
+                warning = _finish_history(plan, "copy", result)
+                self.send_tracked(key, {"completed": result.completed, "skipped": result.skipped, "failed": result.failed, "issues": [row.to_dict() for row in result.issues], "history_warning": warning})
             elif self.path == "/api/execute-move":
                 plan = PLANS.get(_plan_id(body))
                 if body.get("confirm") is not True:
@@ -614,14 +636,18 @@ class Handler(BaseHTTPRequestHandler):
                 plan = PLANS.claim(guard_plan)
                 claimed = True
                 key, progress = _track(body, "执行")
-                result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(_move_log_path(plan)), progress=progress)
+                log_path = str(_move_log_path(plan))
+                record_execution(plan, "move", "started", log_path)
+                result = execute_plan(plan, "move", confirm_move=True, transaction_log=log_path, progress=progress)
                 execution_ok = not result.failed
+                warning = _finish_history(plan, "move", result)
                 self.send_tracked(key, {
                     "completed": result.completed,
                     "skipped": result.skipped,
                     "failed": result.failed,
                     "transaction_log": result.transaction_log,
                     "swept": getattr(result, "swept", 0),
+                    "history_warning": warning,
                     "issues": [row.to_dict() for row in result.issues],
                 })
             elif self.path == "/api/undo":
