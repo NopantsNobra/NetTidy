@@ -56,6 +56,15 @@ class RequestSourceGuardTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.load(exc)
 
+    def test_local_html_has_content_security_policy(self) -> None:
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as response:
+            csp = response.headers["Content-Security-Policy"]
+            for directive in ("default-src 'self'", "connect-src 'self'", "object-src 'none'",
+                              "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'"):
+                self.assertIn(directive, csp)
+            self.assertNotIn("unsafe-eval", csp)
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+
     def test_same_origin_json_request_passes(self) -> None:
         """防线不得误伤正常使用（页面同源、无 Origin 的本机请求）。"""
         status, data = self._request("/api/validate-root", {"path": str(self.base)})

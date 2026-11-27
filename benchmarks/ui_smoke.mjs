@@ -85,6 +85,7 @@ server.serve_forever()
   await send('Page.navigate',{url:data.url});
   await waitFor(()=>evaluate("document.readyState==='complete' && typeof makePlan==='function'"));
   assert.equal(await evaluate("document.querySelector('[aria-selected=true]').id"),'tab-preview');
+  assert.ok((await evaluate("fetch('/').then(r=>r.headers.get('Content-Security-Policy'))")).includes("frame-ancestors 'none'"));
   await screenshot('desktop-start');
   assert.equal(await evaluate("document.getElementById('execMode').getBoundingClientRect().height > 0"),true);
   await evaluate("root.value="+JSON.stringify(data.root)+"; output.value="+JSON.stringify(path.join(temp,'output'))+"; execMode.value='copy'; makePlan()");
