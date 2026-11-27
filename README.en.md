@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.13.1-166451)
+![Version](https://img.shields.io/badge/version-1.14.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -125,6 +125,8 @@ Prefix each subcommand with `python -m nesttidy.app`. Add `--help` for its optio
 
 plan/copy/move/duplicates/dedupe accept `--report-dir`; plan accepts `--output-root`; move accepts `--no-elevate`. CLI move creates a new plan, so inspect with plan first. CLI dedupe rescans, and group IDs may change; omitting --groups selects all eligible groups. Confirm the scope before proceeding. Current CLI deletion modes are recycle and purge, not the former quarantine option.
 
+To execute a saved preview, export `summary.json` with `plan`, then use `move "D:/Downloads" --plan "D:/Reports/task/summary.json" --confirm` with the same `--mode`. The CLI rescans and refuses execution unless the rule/app versions, snapshot, root identities, operations, mappings and issues match. The Web service never auto-elevates; start it as administrator only if explicitly needed.
+
 Plan reports include `summary.md`, `summary.json`, `mappings.csv` and `issues.csv`; the CLI duplicate scan exports `duplicate_report.csv`. CLI and Web default to separate task subdirectories under `理巢报告` in the working directory; use the returned transaction log path. Legacy logs can be entered manually. Web execution records are registered before execution and updated afterward independently of report export. New history rows contain lightweight metadata, not full plans; full plans remain in exported reports. Run from a working directory separate from source and output directories.
 
 ## Development and validation
@@ -140,7 +142,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 Benchmarks use isolated temporary fixtures by default. Use --root for read-only planning on a real directory. Heavy benchmarks are opt-in, not part of the routine unit suite.
 
-For v1.13.0, Windows CI passed on Python 3.11/3.13; Chromium verified paging beyond 400 rows, cross-page selection, actual deletion and preservation of the retained file using 408 isolated files. History-based undo regression also passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141).
+For v1.14.0, Windows CI ran 322 tests per Python 3.11/3.13 version (one skipped), including real long-path move/undo, ADS removal, saved-plan verification and traceback logging ([run](https://github.com/NopantsNobra/NetTidy/actions/runs/45931762240)). In v1.13.0, Chromium verified paging beyond 400 rows, cross-page selection, actual deletion and preservation of the retained file using 408 isolated files. History-based undo regression also passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141).
 
 ## Project documentation
 
@@ -148,6 +150,6 @@ For v1.13.0, Windows CI passed on Python 3.11/3.13; Chromium verified paging bey
 - [Product manual](docs/理巢_产品开发手册_v1.0.md) — product scope and design history (Chinese)
 - [Rule reference](docs/规则对照表.md) — sole authoritative rule specification, currently `P0-R0-R5-R6-v5` (Chinese)
 - [Roadmap](ROADMAP.md) — acceptance status, performance experiments and outstanding work (Chinese)
-- [Previous full version history](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [Commit history](https://github.com/NopantsNobra/NetTidy/commits/main)
+- [Changelog](CHANGELOG.md) (Chinese) · [Commit history](https://github.com/NopantsNobra/NetTidy/commits/main)
 
 This project is licensed under the [MIT License](LICENSE) (Copyright © 2025-2026 服雲): free to use, modify, distribute and include in commercial or proprietary works, provided the copyright and permission notice are retained. The author provides it "as is", without warranty. The full text is in the repository root `LICENSE`. Author homepage: [github.com/NopantsNobra](https://github.com/NopantsNobra); project homepage: [github.com/NopantsNobra/NetTidy](https://github.com/NopantsNobra/NetTidy).

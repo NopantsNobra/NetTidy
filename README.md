@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.13.1-166451)
+![Version](https://img.shields.io/badge/version-1.14.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -121,7 +121,7 @@ Chromium 压力测试还验证了模拟 20 万文件/1,000 个资源包的整理
 | health / history | `health` 或 `history` |
 | manual | `manual --output "NestTidy.pdf"` |
 
-plan/copy/move/duplicates/dedupe 支持 `--report-dir`；plan 支持 `--output-root`；move 支持 `--no-elevate`。CLI 的 move 会重新生成计划，执行前请先用 plan 核对；dedupe 会重新诊断，组编号可能变化，不指定 --groups 则处理全部可删组，务必确认范围。CLI 删除模式是 recycle 或 purge，不是旧版 quarantine 参数。
+plan/copy/move/duplicates/dedupe 支持 `--report-dir`；plan 支持 `--output-root`；move 支持 `--no-elevate`。CLI 的 move 默认重新生成计划。可先执行 `plan` 导出 `summary.json`，再执行 `move "D:/Downloads" --plan "D:/Reports/task/summary.json" --confirm`（`--mode` 须一致）；执行前重新扫描并严格比较版本、快照、根身份、全部操作、映射及问题，任何差异都拒绝执行。Web 不自动提权，若需要更高权限须由用户主动以管理员身份启动。CLI 的 `--no-elevate` 禁止自动请求提权；dedupe 会重新诊断，组编号可能变化，不指定 --groups 则处理全部可删组，务必确认范围。CLI 删除模式是 recycle 或 purge，不是旧版 quarantine 参数。
 
 计划报告包含 `summary.md`、`summary.json`、`mappings.csv`、`issues.csv`；重复诊断 CLI 导出 `duplicate_report.csv`。CLI 和 Web 默认在启动目录的「理巢报告」独立任务子目录写报告/事务日志，以实际返回的日志路径为准；旧版本日志仍可手工选择。Web 在执行前登记任务，执行后更新历史，不依赖导出报告；新记录仅存轻量索引，完整计划仍在导出的报告。启动目录应独立于源目录和输出目录。
 
@@ -138,7 +138,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 基准默认使用隔离临时文件；也可用 --root 指定真实目录进行只读规划测量。重型测试不属于日常单测。
 
-本次 v1.13.0 Windows CI 3.11/3.13 通过；Chromium 使用 408 个真实隔离文件验证第 400 行之后的分页、跨页选择、实际删除及保留文件。历史撤销回归仍通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) 与 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141)。
+v1.14.0 Windows CI 3.11/3.13 每套 322 例（1 例跳过），新增真实长路径移动与撤销、ADS 清除、保存计划校验和错误日志回归（[记录](https://github.com/NopantsNobra/NetTidy/actions/runs/45931762240)）。v1.13.0 浏览器回归中，Chromium 使用 408 个真实隔离文件验证第 400 行之后的分页、跨页选择、实际删除及保留文件。历史撤销回归仍通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) 与 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141)。
 
 ## 项目资料
 
@@ -146,6 +146,6 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 - [产品手册](docs/理巢_产品开发手册_v1.0.md)：产品范围与历史设计依据
 - [规则对照表](docs/规则对照表.md)：唯一权威规则定义，当前 `P0-R0-R5-R6-v5`
 - [路线图](ROADMAP.md)：验收状态、性能实验、未完成工作及裁决
-- [完整旧版版本记录](https://github.com/NopantsNobra/NetTidy/blob/b9e55c7da395e1fea14a7e58372d3a876007c805/README.md#十版本记录) · [提交历史](https://github.com/NopantsNobra/NetTidy/commits/main)
+- [版本记录](CHANGELOG.md) · [提交历史](https://github.com/NopantsNobra/NetTidy/commits/main)
 
 本项目以 [MIT License](LICENSE) 授权（Copyright © 2025-2026 服雲）：可自由使用、修改、分发、商用，包括闭源衍生作品；唯一要求是保留版权与许可声明，作者不承担任何担保责任。许可文本见仓库根目录 `LICENSE`。作者主页：[github.com/NopantsNobra](https://github.com/NopantsNobra)；仓库主页：[github.com/NopantsNobra/NetTidy](https://github.com/NopantsNobra/NetTidy)。
