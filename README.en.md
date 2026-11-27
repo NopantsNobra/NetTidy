@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.13.0-166451)
+![Version](https://img.shields.io/badge/version-1.13.1-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -45,7 +45,7 @@ Four independent web tabs share one source directory. Major lists render at most
 
 ## Quick start
 
-Windows 10/11, Python 3.11 or later and a modern browser are recommended. Windows is the primary tested platform; full functionality on other systems, especially the Recycle Bin and Windows attribute repair, is not promised. Run from source; there is no official EXE installer yet.
+Windows 10/11, Python 3.11 or later and a modern browser are recommended. Windows is the primary tested platform; full functionality on other systems, especially the Recycle Bin and Windows attribute repair, is not promised. Run from source; an experimental EXE has been built but has not passed release acceptance.
 
 ```powershell
 git clone https://github.com/NopantsNobra/NetTidy.git
@@ -53,7 +53,7 @@ cd NetTidy
 python -m nesttidy.app
 ```
 
-Open [http://127.0.0.1:8766](http://127.0.0.1:8766) (default port). Alternatively, double-click `start_nesttidy.bat`; it uses port 8766 explicitly and opens the browser before starting the server, so a refresh may be necessary. No pip install is required.
+Open [http://127.0.0.1:8766](http://127.0.0.1:8766) (default port). Alternatively, double-click `start_nesttidy.bat`; it uses port 8766 explicitly and opens the browser only after the server binds successfully. No pip install is required.
 
 To choose another port: `python -m nesttidy.app --host 127.0.0.1 --port 8767`. Local configuration is stored as `理巢配置.json` in the working directory and remembers the last successful source directory and port. For manual startup, the CLI option takes precedence over the config file, then the default. Loopback access only.
 

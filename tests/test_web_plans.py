@@ -248,6 +248,37 @@ class PortBindingTests(unittest.TestCase):
         self.assertIn(f'"{EXIT_PORT_IN_USE}"', bat)
         self.assertIn("已被占用", bat)
         self.assertIn("Python 3.11", bat)
+        self.assertIn("--open-browser", bat)
+        self.assertNotIn('start ""', bat)
+
+    def test_open_browser_only_after_successful_binding(self) -> None:
+        from unittest import mock
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen(1)
+            port = blocker.getsockname()[1]
+            with mock.patch("nesttidy.web.webbrowser.open") as browser:
+                with self.assertRaises(web.PortInUseError):
+                    web.serve("127.0.0.1", port, open_browser=True)
+                browser.assert_not_called()
+        bound = threading.Event()
+        seen = []
+        def open_browser(url):
+            seen.append(url)
+            with urllib.request.urlopen(url, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+            bound.set()
+            return True
+        server = web.create_server("127.0.0.1", 0)
+        with mock.patch("nesttidy.web.create_server", return_value=server), mock.patch("nesttidy.web.webbrowser.open", side_effect=open_browser):
+            worker = threading.Thread(target=web.serve, args=("127.0.0.1", 0), kwargs={"open_browser": True}, daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(bound.wait(10), "browser must reach actual listening server")
+                self.assertEqual(seen, [f"http://127.0.0.1:{server.server_address[1]}"])
+            finally:
+                server.shutdown()
+                worker.join(timeout=5)
 
     def test_launcher_is_cmd_executable_format(self) -> None:
         """bat 必须是 cmd.exe 可执行的格式：CRLF 行尾 + 系统 ANSI(GBK) 可解码。

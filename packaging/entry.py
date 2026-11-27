@@ -7,6 +7,10 @@ Analysis 能看到整个 nesttidy 包，同时 app.py 内部的相对导入照�
 """
 from __future__ import annotations
 
+import sys
+
 from nesttidy.app import main
 
+if len(sys.argv) == 1:
+    sys.argv.append('--open-browser')
 main()

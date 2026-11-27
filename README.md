@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.13.0-166451)
+![Version](https://img.shields.io/badge/version-1.13.1-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -45,7 +45,7 @@
 
 ## 快速开始
 
-推荐 Windows 10/11、Python 3.11 或更高版本，使用现代浏览器。主要验证环境为 Windows；其他系统不承诺完整功能，特别是回收站与权限修复。当前从源码运行，没有正式 EXE 安装包。
+推荐 Windows 10/11、Python 3.11 或更高版本，使用现代浏览器。主要验证环境为 Windows；其他系统不承诺完整功能，特别是回收站与权限修复。当前推荐源码运行；已有 EXE 试制产物，但尚未通过发布验收。
 
 ```powershell
 git clone https://github.com/NopantsNobra/NetTidy.git
@@ -53,7 +53,7 @@ cd NetTidy
 python -m nesttidy.app
 ```
 
-打开 [http://127.0.0.1:8766](http://127.0.0.1:8766)（默认端口）。也可双击 `start_nesttidy.bat`；该脚本固定使用 8766，先打开浏览器，再启动服务，必要时刷新页面。无需 pip install。
+打开 [http://127.0.0.1:8766](http://127.0.0.1:8766)（默认端口）。也可双击 `start_nesttidy.bat`；该脚本固定使用 8766，服务成功绑定后才打开浏览器；端口占用时不会弹出页面。无需 pip install。
 
 手动指定端口：`python -m nesttidy.app --host 127.0.0.1 --port 8767`。启动目录中的 `理巢配置.json` 记录上次成功使用的源目录及端口；手动启动端口优先级为命令行、配置文件、默认 8766。仅支持本机监听。
 

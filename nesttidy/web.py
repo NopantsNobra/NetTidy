@@ -6,6 +6,7 @@ import socket
 import sqlite3
 import subprocess
 import threading
+import webbrowser
 from time import monotonic
 from datetime import UTC, datetime
 from email.message import Message
@@ -876,9 +877,18 @@ def create_server(host: str, port: int) -> NestTidyHTTPServer:
         raise
 
 
-def serve(host: str, port: int) -> None:
+def serve(host: str, port: int, *, open_browser: bool = False) -> None:
     if host != "127.0.0.1":
         raise ValueError("理巢默认只允许绑定 127.0.0.1")
-    httpd = create_server(host, port)
-    print(f"理巢 NestTidy 已启动：http://{host}:{port}")
-    httpd.serve_forever()
+    with create_server(host, port) as httpd:
+        url = f"http://{host}:{httpd.server_address[1]}"
+        print(f"理巢 NestTidy 已启动：{url}")
+        if open_browser:
+            def launch_browser() -> None:
+                try:
+                    if not webbrowser.open(url):
+                        print(f"未能自动打开浏览器，请访问 {url}")
+                except (OSError, webbrowser.Error) as exc:
+                    print(f"未能自动打开浏览器：{exc}，请访问 {url}")
+            threading.Thread(target=launch_browser, daemon=True).start()
+        httpd.serve_forever()

@@ -46,6 +46,7 @@ def relaunch_as_admin(argv: list[str] | None = None) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="nesttidy", description="理巢 NestTidy 本地目录整理工具")
     parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--open-browser", action="store_true", help="服务成功绑定后打开本机浏览器")
     parser.add_argument("--port", type=int, default=None, help="监听端口；缺省读 理巢配置.json，仍缺省为 8766")
     sub = parser.add_subparsers(dest="command")
 
@@ -207,7 +208,11 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     try:
-        serve(args.host, args.port if args.port is not None else local_config.port)
+        port = args.port if args.port is not None else local_config.port
+        if args.open_browser:
+            serve(args.host, port, open_browser=True)
+        else:
+            serve(args.host, port)
     except PortInUseError as exc:
         print(f"理巢启动失败：{exc}", file=sys.stderr)
         raise SystemExit(EXIT_PORT_IN_USE) from exc
