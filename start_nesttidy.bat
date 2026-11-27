@@ -2,9 +2,7 @@
 setlocal
 cd /d "%~dp0"
 set "NESTTIDY_PORT=8766"
-set "NESTTIDY_URL=http://127.0.0.1:%NESTTIDY_PORT%"
-start "" "%NESTTIDY_URL%"
-python -m nesttidy.app --host 127.0.0.1 --port %NESTTIDY_PORT%
+python -m nesttidy.app --host 127.0.0.1 --port %NESTTIDY_PORT% --open-browser
 set "NESTTIDY_RC=%ERRORLEVEL%"
 if "%NESTTIDY_RC%"=="23" (
   echo.
