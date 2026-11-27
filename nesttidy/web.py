@@ -388,7 +388,7 @@ def _check_history_location(plan: OperationPlan) -> None:
     if base.resolve() != base:
         raise ValueError("报告目录被重定向，拒绝执行")
     for raw in (plan.selected_root, plan.output_root):
-        if raw and base.is_relative_to(Path(raw).resolve()):
+        if raw and (base.is_relative_to(Path(raw).resolve()) or Path(raw).resolve().is_relative_to(base)):
             raise ValueError("报告目录位于源目录或输出目录内部；请从独立启动目录运行理巢")
 
 

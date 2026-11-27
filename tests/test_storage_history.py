@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,7 +32,7 @@ class HistoryMigrationTests(unittest.TestCase):
             self.assertTrue(entries[plan.plan_id]["undo_available"])
             self.assertEqual(entries[plan.plan_id]["execution_status"], "started")
             self.assertIsNone(entries["old"]["execution_status"])
-            with sqlite3.connect(db) as conn:
+            with closing(sqlite3.connect(db)) as conn:
                 data = dict(conn.execute("select plan_id, plan_json from task_history"))
             self.assertEqual(data[plan.plan_id], "{}")
             self.assertIn("legacy", data["old"])

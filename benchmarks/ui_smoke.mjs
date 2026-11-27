@@ -218,6 +218,23 @@ server.serve_forever()
   await screenshot('narrow-start');
   await evaluate("document.getElementById('previewSection').scrollIntoView()");
   await screenshot('narrow-preview');
+  const undoRoot=path.join(temp,'undo-fixture'), oldFile=path.join(undoRoot,'shell','restore.txt');
+  await fs.mkdir(path.dirname(oldFile),{recursive:true});await fs.writeFile(oldFile,'restore me');
+  const undoPlan=await evaluate("api('/api/plan',"+JSON.stringify({selected_root:undoRoot,mode:'single',view:'summary'})+")");
+  const moved=await evaluate("api('/api/execute-move',"+JSON.stringify({plan_id:undoPlan.plan_id,confirm:true})+")");
+  assert.equal(moved.failed,0);assert.equal(existsSync(oldFile),false);
+  assert.ok(existsSync(moved.transaction_log));
+  await send('Page.reload');
+  await waitFor(()=>evaluate("typeof setTab==='function'"));
+  await evaluate("setTab('diag')");
+  await waitFor(()=>evaluate("!!document.querySelector('#history [data-history-tx]')"));
+  await evaluate("document.querySelector('#history [data-history-tx]').click()");
+  await waitFor(()=>evaluate("!document.getElementById('overlay').classList.contains('hidden')"));
+  await evaluate("document.querySelector('.dok').click()");
+  await waitFor(()=>existsSync(oldFile)&&!existsSync(moved.transaction_log));
+  await waitFor(()=>evaluate("!busy && !document.querySelector('#history [data-history-tx]')"));
+  assert.equal(await fs.readFile(oldFile,'utf8'),'restore me');
+  console.log('Cross-session Web history undo passed after actual browser reload');
   assert.deepEqual(errors,[],'page must not emit uncaught runtime errors');
   console.log('UI smoke passed: actual plan, pagination, filter, risk confirmation, keyboard tabs and 420px layout.');
 } finally {

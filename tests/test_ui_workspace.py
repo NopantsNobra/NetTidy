@@ -53,8 +53,8 @@ class WorkspaceVisualContractTests(unittest.TestCase):
         for marker in ('const RESULT_PAGE=80', 'rows.slice(offset,offset+RESULT_PAGE)',
                        "mountPagedRows('folders'", "mountPagedRows('issues'",
                        "mountPagedRows('dupResult'", "mountPagedTable('repairResult'",
-                       "mountPagedTable('execResult'", "mountPagedRows('execResult'",
-                       "mountPagedTable('history'", '仅加载 '):
+                       "mountPagedTable('execResult'", "mountPagedRows(fromHistory?'historyUndoResult':'execResult'",
+                       "mountPagedRows('history'", '仅加载 '):
             self.assertIn(marker, INDEX_HTML)
         self.assertNotIn('v.folders.map(', INDEX_HTML)
         self.assertNotIn('plan.issues.map(', INDEX_HTML)
