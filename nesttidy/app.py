@@ -14,6 +14,7 @@ from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
 from .planner import build_plan
+from .model import OperationPlan
 from .repair import repair_permissions, rows_as_dicts
 from .recovery import rows_as_dicts as undo_rows_as_dicts
 from .recovery import undo_transaction
@@ -36,11 +37,33 @@ def is_admin() -> bool:
 
 def relaunch_as_admin(argv: list[str] | None = None) -> bool:
     args = argv if argv is not None else sys.argv
-    params = subprocess.list2cmdline(args[1:])
+    params = subprocess.list2cmdline(([] if getattr(sys, 'frozen', False) else ['-m', 'nesttidy.app']) + args[1:])
     try:
         return ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1) > 32
     except Exception:
         return False
+
+
+def _plan_intent(data: dict) -> dict:
+    """比较全部计划事实，仅忽略每次生成时随机分配的标识及时间。"""
+    result = {k: v for k, v in data.items() if k not in {"plan_id", "created_at"}}
+    for key, volatile in (("operations", {"op_id"}), ("mappings", {"entry_id"}), ("issues", {"issue_id", "created_at"})):
+        result[key] = [{k: v for k, v in row.items() if k not in volatile} for row in data[key]]
+    return result
+
+
+def verified_saved_plan(path: str, selected_root: str, mode: str) -> OperationPlan:
+    """不反序列化并执行任意外部路径；仅执行与保存预览完全等价的重新生成计划。"""
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+        if saved.get("frozen") is not True or saved.get("output_root") is not None:
+            raise ValueError("必须提供已冻结的原地整理预览")
+        fresh = build_plan(selected_root, mode)
+        if _plan_intent(saved) != _plan_intent(fresh.to_dict()):
+            raise ValueError("保存计划与当前扫描不一致（版本、文件状态、路径或规则已变化），请重新预览")
+        return fresh
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ValueError(f"保存计划验证失败：{exc}") from exc
 
 
 def main() -> None:
@@ -56,16 +79,17 @@ def main() -> None:
     plan_cmd.add_argument("--output-root")
     plan_cmd.add_argument("--report-dir")
 
-    copy_cmd = sub.add_parser("copy", help="按冻结计划执行 copy")
+    copy_cmd = sub.add_parser("copy", help="重新生成计划并执行 copy")
     copy_cmd.add_argument("selected_root")
     copy_cmd.add_argument("output_root")
     copy_cmd.add_argument("--mode", choices=["batch", "single"], default="batch")
     copy_cmd.add_argument("--report-dir")
 
-    move_cmd = sub.add_parser("move", help="按冻结计划执行 move")
+    move_cmd = sub.add_parser("move", help="重新生成计划并执行 move；--plan 要求与保存预览一致")
     move_cmd.add_argument("selected_root")
     move_cmd.add_argument("--mode", choices=["batch", "single"], default="batch")
     move_cmd.add_argument("--confirm", action="store_true")
+    move_cmd.add_argument("--plan", help="已导出的 summary.json；执行前重扫并严格验证等价性")
     move_cmd.add_argument("--no-elevate", action="store_true", help="Windows 下不自动请求管理员权限")
     move_cmd.add_argument("--report-dir")
     undo_cmd = sub.add_parser("undo", help="根据事务日志撤销 move（原地整理）；回收站删除请在回收站里还原")
@@ -185,7 +209,7 @@ def main() -> None:
     if args.command == "copy":
         report_dir = Path(args.report_dir).resolve() if args.report_dir else new_report_dir()
         plan = build_plan(args.selected_root, args.mode, args.output_root)
-        result = execute_plan(plan, "copy")
+        result = execute_plan(plan, "copy", error_log=str(report_dir / "errors.log"))
         write_plan_report(plan, report_dir)
         print(json.dumps({"report_dir": str(report_dir), **result.__dict__}, ensure_ascii=False, indent=2, default=str))
         return
@@ -198,7 +222,10 @@ def main() -> None:
                 return
             print("未能请求管理员权限，将以当前权限继续执行。")
         report_dir = Path(args.report_dir).resolve() if args.report_dir else new_report_dir()
-        plan = build_plan(args.selected_root, args.mode)
+        try:
+            plan = verified_saved_plan(args.plan, args.selected_root, args.mode) if args.plan else build_plan(args.selected_root, args.mode)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         result = execute_plan(plan, "move", confirm_move=True, transaction_log=str(report_dir / "transaction_log.jsonl"))
         write_plan_report(plan, report_dir)
         print(json.dumps({"report_dir": str(report_dir), **result.__dict__}, ensure_ascii=False, indent=2, default=str))

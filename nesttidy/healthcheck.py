@@ -32,9 +32,8 @@ def run_healthcheck(host: str = "127.0.0.1") -> list[HealthItem]:
     except Exception as exc:
         items.append(HealthItem("本地数据目录", False, str(exc)))
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind((host, 0))
-        sock.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
         items.append(HealthItem("本地 Web 绑定", True, host))
     except Exception as exc:
         items.append(HealthItem("本地 Web 绑定", False, str(exc)))

@@ -6,6 +6,8 @@ import os
 import shutil
 import stat as statmod
 import tempfile
+import traceback
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -60,6 +62,10 @@ class DeleteResult:
             "rows": self.rows,
             "issues": [row.to_dict() for row in self.issues],
         }
+
+
+class ExecutionCheckError(RuntimeError):
+    """预期的执行前置条件变化。"""
 
 
 class OutputBoundaryError(ValueError):
@@ -141,7 +147,7 @@ def move_resource_root(plan: OperationPlan, op: Operation, roots: set[Path]) -> 
     return root
 
 
-def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None) -> ExecutionResult:
+def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, transaction_log: str | None = None, progress=None, *, error_log: str | None = None) -> ExecutionResult:
     if not plan.frozen:
         raise ValueError("OperationPlan 未冻结，禁止执行")
     if mode not in {"copy", "move"}:
@@ -206,6 +212,9 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
         except Exception as exc:
             status = "failed"
             issues.append(issue(op.source_path or op.target_path or "", "execute", classify_exception(exc), str(exc)))
+            if not isinstance(exc, (OSError, ValueError, ExecutionCheckError)):
+                log = Path(error_log) if error_log else (tx_path.parent / "errors.log" if tx_path else Path.cwd() / REPORT_DIR_NAME / f"task_{plan.plan_id}" / "errors.log")
+                _record_unexpected_error(log, plan, op)
             journal_failed = isinstance(exc, TransactionLogError)
         statuses[op.op_id] = status
         if status == "completed":
@@ -223,6 +232,19 @@ def execute_plan(plan: OperationPlan, mode: str, confirm_move: bool = False, tra
             failed += 1
     apply_result_to_plan(plan, statuses, issues)
     return ExecutionResult(completed=completed, skipped=skipped, failed=failed, issues=issues, transaction_log=str(tx_path) if tx_path else None, swept=swept)
+
+
+def _record_unexpected_error(log: Path, plan: OperationPlan, op: Operation) -> None:
+    detail = f"{datetime.now().isoformat()} {op.op_id} {op.source_path!r}\n{traceback.format_exc()}\n"
+    try:
+        log = log.resolve()
+        if any(log.is_relative_to(Path(root).resolve()) for root in (plan.selected_root, plan.output_root) if root):
+            raise ValueError("错误日志不可写入源目录或输出目录")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8", errors="backslashreplace") as stream:
+            stream.write(detail)
+    except (OSError, ValueError, RuntimeError):
+        print(detail, file=sys.stderr)
 
 
 def apply_result_to_plan(plan: OperationPlan, statuses: dict[str, str], issues: list[ExecutionIssue]) -> None:
@@ -262,9 +284,9 @@ def precheck(op: Operation, *, allow_existing_target: bool = False) -> None:
     expected_size = op.precheck.get("size")
     expected_mtime = op.precheck.get("mtime_ns")
     if expected_size is not None and stat.st_size != expected_size:
-        raise RuntimeError(f"源文件大小已变化: {source}")
+        raise ExecutionCheckError(f"源文件大小已变化: {source}")
     if expected_mtime is not None and stat.st_mtime_ns != expected_mtime:
-        raise RuntimeError(f"源文件修改时间已变化: {source}")
+        raise ExecutionCheckError(f"源文件修改时间已变化: {source}")
     if not op.target_path:
         raise ValueError("缺少目标路径")
     # keep 不产生写入；源和目标文本完全一致时，重复解析不会提供额外的目标边界信息。
@@ -321,7 +343,7 @@ def do_copy(op: Operation, output_root: Path | None = None) -> bool:
     try:
         shutil.copy2(source, temporary)
         if temporary.stat().st_size != source_state[2] or source_state != _regular_file_state(source):
-            raise RuntimeError(f"复制期间源状态变化或大小不一致: {source}")
+            raise ExecutionCheckError(f"复制期间源状态变化或大小不一致: {source}")
         precheck(op, allow_existing_target=True)
         if output_root is not None:
             ensure_target_within_output(target, output_root)
@@ -407,7 +429,7 @@ def do_move(op: Operation, tx_path: Path | None, root: Path | None = None, plan:
         precheck(op)
     fingerprint = file_fingerprint(source)
     if op.precheck.get("size", fingerprint["file_size"]) != fingerprint["file_size"] or op.precheck.get("mtime_ns", fingerprint["file_mtime_ns"]) != fingerprint["file_mtime_ns"]:
-        raise RuntimeError(f"源文件状态在移动前已变化: {source}")
+        raise ExecutionCheckError(f"源文件状态在移动前已变化: {source}")
     record = {**scope, **fingerprint, "action": "move", "source": str(source), "target": str(target)}
     write_tx(tx_path, {**record, "status": "started"})
     _move_without_replace(source, target)
