@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from benchmarks.parallel_scan_probe import ordered_scans, digest_scans, measure
+from benchmarks.parallel_scan_probe import ordered_scans, measure
 
 
 class ParallelScanProbeTests(unittest.TestCase):

@@ -21,7 +21,6 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from nesttidy import web
 from nesttidy.web import create_server
 
 
