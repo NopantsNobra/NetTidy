@@ -295,8 +295,9 @@ def group_rows(rows: list[DuplicateRow]) -> list[DuplicateGroup]:
     return groups
 
 
-def summarize(rows: list[DuplicateRow]) -> dict:
-    groups = group_rows(rows)
+def summarize(rows: list[DuplicateRow], *, groups: list[DuplicateGroup] | None = None) -> dict:
+    if groups is None:
+        groups = group_rows(rows)
     return {
         "files_reported": len(rows),
         "groups": len(groups),

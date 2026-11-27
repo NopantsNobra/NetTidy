@@ -369,18 +369,12 @@ class DuplicateTruncationDisclosureTests(unittest.TestCase):
         self.assertEqual(group["deletable_total"], len(group["deletable_paths"]))
         self.assertEqual(payload["row_total"], len(payload["rows"]))
 
-    def test_page_discloses_both_truncated_totals(self) -> None:
+    def test_page_discloses_full_pagination_totals(self) -> None:
         from nesttidy.ui import INDEX_HTML
-
-        # 披露函数：只在 total>shown 时输出，未截断返回空串，不给误导性提示。
-        self.assertIn("function dupTruncNote(", INDEX_HTML)
-        self.assertIn("total>shown", INDEX_HTML)
-        self.assertIn("这里只显示前 ", INDEX_HTML)
-        self.assertIn("，共 ", INDEX_HTML)
-        # 两处调用点分别接在可删组与 rows 的真实字段上，X/Y 才是下发数与总数。
-        # 必须匹配真实执行语句而非任意子串：注释掉调用后残留的 `// dupTruncNote(...)` 不能算通过。
-        self.assertRegex(INDEX_HTML, r"(?m)^\s*html \+= dupTruncNote\(g\.deletable_paths\.length, g\.deletable_total,")
-        self.assertRegex(INDEX_HTML, r"(?m)^\s*html \+= dupTruncNote\(data\.rows\.length, data\.row_total,")
+        self.assertIn("data.row_total", INDEX_HTML)
+        self.assertIn("data.group_total", INDEX_HTML)
+        self.assertIn("page.total", INDEX_HTML)
+        self.assertIn("按需分页可查看全部诊断结果", INDEX_HTML)
 
 
 class BlockFilterTests(unittest.TestCase):

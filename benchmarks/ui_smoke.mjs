@@ -159,32 +159,28 @@ server.serve_forever()
   await evaluate("document.getElementById('tab-preview').focus();document.getElementById('tab-preview').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));true");
   assert.equal(await evaluate("document.querySelector('[aria-selected=true]').id"),'tab-dup');
   assert.equal(await evaluate("document.getElementById('tab-dup').tabIndex"),0);
-  const dupPerf=await evaluate(`(()=>{
-    const data={selected_root:root.value,phase1_label:'standard',stats:{groups:2,recheck_rejected_groups:0,deletable_files:398,reclaimable_bytes:398},row_total:200000,group_total:100000,groups:[],rows:[]};
-    for(let g=0;g<2;g++){
-      const id='group'+g, keep='file'+g+'-0', paths=[];
-      for(let n=0;n<200;n++){
-        const path='file'+g+'-'+n;
-        data.rows.push({path,duplicate_group_id:id,size:1,suggested_keep:n===0});
-        if(n)paths.push(path);
-      }
-      data.groups.push({duplicate_group_id:id,verified:true,verified_hash:'hash',keep_path:keep,deletable_paths:paths,deletable_total:199,file_count:200,size:1,note:''});
-    }
-    renderDup(data);
+  const dupRoot=path.join(temp,'duplicate-fixture');
+  await fs.mkdir(dupRoot,{recursive:true});
+  for(let i=0;i<405;i++)await fs.writeFile(path.join(dupRoot,'a-'+String(i).padStart(3,'0')+'.txt'),'identical A');
+  for(let i=0;i<3;i++)await fs.writeFile(path.join(dupRoot,'b-'+i+'.txt'),'identical BB');
+  const dupData=await evaluate("api('/api/duplicates',"+JSON.stringify({selected_root:dupRoot,level:'deep',view:'paged'})+")");
+  assert.equal(dupData.row_total,408);assert.equal(dupData.group_total,2);
+  await evaluate("renderDup("+JSON.stringify(dupData)+","+JSON.stringify(dupRoot)+")");
+  const dupPerf=await evaluate(`(async()=>{
     const choose=()=>{const box=document.querySelector('#dupResult .delbox');box.checked=true;box.dispatchEvent(new Event('change',{bubbles:true}));};
-    choose();chooseDupPage(80);choose();
+    choose();await chooseDupPage(400);choose();
     const pageRows=document.querySelectorAll('#dupResult tbody tr').length;
-    chooseDupGroup(1);choose();
-    const across=collect().length, group0=collect('group0').length;
-    chooseDupGroup(0);
+    await chooseDupGroup(1);choose();
+    const across=collect().length, group0=collect(dupState.data.group_total?'dup-1':'').length;
+    await chooseDupGroup(0);
     const preserved=document.querySelector('#dupResult .delbox').checked;
     checkAll(true);const all=collect().length;
     checkAll(false);const none=collect().length;
     clearDuplicateState();document.getElementById('dupTools').innerHTML='';document.getElementById('dupResult').innerHTML='';
     return {pageRows,across,group0,preserved,all,none};
   })()`);
-  assert.deepEqual(dupPerf,{pageRows:80,across:3,group0:2,preserved:true,all:398,none:0});
-  console.log('Bounded duplicate preview and cross-page selection: '+JSON.stringify(dupPerf));
+  assert.deepEqual(dupPerf,{pageRows:5,across:3,group0:2,preserved:true,all:81,none:0});
+  console.log('Full duplicate server pagination beyond 400 rows and cross-page selection: '+JSON.stringify(dupPerf));
   const resultPerf=await evaluate(`(()=>{
     const box=document.getElementById('execResult');
     const rows=Array.from({length:200000},(_,i)=>({path:'file '+i,status:'ok'}));

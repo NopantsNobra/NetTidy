@@ -554,63 +554,53 @@ const runDuplicate = guard(async function runDuplicate(){
   document.getElementById('dupTools').innerHTML = '';
   const prog = trackProgress('dupFill', 'dupProg');
   try{
-    const data = await api('/api/duplicates',{selected_root:requestedRoot,level:dupLevel.value,verify:true,view:'bounded',progress_key:prog.key});
-    lastDup = data; renderDup(data, requestedRoot);
+    const data = await api('/api/duplicates',{selected_root:requestedRoot,level:dupLevel.value,verify:true,view:'paged',progress_key:prog.key});
+    lastDup = data; await renderDup(data, requestedRoot);
   }catch(e){ prog.fail(); document.getElementById('dupResult').innerHTML = '<p class="error">'+esc(e.message)+'</p>'; say(e.message,true); }
   finally{ prog.stop(); }
 });
-// 截断披露：服务端为防大目录卡死只下发前若干条，页面必须说清「只显示前 X 条，共 Y 条」；未截断时不显示，避免误导。
-function dupTruncNote(shown,total,label){
-  return total>shown ? '<p class="muted">这里只显示前 '+shown+' 条'+label+'，共 '+total+' 条。</p>' : '';
-}
-const DUP_PAGE=80;
+const DUP_PAGE=80, DUP_GROUP_PAGE=100;
 let dupState=null, dupGroup=0, dupOffset=0;
 function clearDuplicateState(){
   dupState=null;lastDup=null;dupGroup=0;dupOffset=0;updateSelNote();
 }
-function renderDup(data, requestedRoot=cleanPath(root.value)){
-  const rowsByGroup = new Map();
-  for(const row of data.rows){
-    if(!rowsByGroup.has(row.duplicate_group_id)) rowsByGroup.set(row.duplicate_group_id, []);
-    rowsByGroup.get(row.duplicate_group_id).push(row);
-  }
-  const groups=(data.groups||[]).filter(g=>rowsByGroup.has(g.duplicate_group_id));
-  const eligible=new Map();
-  for(const g of groups){
-    const deletableSet = new Set(g.deletable_paths || []);
-    for(const r of rowsByGroup.get(g.duplicate_group_id)){
-      if(g.verified && !r.suggested_keep && r.path!==g.keep_path && deletableSet.has(r.path))
-        eligible.set(r.path,{path:r.path,keep_path:g.keep_path,expected_sha256:g.verified_hash,bytes:Number(r.size),group:g.duplicate_group_id});
-    }
-  }
-  dupState={data,requestedRoot,groups,rowsByGroup,eligible,selected:new Set()};
+async function renderDup(data, requestedRoot=cleanPath(root.value)){
+  dupState={data,requestedRoot,eligible:new Map(),selected:new Map(),request:0,loading:false,current:null};
   dupGroup=0;dupOffset=0;
-  document.getElementById('dupTools').innerHTML = '<button class="ghost" onclick="checkAll(true)">全选已加载可删副本</button><button class="ghost" onclick="checkAll(false)">取消全选</button><button class="danger" onclick="deleteSelected()">删除所选副本</button>';
-  renderDupPage();
+  document.getElementById('dupTools').innerHTML = '<button class="ghost" onclick="checkAll(true)">全选本页可删副本</button><button class="ghost" onclick="checkAll(false)">取消全部勾选</button><button class="danger" onclick="deleteSelected()">删除所选副本</button>';
+  await renderDupPage(0,0);
 }
-function renderDupPage(){
+async function renderDupPage(index,offset){
   if(!dupState)return;
-  const {data,groups,rowsByGroup}=dupState, s=data.stats;
+  const state=dupState, data=state.data, request=++state.request;
+  const s=data.stats;
   let html = '<div class="headline">第一遍「'+esc(data.phase1_label)+'」找到 '+s.groups+' 组；自动跑第二遍全量哈希复核，剔除 '+s.recheck_rejected_groups
     + ' 组误判；可删副本 '+s.deletable_files+' 个，可回收 '+fmtBytes(s.reclaimable_bytes)+'。</div>';
-  html += dupTruncNote(data.rows.length, data.row_total, '重复明细');
-  html += dupTruncNote(groups.length, data.group_total??(data.groups||[]).length, '重复组');
-  const g=groups[dupGroup];
-  if(!g) html += '<p class="muted">没有发现可显示的重复文件。</p>';
-  if(g){
-    const rows=rowsByGroup.get(g.duplicate_group_id)||[];
-    const start=Math.floor(dupGroup/100)*100;
+  html += '<p class="muted">共 '+data.row_total+' 条明细、'+data.group_total+' 组，按需分页可查看全部诊断结果。</p>';
+  const box=document.getElementById('dupResult');
+  state.eligible.clear();state.loading=true;
+  box.innerHTML=html+'<p class="muted">正在加载明细…</p>';
+  if(!data.group_total){state.loading=false;box.innerHTML=html+'<p class="muted">没有发现重复文件。</p>';return;}
+  try{
+    const start=Math.floor(index/DUP_GROUP_PAGE)*DUP_GROUP_PAGE;
+    const [groupPage,page]=await Promise.all([
+      api('/api/duplicates/groups',{diagnosis_id:data.diagnosis_id,offset:start,limit:DUP_GROUP_PAGE}),
+      api('/api/duplicates/rows',{diagnosis_id:data.diagnosis_id,group:index,offset,limit:DUP_PAGE})
+    ]);
+    if(state!==dupState||request!==state.request)return;
+    dupGroup=index;dupOffset=offset;state.current=page;state.loading=false;
+    const g=page.group,rows=page.rows;
+    for(const r of rows)if(r.deletable){
+      state.eligible.set(r.path,{path:r.path,keep_path:g.keep_path,expected_sha256:g.verified_hash,bytes:Number(r.size),group:g.duplicate_group_id});
+    }
     html += '<div class="preview-nav"><label for="dupGroupSelect">重复组</label><select id="dupGroupSelect" onchange="chooseDupGroup(Number(this.value))">'
-      +groups.slice(start,start+100).map((item,i)=>'<option value="'+(start+i)+'"'+(start+i===dupGroup?' selected':'')+'>'+esc(item.duplicate_group_id)+' · '+item.file_count+' 个文件</option>').join('')
-      +'</select><button class="secondary" id="dupGroupPrev" onclick="chooseDupGroup(dupGroup-1)">上一组</button><button class="secondary" id="dupGroupNext" onclick="chooseDupGroup(dupGroup+1)">下一组</button><span class="muted">'+(dupGroup+1)+' / '+groups.length+' 组</span></div>';
-    const badge = g.verified && g.deletable_paths.length ? '<span class="badge ok">已全量复核</span>' : (g.verified ? '<span class="badge ok">已复核</span>' : '<span class="badge warn">复核剔除</span>');
-    html += '<div class="group" id="g-'+esc(g.duplicate_group_id)+'"><h4>'+badge+' 组 '+esc(g.duplicate_group_id)+' · '+g.file_count+' 个文件 · 每个 '+fmtBytes(g.size)+'</h4>';
-    html += '<p class="muted" style="margin:2px 0 8px">'+esc(g.note)+'</p>';
-    html += dupTruncNote(g.deletable_paths.length, g.deletable_total, '可删副本');
-    html += '<p class="muted">本组已加载 '+rows.length+' 个文件；跨页勾选会保留。保留项不能勾选。</p>';
+      +groupPage.groups.map((item,i)=>'<option value="'+(start+i)+'"'+(start+i===index?' selected':'')+'>'+esc(item.duplicate_group_id)+' · '+item.file_count+' 个文件</option>').join('')
+      +'</select><button class="secondary" id="dupGroupPrev" onclick="chooseDupGroup(dupGroup-1)">上一组</button><button class="secondary" id="dupGroupNext" onclick="chooseDupGroup(dupGroup+1)">下一组</button><label>组序号 <input type="number" id="dupGroupJump" min="1" max="'+data.group_total+'" value="'+(index+1)+'"></label><button class="secondary" onclick="chooseDupGroup(Number(document.getElementById(\'dupGroupJump\').value)-1)">跳转</button><span class="muted">'+(index+1)+' / '+data.group_total+' 组</span></div>';
+    const badge=g.verified?'<span class="badge ok">已复核</span>':'<span class="badge warn">复核剔除</span>';
+    html += '<div class="group"><h4>'+badge+' 组 '+esc(g.duplicate_group_id)+' · '+g.file_count+' 个文件 · 每个 '+fmtBytes(g.size)+'</h4><p class="muted">'+esc(g.note)+'；本组可删 '+g.deletable_total+' 个。跨页勾选保留，保留项不可勾选。</p>';
     html += '<table><thead><tr><th style="width:34px">删</th><th>文件</th><th>相对资源包</th><th>大小</th></tr></thead><tbody>';
     const rootPath=data.selected_root||'';
-    rows.slice(dupOffset,dupOffset+DUP_PAGE).forEach(r=>{
+    rows.forEach(r=>{
       const rel = rootPath && String(r.path).startsWith(rootPath) ? String(r.path).slice(rootPath.length).replace(/^[\\\\/]+/,'') : r.path;
       const isKeep = r.suggested_keep;
       const canDel = dupState.eligible.has(r.path);
@@ -619,36 +609,34 @@ function renderDupPage(){
         : (isKeep ? '<span class="badge ok">保留</span>' : '<span class="muted">—</span>');
       html += '<tr data-pick="'+esc(r.path)+'" title="右键在资源管理器中定位"><td>'+box+'</td><td><code title="'+esc(r.path)+'">'+esc(fileName(r.path))+'</code></td><td>'+pathCell(rel)+'</td><td>'+fmtBytes(r.size)+'</td></tr>';
     });
-    html += '</tbody></table>';
-    html += '<div class="preview-nav"><button class="secondary" id="dupPagePrev" onclick="chooseDupPage(dupOffset-DUP_PAGE)">上一页</button><button class="secondary" id="dupPageNext" onclick="chooseDupPage(dupOffset+DUP_PAGE)">下一页</button><span class="muted">'+(dupOffset+1)+'–'+Math.min(dupOffset+DUP_PAGE,rows.length)+' / '+rows.length+' 个</span></div>';
-    if(g.deletable_paths.length) html += '<p><button class="danger" data-g="'+esc(g.duplicate_group_id)+'" onclick="deleteGroup(this.dataset.g)">删除本组已选副本</button></p>';
-    html += '</div>';
+    const pages=Math.max(1,Math.ceil(page.total/DUP_PAGE));
+    html += '</tbody></table><div class="preview-nav"><button class="secondary" id="dupPagePrev" onclick="chooseDupPage(dupOffset-DUP_PAGE)">上一页</button><button class="secondary" id="dupPageNext" onclick="chooseDupPage(dupOffset+DUP_PAGE)">下一页</button><span class="muted">'+(offset+1)+'–'+Math.min(offset+DUP_PAGE,page.total)+' / '+page.total+' 个</span><label>页码 <input type="number" id="dupPageJump" min="1" max="'+pages+'" value="'+(Math.floor(offset/DUP_PAGE)+1)+'"></label><button class="secondary" onclick="chooseDupPage((Number(document.getElementById(\'dupPageJump\').value)-1)*DUP_PAGE)">跳转</button></div>';
+    if(g.deletable_total)html += '<p><button class="danger" data-g="'+esc(g.duplicate_group_id)+'" onclick="deleteGroup(this.dataset.g)">删除本组已选副本</button></p>';
+    box.innerHTML=html+'</div>';box.scrollTop=0;
+    refreshDupControls();updateSelNote();
+  }catch(e){
+    if(state!==dupState||request!==state.request)return;
+    state.loading=false;state.current=null;box.innerHTML='<p class="error">'+esc(e.message)+'</p>';say(e.message,true);
   }
-  document.getElementById('dupResult').innerHTML=html;
-  document.getElementById('dupResult').scrollTop=0;
-  refreshDupControls();updateSelNote();
 }
 function refreshDupControls(){
-  if(!dupState)return;
-  const g=dupState.groups[dupGroup];if(!g)return;
-  const count=dupState.rowsByGroup.get(g.duplicate_group_id).length;
-  for(const [id,disabled] of [['dupGroupPrev',dupGroup<=0],['dupGroupNext',dupGroup>=dupState.groups.length-1],['dupPagePrev',dupOffset<=0],['dupPageNext',dupOffset+DUP_PAGE>=count]]){
+  if(!dupState||!dupState.current)return;
+  for(const [id,disabled] of [['dupGroupPrev',dupGroup<=0],['dupGroupNext',dupGroup>=dupState.data.group_total-1],['dupPagePrev',dupOffset<=0],['dupPageNext',dupOffset+DUP_PAGE>=dupState.current.total]]){
     const btn=document.getElementById(id);if(btn)btn.disabled=busy||disabled;
   }
 }
 function chooseDupGroup(n){
-  if(busy||!dupState||n<0||n>=dupState.groups.length)return;
-  dupGroup=n;dupOffset=0;renderDupPage();
+  if(busy||!dupState||dupState.loading||!Number.isInteger(n)||n<0||n>=dupState.data.group_total)return;
+  return renderDupPage(n,0);
 }
 function chooseDupPage(n){
-  if(busy||!dupState)return;
-  const g=dupState.groups[dupGroup];if(!g)return;
-  if(n<0||n>=dupState.rowsByGroup.get(g.duplicate_group_id).length)return;
-  dupOffset=n;renderDupPage();
+  if(busy||!dupState||dupState.loading||!dupState.current||!Number.isInteger(n)||n<0||n>=dupState.current.total)return;
+  return renderDupPage(dupGroup,n);
 }
 function checkAll(on){
-  if(!dupState||busy)return;
-  dupState.selected=on?new Set(dupState.eligible.keys()):new Set();
+  if(!dupState||busy||dupState.loading)return;
+  if(on){for(const [path,entry] of dupState.eligible)dupState.selected.set(path,entry);}
+  else dupState.selected.clear();
   document.querySelectorAll('#dupResult .delbox').forEach(b=>{b.checked=on;});updateSelNote();
 }
 function updateSelNote(){
@@ -657,8 +645,8 @@ function updateSelNote(){
   if(el)el.textContent=n?('跨页已选 '+n+' 个'):'';
 }
 function collect(groupId=null){
-  if(!dupState)return [];
-  return [...dupState.selected].map(path=>dupState.eligible.get(path)).filter(e=>e&&(groupId===null||e.group===groupId));
+  if(!dupState||dupState.loading)return [];
+  return [...dupState.selected.values()].filter(e=>groupId===null||e.group===groupId);
 }
 function deleteGroup(gid){const entries=collect(gid);if(!entries.length){say('这一组没有勾选任何副本，先勾选再删除。',true);return;}doDelete(entries);}
 function deleteSelected(){const entries=collect();if(!entries.length){say('先勾选要删除的副本（每组至少留一个，保留项不能勾）。',true);return;}doDelete(entries);}
@@ -684,7 +672,7 @@ const doDelete = guard(async function doDelete(entries){
   }
   const prog = trackProgress('dupFill', 'dupProg');
   try{
-    const data = await api('/api/duplicates/delete',{selected_root:diagnosisRoot,mode:delModeValue,confirm:true,progress_key:prog.key,entries:entries.map(e=>({path:e.path,keep_path:e.keep_path,expected_sha256:e.expected_sha256}))});
+    const data = await api('/api/duplicates/delete',{selected_root:diagnosisRoot,diagnosis_id:dupState.data.diagnosis_id,mode:delModeValue,confirm:true,progress_key:prog.key,entries:entries.map(e=>({path:e.path,keep_path:e.keep_path,expected_sha256:e.expected_sha256}))});
     clearDuplicateState();
     const done = data.deleted + data.recycled;
     let html = '<div class="headline">已处理 '+done+' 个（回收站 '+data.recycled+' / 彻底删除 '+data.deleted+'），跳过 '+data.skipped+'，失败 '+data.failed+'。'
@@ -842,7 +830,7 @@ function table(rows, cols, heads){
   return '<table><thead><tr>'+cols.map((c,i)=>'<th>'+esc(heads?heads[i]:c)+'</th>').join('')+'</tr></thead><tbody>'
     + rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(Array.isArray(r[c])?r[c].join(' | '):r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
 }
-document.addEventListener('change', e=>{if(e.target&&e.target.classList.contains('delbox')&&dupState){const p=e.target.dataset.path;if(busy||!dupState.eligible.has(p)){e.target.checked=dupState.selected.has(p);return;}if(e.target.checked)dupState.selected.add(p);else dupState.selected.delete(p);updateSelNote();}});
+document.addEventListener('change', e=>{if(e.target&&e.target.classList.contains('delbox')&&dupState){const p=e.target.dataset.path;if(busy||!dupState.eligible.has(p)){e.target.checked=dupState.selected.has(p);return;}if(e.target.checked)dupState.selected.set(p,dupState.eligible.get(p));else dupState.selected.delete(p);updateSelNote();}});
 function reveal(path, select){ api('/api/reveal',{path:path,select:!!select}).catch(e=>say(e.message,true)); }
 document.addEventListener('dblclick', e=>{ const el = e.target.closest('[data-open]'); if(el){ e.preventDefault(); reveal(el.dataset.open,false); } });
 document.addEventListener('contextmenu', e=>{ const el = e.target.closest('[data-pick]'); if(el){ e.preventDefault(); reveal(el.dataset.pick,true); } });

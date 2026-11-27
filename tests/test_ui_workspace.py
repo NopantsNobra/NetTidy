@@ -32,8 +32,8 @@ class WorkspaceVisualContractTests(unittest.TestCase):
         self.assertIn("fill.closest('.task-progress')", INDEX_HTML)
 
     def test_duplicate_render_uses_single_group_index(self):
-        self.assertIn('const rowsByGroup = new Map()', INDEX_HTML)
-        self.assertIn('const deletableSet = new Set(g.deletable_paths || [])', INDEX_HTML)
+        self.assertIn("api('/api/duplicates/groups'", INDEX_HTML)
+        self.assertIn("api('/api/duplicates/rows'", INDEX_HTML)
         self.assertNotIn('data.rows.filter(r=>r.duplicate_group_id===g.duplicate_group_id)', INDEX_HTML)
 
     def test_preview_has_bounded_pages_and_stale_request_guard(self):
@@ -43,9 +43,9 @@ class WorkspaceVisualContractTests(unittest.TestCase):
         self.assertNotIn('g.rows = g.rows.concat', INDEX_HTML)
 
     def test_duplicate_page_bounds_and_selection_independence(self):
-        for marker in ('const DUP_PAGE=80', 'rows.slice(dupOffset,dupOffset+DUP_PAGE)',
-                       'dupState.selected', 'view:\'bounded\'', '源目录已改变，请重新诊断重复文件',
-                       '删除本组已选副本', '全选已加载可删副本'):
+        for marker in ('const DUP_PAGE=80', 'limit:DUP_PAGE',
+                       'dupState.selected', 'view:\'paged\'', '源目录已改变，请重新诊断重复文件',
+                       '删除本组已选副本', '全选本页可删副本'):
             self.assertIn(marker, INDEX_HTML)
         self.assertNotIn("scope.querySelectorAll('.delbox:checked')", INDEX_HTML)
 

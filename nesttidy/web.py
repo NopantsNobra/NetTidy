@@ -13,9 +13,10 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from .config import REPORT_DIR_NAME, load_local_config, remember_selected_root
-from .duplicate import PHASE1_METHOD, detect_duplicates, group_rows, summarize
+from .duplicate import DuplicateGroup, DuplicateRow, PHASE1_METHOD, detect_duplicates, group_rows, summarize
 from .executor import DeleteEntry, delete_duplicates, execute_plan
 from .healthcheck import run_healthcheck
 from .manual_pdf import write_manual_pdf
@@ -329,6 +330,83 @@ def _finish_progress(key: str, ok: bool, note: str = "") -> None:
         state["updated_at"] = datetime.now(UTC).isoformat()
 
 
+class DuplicateView:
+    def __init__(self, root: str, rows: list[DuplicateRow], groups: list[DuplicateGroup]):
+        self.root = root
+        self.count = len(rows)
+        self.groups = groups
+        self.by_group: dict[str, list[DuplicateRow]] = {}
+        for row in rows:
+            self.by_group.setdefault(row.duplicate_group_id, []).append(row)
+        self.eligible = {path: g for g in groups if g.verified and g.verified_hash
+                         for path in g.deletable_paths if path != g.keep_path}
+
+    def group_page(self, offset: int, limit: int) -> dict:
+        return {"total": len(self.groups), "offset": offset,
+                "groups": [{"duplicate_group_id": g.duplicate_group_id, "file_count": g.file_count}
+                           for g in self.groups[offset:offset + limit]]}
+
+    def row_page(self, index: int, offset: int, limit: int) -> dict:
+        if not 0 <= index < len(self.groups):
+            raise ValueError("重复组序号超出范围")
+        g = self.groups[index]
+        rows = self.by_group[g.duplicate_group_id]
+        return {"group": {"duplicate_group_id": g.duplicate_group_id, "size": g.size,
+                          "verified": g.verified, "file_count": g.file_count,
+                          "keep_path": g.keep_path, "verified_hash": g.verified_hash,
+                          "deletable_total": len(g.deletable_paths), "note": g.note},
+                "offset": offset, "total": len(rows),
+                "rows": [dict(row.to_dict(), deletable=self.eligible.get(row.path) is g)
+                         for row in rows[offset:offset + limit]]}
+
+    def validate_entries(self, root: str, entries: list[DeleteEntry]) -> None:
+        if Path(root).resolve() != Path(self.root):
+            raise ValueError("诊断源目录已改变，请重新诊断")
+        for entry in entries:
+            group = self.eligible.get(entry.path)
+            if group is None or entry.keep_path != group.keep_path or entry.expected_sha256 != group.verified_hash:
+                raise ValueError("选择项不属于该诊断的已复核可删集合，请重新诊断")
+
+
+class DuplicateRegistry:
+    """有界诊断缓存；超预算单份允许独占。淘汰后必须重新诊断。"""
+    def __init__(self, max_rows: int = 200_000, max_views: int = 4):
+        self._lock = threading.Lock()
+        self._views: dict[str, DuplicateView] = {}
+        self.max_rows, self.max_views = max_rows, max_views
+
+    def put(self, view: DuplicateView) -> str:
+        key = uuid4().hex
+        with self._lock:
+            while self._views and (len(self._views) >= self.max_views or
+                    sum(v.count for v in self._views.values()) + view.count > self.max_rows):
+                del self._views[next(iter(self._views))]
+            self._views[key] = view
+        return key
+
+    def get(self, key: str) -> DuplicateView:
+        with self._lock:
+            view = self._views.pop(key, None)
+            if view is None:
+                raise ValueError("重复诊断已失效，请重新诊断")
+            self._views[key] = view
+            return view
+
+    def discard(self, key: str) -> None:
+        with self._lock:
+            self._views.pop(key, None)
+
+
+DIAGNOSES = DuplicateRegistry()
+
+
+def _duplicate_view(body: dict) -> DuplicateView:
+    key = body.get("diagnosis_id")
+    if not isinstance(key, str) or not key:
+        raise ValueError("缺少 diagnosis_id，请重新诊断")
+    return DIAGNOSES.get(key)
+
+
 def _duplicate_group_payload(group) -> dict:
     """单组去重结果：可删路径截断到一页，余下只报总数（一次下发几十万条同样会卡死页面）。"""
     item = group.to_dict()
@@ -573,15 +651,29 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/duplicates":
                 key, progress = _track(body, "去重")
                 self.send_tracked(key, self.detect_duplicates_payload(body, progress))
+            elif self.path == "/api/duplicates/groups":
+                view = _duplicate_view(body)
+                self.send_json(view.group_page(max(0, int(body.get("offset", 0))),
+                                               min(100, max(1, int(body.get("limit", 100))))))
+            elif self.path == "/api/duplicates/rows":
+                view = _duplicate_view(body)
+                self.send_json(view.row_page(int(body.get("group", 0)), max(0, int(body.get("offset", 0))),
+                                             min(80, max(1, int(body.get("limit", 80))))))
             elif self.path == "/api/duplicates/delete":
+                root = _existing_root(body)
+                entries = _delete_entries(body)
+                if "diagnosis_id" in body:
+                    _duplicate_view(body).validate_entries(root, entries)
                 key, progress = _track(body, "去重")
                 result = delete_duplicates(
-                    _existing_root(body),
-                    _delete_entries(body),
+                    root,
+                    entries,
                     mode=body.get("mode", "recycle"),
                     confirm=bool(body.get("confirm")),
                     progress=progress,
                 )
+                if "diagnosis_id" in body:
+                    DIAGNOSES.discard(body["diagnosis_id"])
                 self.send_tracked(key, result.to_dict())
             elif self.path == "/api/validate-root":
                 self.send_json(self.validate_root_payload(body))
@@ -694,6 +786,12 @@ class Handler(BaseHTTPRequestHandler):
         resolved = str(Path(root).resolve())
         _remember_root_quietly(resolved)
         groups = group_rows(rows)
+        if body.get("view") == "paged":
+            view = DuplicateView(resolved, rows, groups)
+            return {"diagnosis_id": DIAGNOSES.put(view), "selected_root": resolved,
+                    "group_total": len(groups), "row_total": len(rows), "phase1_level": level,
+                    "phase1_label": PHASE1_METHOD.get(level, level), "verify": verify and level != "deep",
+                    "stats": summarize(rows, groups=groups)}
         visible = rows[:DUPLICATE_ROW_LIMIT]
         visible_ids = {row.duplicate_group_id for row in visible}
         return {
