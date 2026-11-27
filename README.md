@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.12.0-166451)
+![Version](https://img.shields.io/badge/version-1.13.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -77,7 +77,7 @@ python -m nesttidy.app
 
 候选自动按全文 SHA-256 内部签名复核，每个真实重复子组独立输出；deep 复用已计算的签名。内部签名包含十进制大小与文件内容，不是裸文件 SHA-256。
 
-Web 端当前最多加载 400 条诊断明细，按组固定 80 行分页；「全选」只选择已加载且可删的副本，未加载条目不会被静默选中。完整诊断可用 CLI 导出 CSV。删除前重新检查文件、保留项、边界与签名；硬链接别名不会被当成可释放空间的普通副本。默认进入回收站，彻底删除需额外确认且不可撤销。回收站还原请使用 Windows 回收站，不使用整理撤销按钮。
+Web 端可按需读取完整重复诊断结果，每组固定 80 行、资源组分页并可跳转；「全选」只选本页可删副本，跨页已选保持。诊断缓存最多 4 份、合计 20 万行（单份超预算可独占）；淘汰或完成删除后需重新诊断。CLI 可导出 CSV。删除前重新检查诊断归属、文件、保留项、边界与签名；硬链接别名不会被当成可释放空间的普通副本。默认进入回收站，彻底删除需额外确认且不可撤销。回收站还原请使用 Windows 回收站，不使用整理撤销按钮。
 
 ## 安全设计与边界
 
@@ -101,7 +101,7 @@ Web 端当前最多加载 400 条诊断明细，按组固定 80 行分页；「�
 
 同形态、不同云端 runner、200,000 个全 keep 小文件、三轮中位数；不能作严格单因素归因。新版 80 行分页首建索引约 0.48 s，热页约 0.60 ms（含 JSON 序列化，不含网络和渲染）。默认计划缓存预算 60 万条目（非字节限额），不淘汰执行中的计划。
 
-Chromium 压力测试还验证了模拟 20 万文件/1,000 个资源包的整理预览，以及模拟 20 万条辅助结果的固定 80 行 DOM。辅助结果仍可能一次接收完整数组；完整服务端结果分页、物理盘基准和 50 万/100 万规模验收尚未完成。
+Chromium 压力测试还验证了模拟 20 万文件/1,000 个资源包的整理预览，以及模拟 20 万条辅助结果的固定 80 行 DOM。辅助结果仍可能一次接收完整数组；辅助结果完整服务端分页、物理盘基准和 50 万/100 万规模验收尚未完成。
 
 证据：[旧基准](https://github.com/NopantsNobra/NetTidy/actions/runs/45377368779) · [综合复测](https://github.com/NopantsNobra/NetTidy/actions/runs/45384922866) · [预览压力测试](https://github.com/NopantsNobra/NetTidy/actions/runs/45381771395) · [结果表格压力测试](https://github.com/NopantsNobra/NetTidy/actions/runs/45388412202)。
 
@@ -138,7 +138,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 基准默认使用隔离临时文件；也可用 --root 指定真实目录进行只读规划测量。重型测试不属于日常单测。
 
-本次 v1.12.0 Windows CI 3.11/3.13 各运行 312 项（各 1 项跳过）；Chromium 实际执行、刷新页面后历史撤销通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913094) 和 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913134)。
+本次 v1.13.0 Windows CI 3.11/3.13 通过；Chromium 使用 408 个真实隔离文件验证第 400 行之后的分页、跨页选择、实际删除及保留文件。历史撤销回归仍通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) 与 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141)。
 
 ## 项目资料
 

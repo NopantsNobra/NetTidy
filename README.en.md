@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.12.0-166451)
+![Version](https://img.shields.io/badge/version-1.13.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -79,7 +79,7 @@ Copy never deletes the source automatically and requires additional storage. Aft
 
 Candidates are automatically verified using a full-content SHA-256-based internal signature. Each genuine duplicate subgroup is retained independently; deep mode reuses its signature. The internal signature includes decimal file size and file bytes, so it is not the plain file SHA-256 digest.
 
-The web UI currently loads at most 400 diagnostic detail rows, paginated at 80 rows per group. Select all means all eligible, already-loaded copies only; unloaded files are never silently selected. Use the CLI for complete diagnostic CSV export. Before deletion, the application rechecks the candidate, retained copy, boundaries and signatures. Hard-link aliases are not treated as ordinary reclaimable copies. Recycle Bin is the default; permanent deletion requires additional confirmation and cannot be undone. Restore recycled files from Windows Recycle Bin, not the organization undo button.
+The web UI pages through complete duplicate diagnoses, at 80 rows per group page, with group navigation and page jumps. Select all applies only to eligible rows on the current page; selected rows persist across pages. The cache retains up to four diagnoses and 200,000 rows (one oversized diagnosis may occupy it alone); eviction or deletion requires a new scan. Use the CLI for CSV export. Before deletion, the application rechecks diagnosis membership, the candidate, retained copy, boundaries and signatures. Hard-link aliases are not treated as ordinary reclaimable copies. Recycle Bin is the default; permanent deletion requires additional confirmation and cannot be undone. Restore recycled files from Windows Recycle Bin, not the organization undo button.
 
 ## Safety and scope
 
@@ -103,7 +103,7 @@ The maintainer has used the tool on real directories at the 200,000-file scale. 
 
 Same fixture shape, different hosted runners, 200,000 small keep-only files, median of three runs; not a controlled single-factor attribution. The new 80-row endpoint takes about 0.48 s for the first index build and 0.60 ms for warm pages, including JSON serialization but excluding network and browser rendering. The default cache budget is 600,000 entries (not bytes); running plans are protected from eviction.
 
-Chromium stress tests also validate bounded 80-row rendering for simulated 200,000-file/1,000-package previews and 200,000 auxiliary result rows. Auxiliary results can still arrive as complete arrays. Full server-side result pagination, physical-drive benchmarking and acceptance at 500,000/1,000,000 files remain unfinished.
+Chromium stress tests also validate bounded 80-row rendering for simulated 200,000-file/1,000-package previews and 200,000 auxiliary result rows. Auxiliary results can still arrive as complete arrays. Full server-side pagination of auxiliary results, physical-drive benchmarking and acceptance at 500,000/1,000,000 files remain unfinished.
 
 Evidence: [earlier baseline](https://github.com/NopantsNobra/NetTidy/actions/runs/45377368779) · [comprehensive retest](https://github.com/NopantsNobra/NetTidy/actions/runs/45384922866) · [preview stress test](https://github.com/NopantsNobra/NetTidy/actions/runs/45381771395) · [result-table stress test](https://github.com/NopantsNobra/NetTidy/actions/runs/45388412202).
 
@@ -140,7 +140,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 Benchmarks use isolated temporary fixtures by default. Use --root for read-only planning on a real directory. Heavy benchmarks are opt-in, not part of the routine unit suite.
 
-For v1.12.0, Windows CI ran 312 tests per Python 3.11/3.13 (one skipped per version); Chromium verified actual in-place execution and history-based undo after page reload. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913094) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913134).
+For v1.13.0, Windows CI passed on Python 3.11/3.13; Chromium verified paging beyond 400 rows, cross-page selection, actual deletion and preservation of the retained file using 408 isolated files. History-based undo regression also passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215118) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45931215141).
 
 ## Project documentation
 
