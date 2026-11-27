@@ -4,7 +4,7 @@
 
 **面向下载资源和本地媒体库的 Windows 离线目录整理工具。先看清文件会去哪里，再决定是否执行。**
 
-![Version](https://img.shields.io/badge/version-1.11.0-166451)
+![Version](https://img.shields.io/badge/version-1.12.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -63,7 +63,7 @@ python -m nesttidy.app
 2. 在试运行前选择原地整理或复制；复制需填写不与源目录互相包含的输出目录。
 3. 点击「试运行」，查看摘要及文件路径对照。选择资源包、筛选全部/会变/改名/原地不动，按页浏览或跳转。
 4. 确认后执行。首次使用建议先复制到独立目录，验证结果，再考虑原地整理。
-5. 按需导出完整计划报告；原地整理结束后可根据事务日志尝试撤销。更改执行方式、试运行失败、计划被淘汰或已执行时，应重新规划。
+5. 按需导出完整计划报告；原地整理结束后可根据事务日志尝试撤销；关闭网页或重启后，到「诊断信息 → 任务与报告历史」恢复最近 50 条中的可撤销任务，旧日志或更早任务可手工粘贴日志路径。更改执行方式、试运行失败、计划被淘汰或已执行时，应重新规划。
 
 复制不自动删除源文件，会额外占用磁盘空间。中断后可对同一输出目录重新试运行并执行；仅在大小、修改时间及全文签名一致且不是链接/同一物理文件时跳过已有副本，不一致仍报冲突。新文件先写同目录私有临时文件，再以不覆盖方式发布；进程被强制终止可能留下 `.nesttidy-copy-*.tmp`，确认无任务运行后可手工清理。原地整理的 R6 收尾清扫可能删除执行期间变空的目录（含空资源包），选中的运行根保留；撤销按日志重建能够安全恢复的目录。撤销不是备份，也无法恢复随后被其他程序改写或永久删除的文件。
 
@@ -123,7 +123,7 @@ Chromium 压力测试还验证了模拟 20 万文件/1,000 个资源包的整理
 
 plan/copy/move/duplicates/dedupe 支持 `--report-dir`；plan 支持 `--output-root`；move 支持 `--no-elevate`。CLI 的 move 会重新生成计划，执行前请先用 plan 核对；dedupe 会重新诊断，组编号可能变化，不指定 --groups 则处理全部可删组，务必确认范围。CLI 删除模式是 recycle 或 purge，不是旧版 quarantine 参数。
 
-计划报告包含 `summary.md`、`summary.json`、`mappings.csv`、`issues.csv`；重复诊断 CLI 导出 `duplicate_report.csv`。CLI 默认在启动目录的「理巢报告」任务子目录写报告；Web 原地整理事务日志位于源目录上一级的「理巢报告」内，以实际返回的日志路径为准。
+计划报告包含 `summary.md`、`summary.json`、`mappings.csv`、`issues.csv`；重复诊断 CLI 导出 `duplicate_report.csv`。CLI 和 Web 默认在启动目录的「理巢报告」独立任务子目录写报告/事务日志，以实际返回的日志路径为准；旧版本日志仍可手工选择。Web 在执行前登记任务，执行后更新历史，不依赖导出报告；新记录仅存轻量索引，完整计划仍在导出的报告。启动目录应独立于源目录和输出目录。
 
 ## 开发与验证
 
@@ -138,7 +138,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 基准默认使用隔离临时文件；也可用 --root 指定真实目录进行只读规划测量。重型测试不属于日常单测。
 
-截至 v1.9.0，本机 Windows Python 3.13 运行 302 项 unittest（4 项跳过：3 项符号链接权限、1 项非 Windows 降级路径），全绿；CI 在 Python 3.11/3.13 各运行 301 项（各 1 项跳过），实际 Chromium 测试通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) 和 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957)。
+本次 v1.12.0 Windows CI 3.11/3.13 各运行 312 项（各 1 项跳过）；Chromium 实际执行、刷新页面后历史撤销通过。见 [Windows 回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913094) 和 [浏览器回归](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913134)。
 
 ## 项目资料
 

@@ -4,7 +4,7 @@
 
 **A local, offline directory organizer for downloaded resources and media libraries on Windows. Preview exactly where files will go before deciding to execute.**
 
-![Version](https://img.shields.io/badge/version-1.11.0-166451)
+![Version](https://img.shields.io/badge/version-1.12.0-166451)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
 [![Windows regression](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/windows-regression.yml)
 [![Browser smoke](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml/badge.svg?branch=main)](https://github.com/NopantsNobra/NetTidy/actions/workflows/browser-smoke.yml)
@@ -65,7 +65,7 @@ The application UI, CLI messages and generated documentation are currently prima
 2. Choose copy or in-place organization before the dry run. Copy requires a separate output directory that does not overlap the source.
 3. Run a dry run. Inspect the summary and before/after file paths. Select a package, filter all/changed/renamed/unchanged files, and page or jump through results.
 4. Confirm execution. For the first run, copy to a separate directory and inspect the result before considering in-place organization.
-5. Export the full plan report if needed. After an in-place run, use the transaction log to attempt undo. Replan after a mode change, a failed dry run, eviction or execution of a plan.
+5. Export the full plan report if needed. After an in-place run, use the transaction log to attempt undo. Reopen Diagnostics → task and report history to undo a recent task after a page reload or restart; paste the log path for older tasks or legacy logs. Replan after a mode change, a failed dry run, eviction or execution of a plan.
 
 Copy never deletes the source automatically and requires additional storage. After interruption, replan and execute against the same output directory. An existing copy is skipped only if size, modification time and full-content signature agree, and it is neither a link nor the same physical file. Other existing destinations remain conflicts. New copies are staged in private temporary files and published without replacement; forced termination may leave `.nesttidy-copy-*.tmp` files, which may be removed manually after confirming no task is running. In-place R6 cleanup can remove directories that become empty during execution, including empty package roots; the selected run root is retained. Undo recreates directories when the recorded state can be safely restored. It is not a backup and cannot restore arbitrary later modifications or permanently deleted files.
 
@@ -125,7 +125,7 @@ Prefix each subcommand with `python -m nesttidy.app`. Add `--help` for its optio
 
 plan/copy/move/duplicates/dedupe accept `--report-dir`; plan accepts `--output-root`; move accepts `--no-elevate`. CLI move creates a new plan, so inspect with plan first. CLI dedupe rescans, and group IDs may change; omitting --groups selects all eligible groups. Confirm the scope before proceeding. Current CLI deletion modes are recycle and purge, not the former quarantine option.
 
-Plan reports include `summary.md`, `summary.json`, `mappings.csv` and `issues.csv`; the CLI duplicate scan exports `duplicate_report.csv`. CLI reports default to task subdirectories under `理巢报告` in the working directory. Web in-place transaction logs are under `理巢报告` beside the source directory; use the actual returned log path.
+Plan reports include `summary.md`, `summary.json`, `mappings.csv` and `issues.csv`; the CLI duplicate scan exports `duplicate_report.csv`. CLI and Web default to separate task subdirectories under `理巢报告` in the working directory; use the returned transaction log path. Legacy logs can be entered manually. Web execution records are registered before execution and updated afterward independently of report export. New history rows contain lightweight metadata, not full plans; full plans remain in exported reports. Run from a working directory separate from source and output directories.
 
 ## Development and validation
 
@@ -140,7 +140,7 @@ node benchmarks/ui_smoke.mjs ui-screenshots
 
 Benchmarks use isolated temporary fixtures by default. Use --root for read-only planning on a real directory. Heavy benchmarks are opt-in, not part of the routine unit suite.
 
-As of v1.9.0, the local Windows Python 3.13 run passed 302 unittest cases (4 skipped: three symlink-privilege cases and one non-Windows fallback case); CI ran 301 cases per version on Python 3.11 and 3.13 (one skipped per version), and the Chromium smoke test passed. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388703069) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45388702957).
+For v1.12.0, Windows CI ran 312 tests per Python 3.11/3.13 (one skipped per version); Chromium verified actual in-place execution and history-based undo after page reload. See [Windows regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913094) and [browser regression](https://github.com/NopantsNobra/NetTidy/actions/runs/45930913134).
 
 ## Project documentation
 
